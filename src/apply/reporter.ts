@@ -96,6 +96,17 @@ function printTagsAndProjectInfo(op: ApplyOperation): void {
       console.log(`    -> project: ${op.toProject}`);
     }
   }
+
+  // Activation info
+  if (op.activated === true) {
+    console.log("    ✓ Activated");
+  } else if (op.activated === false) {
+    console.log("    ✓ Deactivated");
+  }
+
+  if (op.activationError) {
+    console.log(`    ⚠ Activation error: ${op.activationError.message}`);
+  }
 }
 
 function printFieldDiff(field: FieldDiff): void {

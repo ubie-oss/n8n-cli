@@ -74,6 +74,8 @@ export interface ApplyOperation {
   threeWayReason: string;
   baseToLocalFields: string[];
   baseToRemoteFields: string[];
+  activated?: boolean; // true: activated, false: deactivated, undefined: no change
+  activationError?: Error; // activation/deactivation error
 }
 
 /** Creates a default ApplyOperation. */
@@ -92,6 +94,8 @@ export function defaultOperation(file: string): ApplyOperation {
     threeWayReason: "",
     baseToLocalFields: [],
     baseToRemoteFields: [],
+    activated: undefined,
+    activationError: undefined,
   };
 }
 

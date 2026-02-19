@@ -1,5 +1,6 @@
 import type { Command } from "commander";
 import type { Workflow } from "@/api/types.ts";
+import { hasAllTags, parseTagFilter } from "@/common/tags.ts";
 import { loadLintConfig } from "@/lint/config.ts";
 import { formatJSON } from "@/lint/output/json.ts";
 import type { LintResult } from "@/lint/output/result.ts";
@@ -19,6 +20,7 @@ export function registerLintCommand(program: Command): void {
     .option("--disable-rule <rules...>", "Disable specific rules (can be repeated)")
     .option("--list-rules", "List all available rules and exit")
     .option("-o, --output <format>", "Output format: text, json", "text")
+    .option("--tags <tags>", "Filter by tags (comma-separated, AND condition)")
     .action(async (opts) => {
       const registry = registerDefaultRules();
 
@@ -36,6 +38,18 @@ export function registerLintCommand(program: Command): void {
 
       // Get enabled rules
       const enabledRules = registry.enabledRulesWithConfig(config, opts.disableRule);
+
+      // Parse tag filter (CLI option takes precedence over environment variable)
+      const tagsOption = opts.tags as string | undefined;
+      const tagsEnv = process.env.CHECKS_FILTER_BY_TAGS;
+      const filterByTags = parseTagFilter(tagsOption ?? tagsEnv);
+
+      if (filterByTags.length > 0) {
+        // Use stderr to avoid corrupting JSON output
+        if (opts.output !== "json") {
+          console.error(`Filtering by tags: ${filterByTags.join(", ")} (AND)`);
+        }
+      }
 
       // Collect files to lint
       let files: string[] = [];
@@ -80,6 +94,14 @@ export function registerLintCommand(program: Command): void {
           });
           failedFiles.add(filePath);
           continue;
+        }
+
+        // Filter by tags
+        if (workflow && filterByTags.length > 0) {
+          if (!hasAllTags(workflow.tags, filterByTags)) {
+            result.filesChecked--; // Don't count filtered files
+            continue;
+          }
         }
 
         // Run each enabled rule

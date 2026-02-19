@@ -337,7 +337,7 @@ export class Executor {
     };
 
     const created = await this.workflowService.createWorkflow(input);
-    await this.applyTagsAndProject(created, workflow.tags, op);
+    await this.applyTagsAndProject(created, workflow, op);
     await updateLocalWorkflowFile(wf.path, created);
   }
 
@@ -358,19 +358,23 @@ export class Executor {
     };
 
     const updated = await this.workflowService.updateWorkflow(workflow.id!, input);
-    await this.applyTagsAndProject(updated, workflow.tags, op);
+    await this.applyTagsAndProject(updated, workflow, op);
     await updateLocalWorkflowFile(wf.path, updated);
   }
 
   /** Applies tags and transfers workflow to target project. */
   private async applyTagsAndProject(
     workflow: Workflow,
-    localTags: typeof workflow.tags,
+    localWorkflow: Workflow,
     op: ApplyOperation,
   ): Promise<void> {
     // Handle tags
     if (this.tagMerger && !this.opts.noAutoTag) {
-      const result = await this.tagMerger.mergeTags(localTags, workflow.tags, this.opts.autoTags);
+      const result = await this.tagMerger.mergeTags(
+        localWorkflow.tags,
+        workflow.tags,
+        this.opts.autoTags,
+      );
       if (result.added.length > 0) {
         await this.tagMerger.applyTags(workflow.id!, result.allTags);
         op.tagsAdded = result.added;
@@ -393,6 +397,43 @@ export class Executor {
           // Already in target project - no state change needed
         }
       }
+    }
+
+    // Handle activation/deactivation
+    await this.applyActivation(localWorkflow, op);
+  }
+
+  /** Applies activation or deactivation based on local workflow definition. */
+  private async applyActivation(workflow: Workflow, op: ApplyOperation): Promise<void> {
+    const localActive = workflow.active;
+
+    // Get remote active state from diff
+    const remoteDiff = op.diff?.fields.find((f) => f.field === "active");
+    if (!remoteDiff) {
+      // No change in active field - nothing to do
+      return;
+    }
+
+    const remoteActive = remoteDiff.oldValue as boolean;
+
+    if (localActive === remoteActive) {
+      // Already in desired state - nothing to do
+      return;
+    }
+
+    try {
+      if (localActive) {
+        // Local is true, remote is false - activate
+        await this.workflowService.activateWorkflow(workflow.id!);
+        op.activated = true;
+      } else {
+        // Local is false, remote is true - deactivate
+        await this.workflowService.deactivateWorkflow(workflow.id!);
+        op.activated = false;
+      }
+    } catch (err) {
+      op.activationError = err instanceof Error ? err : new Error(String(err));
+      // Don't throw - activation failure is not a workflow update failure
     }
   }
 }

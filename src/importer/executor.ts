@@ -1,5 +1,6 @@
-import type { Tag, Workflow } from "@/api/types.ts";
+import type { Workflow } from "@/api/types.ts";
 import type { ListOptions, WorkflowService } from "@/api/workflow-service.ts";
+import { hasAllTags } from "@/common/tags.ts";
 import { cleanupOrphanFiles, cleanupOrphanSubfiles, matchOrphansByName } from "./orphan.ts";
 import { reportDuplicates } from "./reporter.ts";
 import { parseWorkflowFile, scanDirectoryWithOrphans } from "./scanner.ts";
@@ -99,7 +100,7 @@ export class ImportExecutor {
         // Skip if tag filter is set and doesn't match
         if (
           this.opts.filterByTags.length > 0 &&
-          !hasAllTags(workflow.tags ?? [], this.opts.filterByTags)
+          !hasAllTags(workflow.tags, this.opts.filterByTags)
         ) {
           continue;
         }
@@ -158,17 +159,15 @@ export class ImportExecutor {
       return;
     }
 
-    // Check duplicate
+    // Check duplicate — warn but continue (use first file from idMap)
     const dups = idMap.duplicates();
     if (dups.has(remote.id)) {
-      result.addOperation({
-        workflowID: remote.id,
-        workflowName: remote.name,
-        type: "error",
-        localPath: "",
-        reason: "duplicate ID found in local files",
-      });
-      return;
+      const dupPaths = dups.get(remote.id)!;
+      console.error(`Warning: duplicate local files for ${remote.id}:`);
+      for (const p of dupPaths) {
+        console.error(`    - ${p}`);
+      }
+      // fall through to idMap.get() which returns the first file
     }
 
     // Check if exists locally
@@ -266,10 +265,4 @@ function shouldUpdate(local: string | undefined, remote: string | undefined): bo
   const localDate = new Date(local);
   const remoteDate = new Date(remote);
   return remoteDate.getTime() > localDate.getTime();
-}
-
-/** Checks if the workflow has all required tag names (AND condition). */
-function hasAllTags(tags: Tag[], requiredNames: string[]): boolean {
-  const tagNames = new Set(tags.map((t) => t.name));
-  return requiredNames.every((name) => tagNames.has(name));
 }

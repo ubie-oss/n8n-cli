@@ -1,8 +1,21 @@
 import fs from "node:fs";
 import path from "node:path";
+import yaml from "js-yaml";
 import type { Workflow } from "@/api/types.ts";
 import { extractWorkflowIDFromFilename } from "@/naming/naming.ts";
+import { loadYamlWorkflow } from "@/yaml/loader.ts";
 import { OrphanFileMap, type SourceType, WorkflowIDMap } from "./types.ts";
+
+/**
+ * Permissive schema that treats `!include` tags as plain strings.
+ * Used for lightweight ID/name extraction without resolving file includes.
+ */
+const permissiveIncludeType = new yaml.Type("!include", {
+  kind: "scalar",
+  resolve: () => true,
+  construct: (data: string) => `!include ${data}`,
+});
+const permissiveSchema = yaml.DEFAULT_SCHEMA.extend([permissiveIncludeType]);
 
 /**
  * Scans a directory recursively for workflow JSON, YAML, and Jsonnet files.
@@ -24,10 +37,10 @@ export function scanDirectory(dir: string): WorkflowIDMap {
     const ext = path.extname(entry.name).toLowerCase();
 
     if (ext === ".json") {
-      const id = extractWorkflowIDFromJSON(filePath);
+      const id = extractWorkflowID(filePath);
       if (id) idMap.add(id, filePath);
     } else if (ext === ".yaml" || ext === ".yml") {
-      const id = extractWorkflowIDFromJSON(filePath);
+      const id = extractWorkflowID(filePath);
       if (id) idMap.add(id, filePath);
     }
   });
@@ -69,8 +82,12 @@ export function scanDirectoryWithOrphans(dir: string): [WorkflowIDMap, OrphanFil
   return [idMap, orphanMap];
 }
 
-/** Parses a workflow JSON file and returns the full Workflow object. */
+/** Parses a workflow JSON/YAML file and returns the full Workflow object. */
 export function parseWorkflowFile(filePath: string): Workflow {
+  const ext = path.extname(filePath).toLowerCase();
+  if (ext === ".yaml" || ext === ".yml") {
+    return loadYamlWorkflow(filePath);
+  }
   const data = fs.readFileSync(filePath, "utf-8");
   return JSON.parse(data) as Workflow;
 }
@@ -93,17 +110,23 @@ function walkDir(dir: string, callback: (filePath: string, entry: fs.Dirent) => 
 }
 
 /** Extracts the workflow ID from a JSON/YAML file by parsing the `id` field. */
-function extractWorkflowIDFromJSON(filePath: string): string {
+function extractWorkflowID(filePath: string): string {
   try {
     const data = fs.readFileSync(filePath, "utf-8");
-    const parsed = JSON.parse(data) as Record<string, unknown>;
+    const ext = path.extname(filePath).toLowerCase();
+    let parsed: Record<string, unknown>;
+    if (ext === ".yaml" || ext === ".yml") {
+      parsed = yaml.load(data, { schema: permissiveSchema }) as Record<string, unknown>;
+    } else {
+      parsed = JSON.parse(data) as Record<string, unknown>;
+    }
     const id = parsed.id;
     if (typeof id === "string" && id) {
       // Check filename ID mismatch
       const [filenameID, found] = extractWorkflowIDFromFilename(filePath);
       if (found && filenameID !== id) {
         console.error(
-          `Warning: ${filePath}: filename ID (${filenameID}) does not match JSON ID (${id}), using JSON ID`,
+          `Warning: ${filePath}: filename ID (${filenameID}) does not match file ID (${id}), using file ID`,
         );
       }
       return id;
@@ -118,7 +141,13 @@ function extractWorkflowIDFromJSON(filePath: string): string {
 function extractIDAndName(filePath: string): [string, string] {
   try {
     const data = fs.readFileSync(filePath, "utf-8");
-    const parsed = JSON.parse(data) as Record<string, unknown>;
+    const ext = path.extname(filePath).toLowerCase();
+    let parsed: Record<string, unknown>;
+    if (ext === ".yaml" || ext === ".yml") {
+      parsed = yaml.load(data, { schema: permissiveSchema }) as Record<string, unknown>;
+    } else {
+      parsed = JSON.parse(data) as Record<string, unknown>;
+    }
     const id = typeof parsed.id === "string" ? parsed.id : "";
     const name = typeof parsed.name === "string" ? parsed.name : "";
     return [id, name];

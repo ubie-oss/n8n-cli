@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { Tag, Workflow } from "../api/types.ts";
+import type { Workflow } from "../api/types.ts";
+import { hasAllTags } from "../common/tags.ts";
 import { Detector } from "../git/detector.ts";
 import { extractWorkflowIDFromDirname, extractWorkflowIDFromFilename } from "../naming/naming.ts";
 import { loadYamlWorkflow } from "../yaml/loader.ts";
@@ -236,12 +237,6 @@ function filterByTags(files: WorkflowFile[], tags: string[]): WorkflowFile[] {
     if (!wf.workflow) return false;
     return hasAllTags(wf.workflow.tags, tags);
   });
-}
-
-/** Checks if the workflow has all required tag names. */
-function hasAllTags(tags: Tag[] | undefined, requiredNames: string[]): boolean {
-  const tagNames = new Set((tags ?? []).map((t) => t.name));
-  return requiredNames.every((name) => tagNames.has(name));
 }
 
 /** Extracts workflowID from a _subfiles path. */
