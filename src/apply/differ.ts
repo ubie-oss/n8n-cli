@@ -1,4 +1,5 @@
 import type { Node, NodeConn, PinDataItem, Workflow, WorkflowSettings } from "../api/types.ts";
+import { sortKeys } from "../formatter/workflow.ts";
 import type { WorkflowDiff } from "./types.ts";
 
 /** Compares local and remote workflows to detect differences. */
@@ -178,17 +179,4 @@ function deepEqual(a: unknown, b: unknown): boolean {
 
 function stableStringify(v: unknown): string {
   return JSON.stringify(sortKeys(v));
-}
-
-function sortKeys(v: unknown): unknown {
-  if (Array.isArray(v)) return v.map(sortKeys);
-  if (v && typeof v === "object") {
-    return Object.keys(v as Record<string, unknown>)
-      .sort()
-      .reduce<Record<string, unknown>>((acc, k) => {
-        acc[k] = sortKeys((v as Record<string, unknown>)[k]);
-        return acc;
-      }, {});
-  }
-  return v;
 }

@@ -10,7 +10,47 @@ A skill to assist with workflow management using n8n-cli (TypeScript/Bun).
 
 ## Session Initialization (Important)
 
-**For new sessions, always run the following first to update n8n-cli.**
+**For new sessions, always run the following first to ensure n8n-cli is up to date.**
+
+### Auto-Update from GitHub Releases (Preferred)
+
+Pre-built binaries are available on GitHub Releases. This is faster than building from source and ensures you're running the official release.
+
+```bash
+# 1. Check the latest release version
+LATEST_TAG=$(gh release view --repo ubie-oss/n8n-cli --json tagName -q '.tagName' 2>/dev/null)
+
+# 2. Check current local version (if binary exists)
+CURRENT_VERSION=""
+if [ -x ./n8n-cli ]; then
+  CURRENT_VERSION=$(./n8n-cli version 2>/dev/null | head -1 | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' || echo "")
+fi
+
+# 3. Compare and download if needed
+if [ -z "$CURRENT_VERSION" ] || [ "$CURRENT_VERSION" != "$LATEST_TAG" ]; then
+  echo "Updating n8n-cli: ${CURRENT_VERSION:-none} -> ${LATEST_TAG}"
+
+  # Detect platform
+  ARCH=$(uname -m)
+  OS=$(uname -s | tr '[:upper:]' '[:lower:]')
+  case "$ARCH" in
+    arm64|aarch64) ASSET_NAME="n8n-cli-${OS}-arm64" ;;
+    x86_64)        ASSET_NAME="n8n-cli-${OS}-x64" ;;
+    *)             echo "Unsupported architecture: $ARCH"; exit 1 ;;
+  esac
+
+  # Download the binary
+  gh release download "$LATEST_TAG" --repo ubie-oss/n8n-cli --pattern "$ASSET_NAME" --output n8n-cli --clobber
+  chmod +x ./n8n-cli
+  echo "Updated to $(./n8n-cli version 2>/dev/null | head -1)"
+else
+  echo "n8n-cli is up to date: $CURRENT_VERSION"
+fi
+```
+
+### Fallback: Build from Source
+
+If `gh` CLI is not available or you need a development build:
 
 ```bash
 # Install dependencies + build CLI
@@ -322,8 +362,14 @@ Config file search order:
 ### Editing Workflows
 
 ```bash
-# 1. Update CLI
-bun install && make build
+# 1. Update CLI (auto-update from GitHub Releases, fallback: bun install && make build)
+LATEST_TAG=$(gh release view --repo ubie-oss/n8n-cli --json tagName -q '.tagName' 2>/dev/null)
+CURRENT_VERSION=$(./n8n-cli version 2>/dev/null | head -1 | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' || echo "")
+if [ -z "$CURRENT_VERSION" ] || [ "$CURRENT_VERSION" != "$LATEST_TAG" ]; then
+  ARCH=$(uname -m); OS=$(uname -s | tr '[:upper:]' '[:lower:]')
+  case "$ARCH" in arm64|aarch64) A="n8n-cli-${OS}-arm64";; x86_64) A="n8n-cli-${OS}-x64";; esac
+  gh release download "$LATEST_TAG" --repo ubie-oss/n8n-cli --pattern "$A" --output n8n-cli --clobber && chmod +x ./n8n-cli
+fi
 
 # 2. Check .env
 test -f .env && echo "OK"
@@ -401,10 +447,25 @@ Error: conflict: remote workflow has been modified since your local file
 
 ### At Session Start
 
-1. **Verify/update n8n-cli build**
+1. **Auto-update n8n-cli from GitHub Releases**
    ```bash
-   bun install && make build
+   # Check latest release and download if newer
+   LATEST_TAG=$(gh release view --repo ubie-oss/n8n-cli --json tagName -q '.tagName' 2>/dev/null)
+   CURRENT_VERSION=""
+   if [ -x ./n8n-cli ]; then
+     CURRENT_VERSION=$(./n8n-cli version 2>/dev/null | head -1 | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' || echo "")
+   fi
+   if [ -z "$CURRENT_VERSION" ] || [ "$CURRENT_VERSION" != "$LATEST_TAG" ]; then
+     ARCH=$(uname -m); OS=$(uname -s | tr '[:upper:]' '[:lower:]')
+     case "$ARCH" in
+       arm64|aarch64) ASSET="n8n-cli-${OS}-arm64" ;;
+       x86_64)        ASSET="n8n-cli-${OS}-x64" ;;
+     esac
+     gh release download "$LATEST_TAG" --repo ubie-oss/n8n-cli --pattern "$ASSET" --output n8n-cli --clobber && chmod +x ./n8n-cli
+   fi
+   ./n8n-cli version
    ```
+   - `gh` CLI が使えない場合のフォールバック: `bun install && make build`
 
 2. **Check .env existence** (do not read contents)
    ```bash

@@ -7,7 +7,6 @@ import { hasAllTags, parseTagFilter } from "@/common/tags.ts";
 import { loadYamlWorkflow } from "@/yaml/loader.ts";
 import { formatWorkflowAsync } from "../../formatter/formatter.ts";
 import { generateChangeReport } from "../../formatter/reporter.ts";
-import { ErrReadOnlyFile } from "../../formatter/workflow.ts";
 
 /** registerFmtCommand registers the fmt subcommand */
 export function registerFmtCommand(program: Command): void {
@@ -72,10 +71,6 @@ export function registerFmtCommand(program: Command): void {
 
           const report = generateChangeReport(filePath, result.changes);
           process.stdout.write(report);
-
-          if (result.error === ErrReadOnlyFile) {
-            console.log(`  (read-only: ${path.extname(filePath)} files cannot be written back)`);
-          }
         }
 
         if (hasErrors) {

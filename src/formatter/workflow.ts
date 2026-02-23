@@ -1,22 +1,21 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import yaml from "js-yaml";
 import { loadYamlWorkflow } from "@/yaml/loader.ts";
 
 /** Constants for layout calculation */
 export const GRID_SIZE = 20.0;
-export const NODE_X_SPACING = 320.0;
-export const NODE_Y_SPACING = 240.0;
-export const NODE_WIDTH = 100.0;
-export const NODE_HEIGHT = 100.0;
+export const RANK_SEP = 200.0;
+export const NODE_SEP = 80.0;
+export const SUBGRAPH_GAP = 300.0;
+export const DEFAULT_NODE_WIDTH = 200.0;
+export const DEFAULT_NODE_HEIGHT = 80.0;
 export const STICKY_NOTE_TYPE = "n8n-nodes-base.stickyNote";
-export const LANGCHAIN_PREFIX = "@n8n/n8n-nodes-langchain.";
 
 /** Error types */
 export const ErrInvalidJSON = new Error("invalid JSON format");
 export const ErrMissingNodes = new Error("nodes array not found");
 export const ErrEmptyWorkflow = new Error("workflow has no nodes");
-export const ErrCyclicGraph = new Error("cyclic dependencies detected");
-export const ErrReadOnlyFile = new Error("file is read-only");
 
 /** FormatterNode represents a single node in an n8n workflow (formatter-specific) */
 export interface FormatterNode {
@@ -67,18 +66,13 @@ export function loadWorkflow(filePath: string): FormatterWorkflow {
   return raw as unknown as FormatterWorkflow;
 }
 
-/** Returns true if the file is a non-JSON format (YAML) that cannot be written back */
-export function isReadOnlyFile(filePath: string): boolean {
-  const ext = path.extname(filePath).toLowerCase();
-  return ext === ".yaml" || ext === ".yml";
-}
-
-/** SaveWorkflow saves a workflow to a JSON file with 2-space indentation */
+/** SaveWorkflow saves a workflow to a JSON or YAML file with deterministic output */
 export function saveWorkflow(filePath: string, workflow: FormatterWorkflow): void {
-  if (isReadOnlyFile(filePath)) {
-    throw ErrReadOnlyFile;
-  }
-  const data = JSON.stringify(workflow, null, 2);
+  const ext = path.extname(filePath).toLowerCase();
+  const data =
+    ext === ".yaml" || ext === ".yml"
+      ? serializeDeterministicYaml(workflow)
+      : serializeDeterministic(workflow);
   writeFileSync(filePath, data, "utf-8");
 }
 
@@ -114,30 +108,49 @@ export function isStickyNote(node: FormatterNode): boolean {
   return node.type === STICKY_NOTE_TYPE;
 }
 
-/** IsLangChainSubNode checks if a node is a LangChain sub-node */
-export function isLangChainSubNode(node: FormatterNode): boolean {
-  if (!node.type.startsWith(LANGCHAIN_PREFIX)) {
-    return false;
-  }
-  const subNodeTypes = [
-    "lmChat",
-    "lm",
-    "outputParser",
-    "embeddings",
-    "vectorStore",
-    "memory",
-    "tool",
-  ];
-  const typeWithoutPrefix = node.type.slice(LANGCHAIN_PREFIX.length);
-  return subNodeTypes.some((subType) => typeWithoutPrefix.startsWith(subType));
-}
-
-/** IsLangChainAgentNode checks if a node is a LangChain agent node */
-export function isLangChainAgentNode(node: FormatterNode): boolean {
-  return node.type.startsWith(LANGCHAIN_PREFIX) && node.type.includes("agent");
-}
-
 /** SnapToGrid snaps a coordinate to the nearest grid point */
 export function snapToGrid(value: number): number {
   return Math.round(value / GRID_SIZE) * GRID_SIZE;
+}
+
+/** Recursively sorts object keys in alphabetical order */
+export function sortKeys(v: unknown): unknown {
+  if (Array.isArray(v)) return v.map(sortKeys);
+  if (v && typeof v === "object") {
+    return Object.keys(v as Record<string, unknown>)
+      .sort()
+      .reduce<Record<string, unknown>>((acc, k) => {
+        acc[k] = sortKeys((v as Record<string, unknown>)[k]);
+        return acc;
+      }, {});
+  }
+  return v;
+}
+
+/** Produces deterministic JSON: nodes sorted by position, keys sorted alphabetically */
+export function serializeDeterministic(workflow: FormatterWorkflow): string {
+  const sorted = {
+    ...workflow,
+    nodes: [...workflow.nodes].sort((a, b) => {
+      if (a.position[0] !== b.position[0]) return a.position[0] - b.position[0];
+      return a.position[1] - b.position[1];
+    }),
+  };
+  return JSON.stringify(sortKeys(sorted), null, 2);
+}
+
+/** Produces deterministic YAML: nodes sorted by position, keys sorted alphabetically */
+export function serializeDeterministicYaml(workflow: FormatterWorkflow): string {
+  const sorted = {
+    ...workflow,
+    nodes: [...workflow.nodes].sort((a, b) => {
+      if (a.position[0] !== b.position[0]) return a.position[0] - b.position[0];
+      return a.position[1] - b.position[1];
+    }),
+  };
+  return yaml.dump(sortKeys(sorted), {
+    lineWidth: -1,
+    noRefs: true,
+    quotingType: '"',
+  });
 }

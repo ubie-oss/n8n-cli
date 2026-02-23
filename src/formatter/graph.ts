@@ -16,7 +16,6 @@ export interface Edge {
 export interface GraphNode {
   name: string;
   original: FormatterNode;
-  layer: number;
   position: Position;
 }
 
@@ -34,13 +33,12 @@ export function newGraph(): Graph {
   };
 }
 
-/** BuildGraph constructs a graph from a workflow, excluding sticky notes */
-export function buildGraph(workflow: FormatterWorkflow): Graph {
+/** BuildFullGraph constructs a graph from a workflow, including all connection types (main + ai_*) */
+export function buildFullGraph(workflow: FormatterWorkflow): Graph {
   const graph = newGraph();
 
-  // Extract edges from connections
+  // Extract edges from all connection types
   for (const [sourceName, connData] of Object.entries(workflow.connections)) {
-    // Skip if source is a sticky note
     const sourceNode = findNodeByName(workflow, sourceName);
     if (!sourceNode || isStickyNote(sourceNode)) {
       continue;
@@ -51,11 +49,8 @@ export function buildGraph(workflow: FormatterWorkflow): Graph {
       continue;
     }
 
-    // Only process main connections (ai_* are handled separately in layout)
-    const connectionTypes = ["main"];
-
-    for (const connType of connectionTypes) {
-      const conns = connMap[connType];
+    // Process all connection types (main, ai_languageModel, ai_outputParser, ai_tool, ai_memory, etc.)
+    for (const [_connType, conns] of Object.entries(connMap)) {
       if (!conns || !Array.isArray(conns)) {
         continue;
       }
@@ -76,7 +71,6 @@ export function buildGraph(workflow: FormatterWorkflow): Graph {
             continue;
           }
 
-          // Skip if target is a sticky note
           const targetNode = findNodeByName(workflow, targetName);
           if (!targetNode || isStickyNote(targetNode)) {
             continue;
@@ -97,7 +91,6 @@ export function buildGraph(workflow: FormatterWorkflow): Graph {
     graph.nodes.set(node.name, {
       name: node.name,
       original: node,
-      layer: 0,
       position: { x: 0, y: 0 },
     });
   }

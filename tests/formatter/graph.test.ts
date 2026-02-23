@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { buildGraph, newGraph } from "../../src/formatter/graph.ts";
+import { buildFullGraph, newGraph } from "../../src/formatter/graph.ts";
 import type { FormatterWorkflow } from "../../src/formatter/workflow.ts";
 
 describe("newGraph", () => {
@@ -10,7 +10,7 @@ describe("newGraph", () => {
   });
 });
 
-describe("buildGraph", () => {
+describe("buildFullGraph", () => {
   it("builds graph from simple workflow", () => {
     const workflow: FormatterWorkflow = {
       name: "Test",
@@ -51,15 +51,13 @@ describe("buildGraph", () => {
       },
     };
 
-    const graph = buildGraph(workflow);
+    const graph = buildFullGraph(workflow);
 
-    // Should have 3 nodes
     expect(graph.nodes.size).toBe(3);
     expect(graph.nodes.has("Start")).toBe(true);
     expect(graph.nodes.has("HTTP Request")).toBe(true);
     expect(graph.nodes.has("End")).toBe(true);
 
-    // Should have 2 edges
     expect(graph.edges.length).toBe(2);
 
     const edgeMap = new Map(graph.edges.map((e) => [e.from, e.to]));
@@ -104,10 +102,72 @@ describe("buildGraph", () => {
       },
     };
 
-    const graph = buildGraph(workflow);
+    const graph = buildFullGraph(workflow);
 
-    // Sticky note should be excluded
     expect(graph.nodes.size).toBe(2);
     expect(graph.nodes.has("Note")).toBe(false);
+  });
+
+  it("includes ai_* connection types as edges", () => {
+    const workflow: FormatterWorkflow = {
+      name: "AI Test",
+      active: false,
+      nodes: [
+        {
+          id: "1",
+          name: "Agent",
+          type: "@n8n/n8n-nodes-langchain.agent",
+          typeVersion: 1,
+          position: [0, 0],
+          parameters: {},
+        },
+        {
+          id: "2",
+          name: "ChatModel",
+          type: "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+          typeVersion: 1,
+          position: [0, 200],
+          parameters: {},
+        },
+        {
+          id: "3",
+          name: "Tool",
+          type: "@n8n/n8n-nodes-langchain.toolHttpRequest",
+          typeVersion: 1,
+          position: [0, 400],
+          parameters: {},
+        },
+        {
+          id: "4",
+          name: "Memory",
+          type: "@n8n/n8n-nodes-langchain.memoryBufferWindow",
+          typeVersion: 1,
+          position: [0, 600],
+          parameters: {},
+        },
+      ],
+      connections: {
+        ChatModel: {
+          ai_languageModel: [[{ node: "Agent", type: "ai_languageModel", index: 0 }]],
+        },
+        Tool: {
+          ai_tool: [[{ node: "Agent", type: "ai_tool", index: 0 }]],
+        },
+        Memory: {
+          ai_memory: [[{ node: "Agent", type: "ai_memory", index: 0 }]],
+        },
+      },
+    };
+
+    const graph = buildFullGraph(workflow);
+
+    expect(graph.nodes.size).toBe(4);
+    expect(graph.edges.length).toBe(3);
+
+    const targets = graph.edges.map((e) => e.to);
+    expect(targets.every((t) => t === "Agent")).toBe(true);
+
+    const sources = graph.edges.map((e) => e.from).sort();
+    expect(sources).toEqual(["ChatModel", "Memory", "Tool"]);
   });
 });

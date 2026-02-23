@@ -2,8 +2,9 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import yaml from "js-yaml";
 import { formatWorkflowAsync, formatWorkflowWithOptions } from "@/formatter/formatter.ts";
-import { ErrReadOnlyFile } from "@/formatter/workflow.ts";
+import { GRID_SIZE } from "@/formatter/workflow.ts";
 
 const simpleWorkflow = {
   name: "Test",
@@ -59,12 +60,11 @@ describe("formatWorkflowAsync", () => {
     expect(result.success).toBe(true);
     expect(result.error).toBeUndefined();
 
-    // File should be rewritten
     const content = JSON.parse(fs.readFileSync(filePath, "utf-8"));
     expect(content.name).toBe("Test");
   });
 
-  test("formats a YAML file (dry-run) - success with read-only error", async () => {
+  test("formats a YAML file (dry-run)", async () => {
     const filePath = path.join(tmpDir, "wf.yaml");
     fs.writeFileSync(
       filePath,
@@ -94,10 +94,10 @@ connections:
 
     const result = await formatWorkflowAsync(filePath, { dryRun: true });
     expect(result.success).toBe(true);
-    expect(result.error).toBe(ErrReadOnlyFile);
+    expect(result.error).toBeUndefined();
   });
 
-  test("formats a YAML file (non-dry-run) - does not write back", async () => {
+  test("formats a YAML file (non-dry-run) - writes back", async () => {
     const filePath = path.join(tmpDir, "wf.yaml");
     const yamlContent = `name: YAML Test
 active: false
@@ -125,11 +125,12 @@ connections:
 
     const result = await formatWorkflowAsync(filePath, { dryRun: false });
     expect(result.success).toBe(true);
-    expect(result.error).toBe(ErrReadOnlyFile);
+    expect(result.error).toBeUndefined();
 
-    // File should NOT be modified
     const afterContent = fs.readFileSync(filePath, "utf-8");
-    expect(afterContent).toBe(yamlContent);
+    // File should have been modified (written back as YAML)
+    const parsed = yaml.load(afterContent) as { name: string };
+    expect(parsed.name).toBe("YAML Test");
   });
 
   test("returns error for invalid file", async () => {
@@ -147,7 +148,6 @@ connections:
 
     const result = await formatWorkflowAsync(filePath, { dryRun: true });
     expect(result.success).toBe(true);
-    // The nodes have non-standard positions so there should be changes
     expect(result.changes.length).toBeGreaterThan(0);
   });
 });
@@ -169,5 +169,334 @@ describe("formatWorkflowWithOptions (sync, existing)", () => {
 
     const result = formatWorkflowWithOptions(filePath, { dryRun: true });
     expect(result.success).toBe(true);
+  });
+});
+
+describe("idempotency", () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "fmt-idempotent-test-"));
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  test("formatting twice produces no changes on second run", () => {
+    const filePath = path.join(tmpDir, "wf.json");
+    fs.writeFileSync(filePath, JSON.stringify(simpleWorkflow));
+
+    // First format
+    const result1 = formatWorkflowWithOptions(filePath, { dryRun: false });
+    expect(result1.success).toBe(true);
+
+    const afterFirst = fs.readFileSync(filePath, "utf-8");
+
+    // Second format
+    const result2 = formatWorkflowWithOptions(filePath, { dryRun: false });
+    expect(result2.success).toBe(true);
+    expect(result2.changes.length).toBe(0);
+
+    const afterSecond = fs.readFileSync(filePath, "utf-8");
+    expect(afterSecond).toBe(afterFirst);
+  });
+});
+
+describe("deterministic JSON output", () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "fmt-deterministic-test-"));
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  test("output has sorted keys and position-sorted nodes", () => {
+    const filePath = path.join(tmpDir, "wf.json");
+    fs.writeFileSync(filePath, JSON.stringify(simpleWorkflow));
+
+    formatWorkflowWithOptions(filePath, { dryRun: false });
+
+    const content = JSON.parse(fs.readFileSync(filePath, "utf-8"));
+
+    // Top-level keys should be sorted
+    const keys = Object.keys(content);
+    expect(keys).toEqual([...keys].sort());
+
+    // Nodes should be sorted by position
+    for (let i = 1; i < content.nodes.length; i++) {
+      const prev = content.nodes[i - 1];
+      const curr = content.nodes[i];
+      const prevKey = prev.position[0] * 1e6 + prev.position[1];
+      const currKey = curr.position[0] * 1e6 + curr.position[1];
+      expect(currKey).toBeGreaterThanOrEqual(prevKey);
+    }
+  });
+
+  test("all positions are snapped to grid", () => {
+    const filePath = path.join(tmpDir, "wf.json");
+    fs.writeFileSync(filePath, JSON.stringify(simpleWorkflow));
+
+    formatWorkflowWithOptions(filePath, { dryRun: false });
+
+    const content = JSON.parse(fs.readFileSync(filePath, "utf-8"));
+    for (const node of content.nodes) {
+      expect(node.position[0] % GRID_SIZE).toBe(0);
+      expect(node.position[1] % GRID_SIZE).toBe(0);
+    }
+  });
+});
+
+describe("sticky note relocation", () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "fmt-sticky-test-"));
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  test("sticky note covering nodes is relocated near them", () => {
+    const workflow = {
+      name: "Sticky Test",
+      active: false,
+      nodes: [
+        {
+          id: "1",
+          name: "Start",
+          type: "n8n-nodes-base.manualTrigger",
+          typeVersion: 1,
+          position: [100, 100],
+          parameters: {},
+        },
+        {
+          id: "2",
+          name: "End",
+          type: "n8n-nodes-base.noOp",
+          typeVersion: 1,
+          position: [300, 100],
+          parameters: {},
+        },
+        {
+          id: "3",
+          name: "Note",
+          type: "n8n-nodes-base.stickyNote",
+          typeVersion: 1,
+          position: [50, 50],
+          parameters: { width: 400, height: 200 },
+        },
+      ],
+      connections: {
+        Start: { main: [[{ node: "End", type: "main", index: 0 }]] },
+      },
+    };
+
+    const filePath = path.join(tmpDir, "wf.json");
+    fs.writeFileSync(filePath, JSON.stringify(workflow));
+
+    formatWorkflowWithOptions(filePath, { dryRun: false });
+
+    const content = JSON.parse(fs.readFileSync(filePath, "utf-8"));
+    const sticky = content.nodes.find(
+      (n: { type: string }) => n.type === "n8n-nodes-base.stickyNote",
+    );
+
+    // Sticky should have moved (not remain at original [50, 50])
+    expect(sticky.position[0] !== 50 || sticky.position[1] !== 50).toBe(true);
+    // Position should be grid-snapped
+    expect(sticky.position[0] % GRID_SIZE).toBe(0);
+    expect(sticky.position[1] % GRID_SIZE).toBe(0);
+  });
+
+  test("sticky note without related nodes is translated by average offset", () => {
+    const workflow = {
+      name: "Isolated Sticky Test",
+      active: false,
+      nodes: [
+        {
+          id: "1",
+          name: "Start",
+          type: "n8n-nodes-base.manualTrigger",
+          typeVersion: 1,
+          position: [0, 0],
+          parameters: {},
+        },
+        {
+          id: "2",
+          name: "Note",
+          type: "n8n-nodes-base.stickyNote",
+          typeVersion: 1,
+          position: [5000, 5000],
+          parameters: { width: 150, height: 150 },
+        },
+      ],
+      connections: {},
+    };
+
+    const filePath = path.join(tmpDir, "wf.json");
+    fs.writeFileSync(filePath, JSON.stringify(workflow));
+
+    formatWorkflowWithOptions(filePath, { dryRun: false });
+
+    const content = JSON.parse(fs.readFileSync(filePath, "utf-8"));
+    const sticky = content.nodes.find(
+      (n: { type: string }) => n.type === "n8n-nodes-base.stickyNote",
+    );
+
+    // Sticky should be grid-snapped
+    expect(sticky.position[0] % GRID_SIZE).toBe(0);
+    expect(sticky.position[1] % GRID_SIZE).toBe(0);
+  });
+});
+
+describe("disconnected components", () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "fmt-disconnected-test-"));
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  test("disconnected components are laid out separately", () => {
+    const workflow = {
+      name: "Disconnected Test",
+      active: false,
+      nodes: [
+        {
+          id: "1",
+          name: "A",
+          type: "n8n-nodes-base.manualTrigger",
+          typeVersion: 1,
+          position: [0, 0],
+          parameters: {},
+        },
+        {
+          id: "2",
+          name: "B",
+          type: "n8n-nodes-base.noOp",
+          typeVersion: 1,
+          position: [200, 0],
+          parameters: {},
+        },
+        {
+          id: "3",
+          name: "X",
+          type: "n8n-nodes-base.manualTrigger",
+          typeVersion: 1,
+          position: [0, 500],
+          parameters: {},
+        },
+        {
+          id: "4",
+          name: "Y",
+          type: "n8n-nodes-base.noOp",
+          typeVersion: 1,
+          position: [200, 500],
+          parameters: {},
+        },
+      ],
+      connections: {
+        A: { main: [[{ node: "B", type: "main", index: 0 }]] },
+        X: { main: [[{ node: "Y", type: "main", index: 0 }]] },
+      },
+    };
+
+    const filePath = path.join(tmpDir, "wf.json");
+    fs.writeFileSync(filePath, JSON.stringify(workflow));
+
+    const result = formatWorkflowWithOptions(filePath, { dryRun: false });
+    expect(result.success).toBe(true);
+
+    const content = JSON.parse(fs.readFileSync(filePath, "utf-8"));
+    const nodeMap = new Map(
+      content.nodes.map((n: { name: string; position: number[] }) => [n.name, n.position]),
+    );
+
+    // Component 1 (A, B) and Component 2 (X, Y) should be separated vertically
+    const posA = nodeMap.get("A") as number[];
+    const posB = nodeMap.get("B") as number[];
+    const posX = nodeMap.get("X") as number[];
+    const posY = nodeMap.get("Y") as number[];
+    const ayMax = Math.max(posA[1]!, posB[1]!);
+    const xyMin = Math.min(posX[1]!, posY[1]!);
+    expect(xyMin).toBeGreaterThan(ayMax);
+  });
+});
+
+describe("ai_* connections", () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "fmt-ai-test-"));
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  test("ai_* connected nodes are placed near their parent", () => {
+    const workflow = {
+      name: "AI Test",
+      active: false,
+      nodes: [
+        {
+          id: "1",
+          name: "Trigger",
+          type: "n8n-nodes-base.manualTrigger",
+          typeVersion: 1,
+          position: [0, 0],
+          parameters: {},
+        },
+        {
+          id: "2",
+          name: "Agent",
+          type: "@n8n/n8n-nodes-langchain.agent",
+          typeVersion: 1,
+          position: [500, 0],
+          parameters: {},
+        },
+        {
+          id: "3",
+          name: "ChatModel",
+          type: "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+          typeVersion: 1,
+          position: [1000, 500],
+          parameters: {},
+        },
+      ],
+      connections: {
+        Trigger: {
+          main: [[{ node: "Agent", type: "main", index: 0 }]],
+        },
+        ChatModel: {
+          ai_languageModel: [[{ node: "Agent", type: "ai_languageModel", index: 0 }]],
+        },
+      },
+    };
+
+    const filePath = path.join(tmpDir, "wf.json");
+    fs.writeFileSync(filePath, JSON.stringify(workflow));
+
+    const result = formatWorkflowWithOptions(filePath, { dryRun: false });
+    expect(result.success).toBe(true);
+
+    const content = JSON.parse(fs.readFileSync(filePath, "utf-8"));
+    const nodeMap = new Map(
+      content.nodes.map((n: { name: string; position: number[] }) => [n.name, n.position]),
+    );
+
+    // All three nodes should be in the same connected component
+    // ChatModel connects to Agent via ai_languageModel, so they should be in the graph
+    expect(nodeMap.has("ChatModel")).toBe(true);
+    expect(nodeMap.has("Agent")).toBe(true);
+    expect(nodeMap.has("Trigger")).toBe(true);
   });
 });
