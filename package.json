@@ -1,6 +1,6 @@
 {
   "name": "n8n-cli",
-  "version": "2.0.1",
+  "version": "2.0.2",
   "module": "src/index.ts",
   "type": "module",
   "private": true,
