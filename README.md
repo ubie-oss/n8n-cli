@@ -95,6 +95,14 @@ n8n-cli apply [options]
 | `--yaml` / `--no-yaml` | Enable/disable YAML file processing |
 | `--warn-duplicates` | Warn when creating workflows with names that already exist remotely |
 
+#### Exit Codes
+
+| Code | Description |
+|------|-------------|
+| `0` | Success |
+| `1` | Error detected |
+| `2` | Conflict detected (dry-run) or warning detected (non-force mode) |
+
 ### `import`
 
 Import workflows from n8n to local files.
@@ -131,6 +139,7 @@ n8n-cli lint [options]
 | `--disable-rule <rules...>` | Disable specific rules |
 | `--list-rules` | List all available rules and exit |
 | `-o, --output <format>` | Output format: `text`, `json` (default: `text`) |
+| `--tags <tags>` | Filter by tags (comma-separated, AND condition) |
 
 ### `fmt`
 
@@ -144,6 +153,7 @@ n8n-cli fmt [options] [files...]
 |--------|-------------|
 | `--dry-run` | Show changes without saving |
 | `-d, --directory <dir>` | Directory to scan for workflow files |
+| `--tags <tags>` | Filter by tags (comma-separated, AND condition) |
 
 ### `test`
 
@@ -171,22 +181,69 @@ Manage n8n workflows.
 n8n-cli workflow <subcommand>
 ```
 
-| Subcommand | Description |
-|------------|-------------|
-| `list` | List all workflows |
-| `get <id>` | Get a workflow by ID |
-| `create` | Create a new workflow |
-| `update <id>` | Update an existing workflow |
-| `delete <id>` | Delete a workflow |
-| `activate <id>` | Activate a workflow |
-| `deactivate <id>` | Deactivate a workflow |
+#### `workflow list`
+
+List all workflows.
+
+| Option | Description |
+|--------|-------------|
+| `--active` | List only active workflows |
+| `--inactive` | List only inactive workflows |
+| `--tags <tags>` | Filter by tags (comma-separated) |
+| `--limit <n>` | Maximum number of workflows to return (0 = all, default: `0`) |
+
+#### `workflow get <id>`
+
+Get a workflow by ID.
+
+| Option | Description |
+|--------|-------------|
+| `-f, --file <path>` | Output file path (writes JSON to file) |
+
+#### `workflow create`
+
+Create a new workflow.
+
+| Option | Description |
+|--------|-------------|
+| `-f, --file <path>` | Path to workflow JSON file, use `-` for stdin (required) |
+
+#### `workflow update [id]`
+
+Update an existing workflow. The ID argument is optional if the JSON file contains an `id` field.
+
+| Option | Description |
+|--------|-------------|
+| `-f, --file <path>` | Path to workflow JSON file, use `-` for stdin (required) |
+| `--force` | Force update even if remote has been modified |
+
+#### `workflow delete <ids...>`
+
+Delete one or more workflows.
+
+| Option | Description |
+|--------|-------------|
+| `--force` | Skip confirmation prompt |
+
+#### `workflow activate <id>`
+
+Activate a workflow.
+
+#### `workflow deactivate <id>`
+
+Deactivate a workflow.
 
 ### `version`
 
-Show version information.
+Show version information including version, git commit, build date, runtime (Bun version), and OS/Arch.
 
 ```bash
 n8n-cli version
+# n8n-cli version 1.0.0
+#   Git commit: abc1234
+#   Built:      2025-01-01T00:00:00Z
+#   Runtime:    Bun 1.x.x
+#   OS/Arch:    darwin/arm64
 ```
 
 ### Global Options
@@ -209,6 +266,7 @@ n8n-cli version
 | `N8N_API_TIMEOUT` | Request timeout in milliseconds |
 | `N8N_DEFAULT_PROJECT` | Default project ID for apply |
 | `APPLY_FILTER_BY_TAGS` | Comma-separated tags to filter apply targets |
+| `CHECKS_FILTER_BY_TAGS` | Comma-separated tags to filter lint/fmt targets (AND condition) |
 
 ### CLAUDE.md Integration
 
