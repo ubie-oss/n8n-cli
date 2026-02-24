@@ -10,6 +10,7 @@ A command-line interface for managing [n8n](https://n8n.io/) workflows as code. 
 - **Format** - Auto-organize node positions for cleaner workflow layouts
 - **Test** - Execute CLI tests against workflows via webhook endpoints
 - **Workflow management** - List, get, create, update, delete, activate, and deactivate workflows via the n8n API
+- **Execution management** - List executions, get execution details, and view error information for debugging
 - **Git integration** - Apply only workflows changed in a Git diff
 - **YAML support** - Work with YAML workflow definitions and external code/SQL files
 - **CLAUDE.md integration** - Read project settings (default project ID, auto tags, YAML mode) from CLAUDE.md
@@ -232,6 +233,47 @@ Activate a workflow.
 #### `workflow deactivate <id>`
 
 Deactivate a workflow.
+
+### `execution`
+
+Manage n8n workflow executions.
+
+```bash
+n8n-cli execution <subcommand>
+```
+
+| Subcommand | Description |
+|------------|-------------|
+| `list` | List workflow executions |
+| `get <id>` | Get execution details by ID |
+
+#### `execution list`
+
+```bash
+n8n-cli execution list [options]
+```
+
+| Option | Description |
+|--------|-------------|
+| `-w, --workflow <id>` | Filter by workflow ID |
+| `-s, --status <status>` | Filter by status (`success`, `error`, `running`, `waiting`) |
+| `-l, --limit <n>` | Maximum number of executions to return (default: 20) |
+
+#### `execution get`
+
+```bash
+n8n-cli execution get <id> [options]
+```
+
+| Option | Description |
+|--------|-------------|
+| `--show-data` | Include node execution summary in output |
+
+**Output includes:**
+- Execution ID, workflow ID, status, mode
+- Start and stop timestamps
+- Error details (node, message, description) if the execution failed
+- Node execution summary (with `--show-data`)
 
 ### `version`
 

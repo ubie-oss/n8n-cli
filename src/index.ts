@@ -1,4 +1,5 @@
 import { registerApplyCommand } from "./cli/commands/apply.ts";
+import { registerExecutionCommand } from "./cli/commands/execution.ts";
 import { registerFmtCommand } from "./cli/commands/fmt.ts";
 import { registerImportCommand } from "./cli/commands/import.ts";
 import { registerLintCommand } from "./cli/commands/lint.ts";
@@ -10,6 +11,7 @@ const program = createProgram();
 
 // Register commands
 registerWorkflowCommand(program);
+registerExecutionCommand(program);
 registerApplyCommand(program);
 registerImportCommand(program);
 registerLintCommand(program);

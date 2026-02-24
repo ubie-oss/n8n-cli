@@ -357,6 +357,79 @@ Config file search order:
 ./n8n-cli test ./definitions/my-workflow.json
 ```
 
+### 7. Execution (Logs & Errors)
+
+**List recent executions:**
+
+```bash
+# List all recent executions
+./n8n-cli execution list
+
+# Table format for readability
+./n8n-cli -o table execution list
+
+# Filter by status
+./n8n-cli execution list --status error
+./n8n-cli execution list --status success
+
+# Filter by workflow
+./n8n-cli execution list --workflow <workflow-id>
+
+# Limit results
+./n8n-cli execution list --limit 5
+
+# Combined filters
+./n8n-cli execution list --workflow <workflow-id> --status error --limit 10
+```
+
+**Get execution details:**
+
+```bash
+# Get execution by ID
+./n8n-cli execution get <execution-id>
+
+# Table format with error details
+./n8n-cli -o table execution get <execution-id>
+
+# Include node execution summary
+./n8n-cli -o table execution get <execution-id> --show-data
+```
+
+**Options for `execution list`:**
+
+| Option | Description |
+|--------|-------------|
+| `-w, --workflow <id>` | Filter by workflow ID |
+| `-s, --status <status>` | Filter by status (success, error, running, waiting) |
+| `-l, --limit <n>` | Maximum number of executions (default: 20) |
+
+**Options for `execution get`:**
+
+| Option | Description |
+|--------|-------------|
+| `--show-data` | Include node execution summary in output |
+
+**Error information displayed:**
+
+| Field | Description |
+|-------|-------------|
+| Error Node | The node where the error occurred |
+| Error Message | The error message |
+| Error Details | Additional error description (if available) |
+| Last Node | The last executed node |
+
+**Typical debugging workflow:**
+
+```bash
+# 1. List recent errors
+./n8n-cli -o table execution list --status error --limit 5
+
+# 2. Get details of a specific failed execution
+./n8n-cli -o table execution get <execution-id> --show-data
+
+# 3. Review error details and fix the workflow
+```
+
 ## Typical Workflow Operations
 
 ### Editing Workflows
