@@ -431,6 +431,180 @@ describe("disconnected components", () => {
   });
 });
 
+describe("!include preservation in YAML", () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "fmt-include-test-"));
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  test("!include tags are preserved after formatting", async () => {
+    // Create a sub-file to include
+    const subfileContent = "console.log('hello');";
+    fs.writeFileSync(path.join(tmpDir, "code.js"), subfileContent);
+
+    // Create a YAML workflow with !include
+    const yamlContent = `name: Include Test
+active: false
+nodes:
+  - id: "1"
+    name: Start
+    type: n8n-nodes-base.manualTrigger
+    typeVersion: 1
+    position: [0, 0]
+    parameters: {}
+  - id: "2"
+    name: Code
+    type: n8n-nodes-base.code
+    typeVersion: 1
+    position: [200, 0]
+    parameters:
+      jsCode: !include code.js
+connections:
+  Start:
+    main:
+      - - node: Code
+          type: main
+          index: 0
+`;
+    const filePath = path.join(tmpDir, "wf.yaml");
+    fs.writeFileSync(filePath, yamlContent);
+
+    const result = await formatWorkflowAsync(filePath, { dryRun: false });
+    expect(result.success).toBe(true);
+
+    const afterContent = fs.readFileSync(filePath, "utf-8");
+    // The !include tag should be preserved in the output
+    expect(afterContent).toContain("!include code.js");
+    // The file content should NOT be inlined
+    expect(afterContent).not.toContain("console.log('hello')");
+  });
+
+  test("!include tags survive formatting round-trip (dry-run)", async () => {
+    fs.writeFileSync(path.join(tmpDir, "script.js"), "return 42;");
+
+    const yamlContent = `name: DryRun Include
+active: false
+nodes:
+  - id: "1"
+    name: Trigger
+    type: n8n-nodes-base.manualTrigger
+    typeVersion: 1
+    position: [0, 0]
+    parameters: {}
+  - id: "2"
+    name: Run
+    type: n8n-nodes-base.code
+    typeVersion: 1
+    position: [200, 0]
+    parameters:
+      jsCode: !include script.js
+connections:
+  Trigger:
+    main:
+      - - node: Run
+          type: main
+          index: 0
+`;
+    const filePath = path.join(tmpDir, "wf.yaml");
+    fs.writeFileSync(filePath, yamlContent);
+
+    const result = await formatWorkflowAsync(filePath, { dryRun: true });
+    expect(result.success).toBe(true);
+
+    // Original file should be untouched
+    const afterContent = fs.readFileSync(filePath, "utf-8");
+    expect(afterContent).toBe(yamlContent);
+  });
+
+  test("formatting twice produces identical output (idempotency)", async () => {
+    fs.writeFileSync(path.join(tmpDir, "code.js"), "console.log('hello');");
+
+    const yamlContent = `name: Idempotent Include
+active: false
+nodes:
+  - id: "1"
+    name: Start
+    type: n8n-nodes-base.manualTrigger
+    typeVersion: 1
+    position: [0, 0]
+    parameters: {}
+  - id: "2"
+    name: Code
+    type: n8n-nodes-base.code
+    typeVersion: 1
+    position: [200, 0]
+    parameters:
+      jsCode: !include code.js
+connections:
+  Start:
+    main:
+      - - node: Code
+          type: main
+          index: 0
+`;
+    const filePath = path.join(tmpDir, "wf.yaml");
+    fs.writeFileSync(filePath, yamlContent);
+
+    // First format
+    const r1 = await formatWorkflowAsync(filePath, { dryRun: false });
+    expect(r1.success).toBe(true);
+    const after1 = fs.readFileSync(filePath, "utf-8");
+
+    // Second format
+    const r2 = await formatWorkflowAsync(filePath, { dryRun: false });
+    expect(r2.success).toBe(true);
+    const after2 = fs.readFileSync(filePath, "utf-8");
+
+    expect(after2).toBe(after1);
+    expect(r2.changes.length).toBe(0);
+    // !include must still be present
+    expect(after2).toContain("!include code.js");
+  });
+
+  test("!include in nested parameters is preserved", async () => {
+    fs.writeFileSync(path.join(tmpDir, "template.html"), "<h1>Hello</h1>");
+
+    const yamlContent = `name: Nested Include
+active: false
+nodes:
+  - id: "1"
+    name: Start
+    type: n8n-nodes-base.manualTrigger
+    typeVersion: 1
+    position: [0, 0]
+    parameters: {}
+  - id: "2"
+    name: Email
+    type: n8n-nodes-base.emailSend
+    typeVersion: 1
+    position: [200, 0]
+    parameters:
+      options:
+        htmlBody: !include template.html
+connections:
+  Start:
+    main:
+      - - node: Email
+          type: main
+          index: 0
+`;
+    const filePath = path.join(tmpDir, "wf.yaml");
+    fs.writeFileSync(filePath, yamlContent);
+
+    const result = await formatWorkflowAsync(filePath, { dryRun: false });
+    expect(result.success).toBe(true);
+
+    const afterContent = fs.readFileSync(filePath, "utf-8");
+    expect(afterContent).toContain("!include template.html");
+    expect(afterContent).not.toContain("<h1>Hello</h1>");
+  });
+});
+
 describe("ai_* connections", () => {
   let tmpDir: string;
 

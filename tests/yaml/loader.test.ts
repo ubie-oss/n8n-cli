@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import path from "node:path";
+import { IncludeRef } from "@/yaml/include-schema.ts";
 import { loadYamlWorkflow } from "@/yaml/loader.ts";
 
 const fixturesDir = path.resolve(import.meta.dir, "../fixtures");
@@ -71,5 +72,26 @@ describe("loadYamlWorkflow", () => {
     } finally {
       require("node:fs").unlinkSync(tmpPath);
     }
+  });
+
+  test("resolveIncludes: false preserves IncludeRef objects", () => {
+    const filePath = path.join(fixturesDir, "workflow-with-include.yaml");
+    const workflow = loadYamlWorkflow(filePath, { resolveIncludes: false });
+
+    expect(workflow.id).toBe("incl456");
+    const codeNode = workflow.nodes[1]!;
+    const jsCode = codeNode.parameters?.jsCode;
+    expect(jsCode).toBeInstanceOf(IncludeRef);
+    expect((jsCode as IncludeRef).path).toBe("included-code.js");
+  });
+
+  test("resolveIncludes: true (default) resolves IncludeRef to file contents", () => {
+    const filePath = path.join(fixturesDir, "workflow-with-include.yaml");
+    const workflow = loadYamlWorkflow(filePath);
+
+    const codeNode = workflow.nodes[1]!;
+    const jsCode = codeNode.parameters?.jsCode as string;
+    expect(typeof jsCode).toBe("string");
+    expect(jsCode).toContain("const items = $input.all();");
   });
 });

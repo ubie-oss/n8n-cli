@@ -1,6 +1,7 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import yaml from "js-yaml";
+import { IncludeRef, createIncludeDumpSchema } from "@/yaml/include-schema.ts";
 import { loadYamlWorkflow } from "@/yaml/loader.ts";
 
 /** Constants for layout calculation */
@@ -83,7 +84,7 @@ export async function loadWorkflowAsync(filePath: string): Promise<FormatterWork
   let raw: unknown;
 
   if (ext === ".yaml" || ext === ".yml") {
-    raw = loadYamlWorkflow(filePath);
+    raw = loadYamlWorkflow(filePath, { resolveIncludes: false });
   } else {
     return loadWorkflow(filePath);
   }
@@ -115,6 +116,7 @@ export function snapToGrid(value: number): number {
 
 /** Recursively sorts object keys in alphabetical order */
 export function sortKeys(v: unknown): unknown {
+  if (v instanceof IncludeRef) return v;
   if (Array.isArray(v)) return v.map(sortKeys);
   if (v && typeof v === "object") {
     return Object.keys(v as Record<string, unknown>)
@@ -152,5 +154,6 @@ export function serializeDeterministicYaml(workflow: FormatterWorkflow): string 
     lineWidth: -1,
     noRefs: true,
     quotingType: '"',
+    schema: createIncludeDumpSchema(),
   });
 }

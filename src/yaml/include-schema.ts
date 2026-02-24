@@ -4,23 +4,17 @@ import yaml from "js-yaml";
 
 /**
  * Creates a js-yaml schema with a custom `!include` tag.
- * `!include` resolves file paths relative to the YAML file's directory
- * and returns file content as a string.
+ * `!include` tags are parsed into `IncludeRef` objects that preserve the original path.
+ * Use `resolveIncludeRefs` to replace them with actual file contents when needed.
  */
-export function createIncludeSchema(baseDir: string): yaml.Schema {
+export function createIncludeSchema(_baseDir: string): yaml.Schema {
   const includeType = new yaml.Type("!include", {
     kind: "scalar",
     resolve(data: string): boolean {
       return typeof data === "string" && data.length > 0;
     },
-    construct(data: string): string {
-      const filePath = path.resolve(baseDir, data);
-      try {
-        return fs.readFileSync(filePath, "utf-8");
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        throw new Error(`!include failed to read "${data}" (resolved to "${filePath}"): ${msg}`);
-      }
+    construct(data: string): IncludeRef {
+      return new IncludeRef(data);
     },
     represent(data: unknown): string {
       return String(data);
@@ -36,6 +30,33 @@ export function createIncludeSchema(baseDir: string): yaml.Schema {
  */
 export class IncludeRef {
   constructor(public readonly path: string) {}
+}
+
+/**
+ * Recursively walks an object tree and replaces every `IncludeRef` with
+ * the content of the referenced file (resolved relative to `baseDir`).
+ */
+export function resolveIncludeRefs(obj: unknown, baseDir: string): unknown {
+  if (obj instanceof IncludeRef) {
+    const filePath = path.resolve(baseDir, obj.path);
+    try {
+      return fs.readFileSync(filePath, "utf-8");
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      throw new Error(`!include failed to read "${obj.path}" (resolved to "${filePath}"): ${msg}`);
+    }
+  }
+  if (Array.isArray(obj)) {
+    return obj.map((item) => resolveIncludeRefs(item, baseDir));
+  }
+  if (obj && typeof obj === "object") {
+    const result: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(obj)) {
+      result[key] = resolveIncludeRefs(value, baseDir);
+    }
+    return result;
+  }
+  return obj;
 }
 
 /**
