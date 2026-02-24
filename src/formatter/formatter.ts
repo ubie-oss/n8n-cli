@@ -207,7 +207,7 @@ export function formatWorkflowWithOptions(filePath: string, options: FormatOptio
   return result;
 }
 
-/** FormatWorkflowAsync formats a workflow file (JSON/YAML/Jsonnet) with specified options */
+/** FormatWorkflowAsync formats a workflow file (JSON/YAML) with specified options */
 export async function formatWorkflowAsync(
   filePath: string,
   options: FormatOptions,

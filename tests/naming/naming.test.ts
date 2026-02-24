@@ -15,12 +15,6 @@ describe("extractWorkflowIDFromFilename", () => {
       wantOk: true,
     },
     {
-      name: "new format with jsonnet extension",
-      filename: "選考リマインダー__NBDajW4OnwFbnBQ2.jsonnet",
-      wantID: "NBDajW4OnwFbnBQ2",
-      wantOk: true,
-    },
-    {
       name: "new format with path",
       filename: "definitions/example-project/サンプル処理__xyz789.json",
       wantID: "xyz789",
@@ -87,13 +81,6 @@ describe("generateFilenameWithID", () => {
       workflowID: "abc123def456",
       ext: ".json",
       want: "日次レポート__abc123def456.json",
-    },
-    {
-      name: "jsonnet extension",
-      sanitizedName: "選考リマインダー",
-      workflowID: "NBDajW4OnwFbnBQ2",
-      ext: ".jsonnet",
-      want: "選考リマインダー__NBDajW4OnwFbnBQ2.jsonnet",
     },
     {
       name: "name with hyphens",

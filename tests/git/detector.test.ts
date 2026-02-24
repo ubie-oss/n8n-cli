@@ -112,7 +112,7 @@ describe("Detector", () => {
     // All files should be workflow-related
     for (const file of files) {
       const ext = file.toLowerCase().split(".").pop() ?? "";
-      const isWorkflowFile = ext === "json" || ext === "jsonnet";
+      const isWorkflowFile = ext === "json" || ext === "yaml" || ext === "yml";
       const isSubfile = file.includes("/_subfiles/");
       expect(isWorkflowFile || isSubfile).toBe(true);
     }

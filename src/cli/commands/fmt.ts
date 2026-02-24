@@ -80,7 +80,7 @@ export function registerFmtCommand(program: Command): void {
     );
 }
 
-/** scanWorkflowFiles recursively scans a directory for workflow files (.json, .yaml, .yml, .jsonnet) */
+/** scanWorkflowFiles recursively scans a directory for workflow files (.json, .yaml, .yml) */
 function scanWorkflowFiles(dir: string): string[] {
   const results: string[] = [];
 

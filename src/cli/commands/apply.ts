@@ -25,8 +25,8 @@ export function registerApplyCommand(program: Command): void {
     .option("--dry-run", "Preview changes without applying")
     .option("--force", "Override conflict detection and duplicate warnings")
     .option("--no-auto-tag", "Disable automatic tagging")
-    .option("--yaml", "Enable YAML/Jsonnet file processing")
-    .option("--no-yaml", "Disable YAML/Jsonnet processing")
+    .option("--yaml", "Enable YAML file processing")
+    .option("--no-yaml", "Disable YAML processing")
     .option(
       "--warn-duplicates",
       "Warn when creating workflows with names that already exist remotely",
@@ -86,7 +86,7 @@ export function registerApplyCommand(program: Command): void {
         opts.autoTags = getEffectiveAutoTags(cliConfig);
       }
 
-      // Apply YAML/Jsonnet settings
+      // Apply YAML settings
       opts.yamlEnabled = getEffectiveYamlEnabled(opts.yamlEnabled, opts.noYaml, cliConfig);
 
       // Create executor

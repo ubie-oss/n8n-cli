@@ -127,20 +127,18 @@ cp .env.example .env
    # Check if file exists and its format
    ls -la definitions/*<workflow-id>* definitions/**/*<workflow-id>*
 
-   # For jsonnet, also check for external files
-   ls -la definitions/_subfiles/<workflow-id>/
    ```
 
 2. **Use appropriate import options based on format**
    - `.json` files: use `--ids` only
-   - `.jsonnet` files: use both `--ids` and `--yaml` (`--yaml` flag enables both YAML and Jsonnet)
+   - `.yaml`/`.yml` files: use both `--ids` and `--yaml`
 
 **Import a specific workflow:**
 ```bash
 # JSON format workflow
 ./n8n-cli import --ids=<workflow-id>
 
-# Jsonnet format workflow (with external file splitting)
+# YAML format workflow
 ./n8n-cli import --ids=<workflow-id> --yaml
 
 # To a custom directory
@@ -225,7 +223,7 @@ Summary (dry-run): 1 to create, 2 to update, 1 unchanged
 | Option | Description |
 |--------|-------------|
 | `--from-git-changes <spec>` | Apply only files changed in Git diff |
-| `--yaml` / `--no-yaml` | Enable/disable YAML/Jsonnet processing |
+| `--yaml` / `--no-yaml` | Enable/disable YAML processing |
 | `--warn-duplicates` | Warn if a workflow with the same name already exists |
 | `--no-auto-tag` | Disable automatic tagging (managed-as-code) |
 | `-p, --project <id>` | Specify target project ID |
@@ -353,7 +351,7 @@ Config file search order:
 
 **Test from local file:**
 ```bash
-# Specify a local JSON/Jsonnet file
+# Specify a local JSON file
 ./n8n-cli test ./definitions/my-workflow.json
 ```
 
@@ -398,20 +396,17 @@ test -f .env && echo "OK"
 # 1. Check local file format (important!)
 ls -la definitions/*<workflow-id>* definitions/**/*<workflow-id>*
 
-# 2. Check for external files (for jsonnet)
-ls -la definitions/_subfiles/<workflow-id>/ 2>/dev/null
-
-# 3. Check remote state
+# 2. Check remote state
 ./n8n-cli workflow get <workflow-id> > /tmp/remote.json
 
-# 4. Compare with local (if needed)
+# 3. Compare with local (if needed)
 diff definitions/path/to/workflow.json /tmp/remote.json
 
-# 5. Import preserving format
+# 4. Import preserving format
 # For JSON format:
 ./n8n-cli import --ids=<workflow-id>
 
-# For Jsonnet format (external files will also be recreated):
+# For YAML format:
 ./n8n-cli import --ids=<workflow-id> --yaml
 ```
 
@@ -493,19 +488,14 @@ Error: conflict: remote workflow has been modified since your local file
 
 2. **Determine format**
    - `.json` -> JSON format
-   - `.jsonnet` -> Jsonnet format (with external file splitting)
+   - `.yaml`/`.yml` -> YAML format
 
-3. **Check for external files (for jsonnet)**
-   ```bash
-   ls -la definitions/_subfiles/<workflow-id>/
-   ```
-
-4. **Import with format-appropriate options**
+3. **Import with format-appropriate options**
    ```bash
    # JSON format
    ./n8n-cli import --ids=<workflow-id>
 
-   # Jsonnet format
+   # YAML format
    ./n8n-cli import --ids=<workflow-id> --yaml
    ```
 
@@ -515,4 +505,3 @@ Error: conflict: remote workflow has been modified since your local file
 - Applying to an entire directory (always use `--ids` or specify a single file)
 - Using `--force` carelessly
 - **Importing without checking the local format first**
-- **Overwriting jsonnet files with JSON format**

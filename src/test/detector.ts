@@ -37,7 +37,7 @@ export class NoTestWebhookError extends Error {
   - Path: UUID v4 format (e.g., "5bf62c14-fca6-4ec0-92f7-6d07bd1c39b7")
   - webhookId: MUST be set to the same value as path (required for API-based registration)
 
-Example node (Jsonnet):
+Example node (JSON):
 {
   id: "<UUID v4 for node>",
   name: "[CLI Test] Test Entry",

@@ -4,7 +4,7 @@ import type { Workflow } from "@/api/types.ts";
 import { WORKFLOW_EXTENSIONS } from "@/common/extensions.ts";
 import { loadYamlWorkflow } from "@/yaml/loader.ts";
 
-/** Scan walks a directory tree and returns all workflow files (.json, .yaml, .yml, .jsonnet) */
+/** Scan walks a directory tree and returns all workflow files (.json, .yaml, .yml) */
 export function scanFiles(dir: string): string[] {
   const files: string[] = [];
   walkDir(dir, files);

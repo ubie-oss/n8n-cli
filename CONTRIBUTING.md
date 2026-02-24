@@ -35,7 +35,7 @@ n8n-cli/
 │   ├── lint/             # Linter rules and output
 │   ├── naming/           # File naming conventions
 │   ├── test/             # Test command logic
-│   └── yaml/             # YAML/Jsonnet processing
+│   └── yaml/             # YAML processing
 ├── tests/                # Test files (mirrors src/ structure)
 ├── Makefile              # Build and development tasks
 ├── biome.json            # Linter and formatter configuration

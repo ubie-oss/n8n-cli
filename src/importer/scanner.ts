@@ -18,7 +18,7 @@ const permissiveIncludeType = new yaml.Type("!include", {
 const permissiveSchema = yaml.DEFAULT_SCHEMA.extend([permissiveIncludeType]);
 
 /**
- * Scans a directory recursively for workflow JSON, YAML, and Jsonnet files.
+ * Scans a directory recursively for workflow JSON and YAML files.
  * Returns a WorkflowIDMap containing workflow ID → file path mappings.
  */
 export function scanDirectory(dir: string): WorkflowIDMap {
