@@ -1,7 +1,7 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import yaml from "js-yaml";
-import { IncludeRef, createIncludeDumpSchema } from "@/yaml/include-schema.ts";
+import { createIncludeDumpSchema, IncludeRef } from "@/yaml/include-schema.ts";
 import { loadYamlWorkflow } from "@/yaml/loader.ts";
 
 /** Constants for layout calculation */
