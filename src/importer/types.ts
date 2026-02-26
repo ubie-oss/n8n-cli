@@ -1,5 +1,5 @@
 /** OperationType represents the type of import operation. */
-export type OperationType = "create" | "update" | "skip" | "error" | "cleanup" | "match";
+export type OperationType = "create" | "update" | "skip" | "error" | "cleanup" | "match" | "rename";
 
 /** SourceType indicates the format of the source file. */
 export type SourceType = "json" | "yaml";
@@ -39,6 +39,7 @@ export interface ImportOperation {
   type: OperationType;
   localPath: string;
   reason: string;
+  oldPath?: string;
 }
 
 /** ImportResult aggregates all import operations. */
@@ -52,6 +53,7 @@ export class ImportResult {
   durationMs = 0;
   matched = 0;
   cleanedUp = 0;
+  renamed = 0;
   orphans: string[] = [];
 
   hasErrors(): boolean {
@@ -82,6 +84,9 @@ export class ImportResult {
         break;
       case "match":
         this.matched++;
+        break;
+      case "rename":
+        this.renamed++;
         break;
     }
   }

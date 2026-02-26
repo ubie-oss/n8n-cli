@@ -1,7 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { Workflow } from "@/api/types.ts";
-import { generateDirnameWithID, generateFilenameWithID } from "@/naming/naming.ts";
+import {
+  extractWorkflowIDFromDirname,
+  generateDirnameWithID,
+  generateFilenameWithID,
+} from "@/naming/naming.ts";
 import { generateYamlWorkflow, SubfilesDir, sanitizeNodeName } from "@/yaml/generator.ts";
 
 /** Maximum filename length in bytes. */
@@ -272,6 +276,42 @@ export function getSubfilesDir(baseDir: string, workflowID: string, workflowName
   const sanitized = sanitizeNodeName(workflowName);
   const dirName = generateDirnameWithID(sanitized, workflowID);
   return path.join(baseDir, SubfilesDir, dirName);
+}
+
+/**
+ * Finds an existing _subfiles/ subdirectory matching the given workflow ID.
+ * Returns the full path if found, or null otherwise.
+ */
+export function findExistingSubfilesDir(baseDir: string, workflowID: string): string | null {
+  const dirs = findExistingSubfilesDirs(baseDir, workflowID);
+  return dirs.length > 0 ? dirs[0]! : null;
+}
+
+/**
+ * Finds all existing _subfiles/ subdirectories matching the given workflow ID.
+ * Returns an array of full paths (may be empty).
+ */
+export function findExistingSubfilesDirs(baseDir: string, workflowID: string): string[] {
+  const subfilesPath = path.join(baseDir, SubfilesDir);
+  if (!fs.existsSync(subfilesPath)) return [];
+
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(subfilesPath, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+
+  const result: string[] = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const [id, found] = extractWorkflowIDFromDirname(entry.name);
+    if (found && id === workflowID) {
+      result.push(path.join(subfilesPath, entry.name));
+    }
+  }
+
+  return result;
 }
 
 /** Embeds a workflow ID into an existing JSON file. */

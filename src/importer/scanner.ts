@@ -120,8 +120,9 @@ function extractWorkflowID(filePath: string): string {
     } else {
       parsed = JSON.parse(data) as Record<string, unknown>;
     }
-    const id = parsed.id;
-    if (typeof id === "string" && id) {
+    const rawId = parsed.id;
+    const id = typeof rawId === "string" ? rawId : typeof rawId === "number" ? String(rawId) : "";
+    if (id) {
       // Check filename ID mismatch
       const [filenameID, found] = extractWorkflowIDFromFilename(filePath);
       if (found && filenameID !== id) {
@@ -148,7 +149,8 @@ function extractIDAndName(filePath: string): [string, string] {
     } else {
       parsed = JSON.parse(data) as Record<string, unknown>;
     }
-    const id = typeof parsed.id === "string" ? parsed.id : "";
+    const rawId = parsed.id;
+    const id = typeof rawId === "string" ? rawId : typeof rawId === "number" ? String(rawId) : "";
     const name = typeof parsed.name === "string" ? parsed.name : "";
     return [id, name];
   } catch {

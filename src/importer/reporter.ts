@@ -21,6 +21,9 @@ export function reportSummary(result: ImportResult): void {
   console.log("Import complete:");
   console.log(`  Created:   ${result.created}`);
   console.log(`  Updated:   ${result.updated}`);
+  if (result.renamed > 0) {
+    console.log(`  Renamed:   ${result.renamed}`);
+  }
   console.log(`  Skipped:   ${result.skipped}`);
   if (result.matched > 0) {
     console.log(`  Matched:   ${result.matched}`);
@@ -54,6 +57,9 @@ export function reportDryRun(result: ImportResult): void {
       case "match":
         console.log(`  Would match: ${op.localPath} (${op.workflowName}) → ID: ${op.workflowID}`);
         break;
+      case "rename":
+        console.log(`  Would rename: ${op.oldPath} -> ${op.localPath} (${op.workflowName})`);
+        break;
       case "error":
         console.log(`  Error: ${op.workflowName} - ${op.reason}`);
         break;
@@ -66,6 +72,9 @@ export function reportDryRun(result: ImportResult): void {
   console.log(`  Would skip:    ${result.skipped}`);
   if (result.matched > 0) {
     console.log(`  Would match:   ${result.matched}`);
+  }
+  if (result.renamed > 0) {
+    console.log(`  Would rename:  ${result.renamed}`);
   }
   if (result.cleanedUp > 0) {
     console.log(`  Would cleanup: ${result.cleanedUp}`);

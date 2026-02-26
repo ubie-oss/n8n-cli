@@ -5,6 +5,8 @@ import path from "node:path";
 import type { Workflow } from "@/api/types.ts";
 import {
   embedWorkflowID,
+  findExistingSubfilesDir,
+  findExistingSubfilesDirs,
   generateFilePath,
   generateYamlFilePath,
   sanitizeFilename,
@@ -160,5 +162,84 @@ describe("embedWorkflowID", () => {
 
     const parsed = JSON.parse(fs.readFileSync(filePath, "utf-8"));
     expect(parsed.id).toBe("new-id");
+  });
+});
+
+describe("findExistingSubfilesDir", () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "subfiles-test-"));
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  test("finds existing subfiles directory by workflow ID", () => {
+    const subfilesDir = path.join(tmpDir, "_subfiles", "old-name__wf123");
+    fs.mkdirSync(subfilesDir, { recursive: true });
+
+    const result = findExistingSubfilesDir(tmpDir, "wf123");
+    expect(result).toBe(subfilesDir);
+  });
+
+  test("returns null when no matching directory exists", () => {
+    const subfilesDir = path.join(tmpDir, "_subfiles", "some-name__wf999");
+    fs.mkdirSync(subfilesDir, { recursive: true });
+
+    const result = findExistingSubfilesDir(tmpDir, "wf000");
+    expect(result).toBeNull();
+  });
+
+  test("returns null when _subfiles directory does not exist", () => {
+    const result = findExistingSubfilesDir(tmpDir, "wf123");
+    expect(result).toBeNull();
+  });
+});
+
+describe("findExistingSubfilesDirs", () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "subfiles-dirs-test-"));
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  test("returns all matching directories for same workflow ID", () => {
+    const dir1 = path.join(tmpDir, "_subfiles", "old-name__wf123");
+    const dir2 = path.join(tmpDir, "_subfiles", "new-name__wf123");
+    fs.mkdirSync(dir1, { recursive: true });
+    fs.mkdirSync(dir2, { recursive: true });
+
+    const result = findExistingSubfilesDirs(tmpDir, "wf123");
+    expect(result).toHaveLength(2);
+    expect(result).toContain(dir1);
+    expect(result).toContain(dir2);
+  });
+
+  test("returns empty array when no matching directory exists", () => {
+    const dir = path.join(tmpDir, "_subfiles", "some-name__wf999");
+    fs.mkdirSync(dir, { recursive: true });
+
+    const result = findExistingSubfilesDirs(tmpDir, "wf000");
+    expect(result).toHaveLength(0);
+  });
+
+  test("returns empty array when _subfiles directory does not exist", () => {
+    const result = findExistingSubfilesDirs(tmpDir, "wf123");
+    expect(result).toHaveLength(0);
+  });
+
+  test("returns single directory when only one matches", () => {
+    const dir = path.join(tmpDir, "_subfiles", "my-wf__wf456");
+    fs.mkdirSync(dir, { recursive: true });
+
+    const result = findExistingSubfilesDirs(tmpDir, "wf456");
+    expect(result).toHaveLength(1);
+    expect(result[0]).toBe(dir);
   });
 });

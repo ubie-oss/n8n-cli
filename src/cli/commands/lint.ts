@@ -1,5 +1,4 @@
 import type { Command } from "commander";
-import type { Workflow } from "@/api/types.ts";
 import { hasAllTags, parseTagFilter } from "@/common/tags.ts";
 import { loadLintConfig } from "@/lint/config.ts";
 import { formatJSON } from "@/lint/output/json.ts";
@@ -7,7 +6,7 @@ import type { LintResult } from "@/lint/output/result.ts";
 import { hasErrors } from "@/lint/output/result.ts";
 import { formatText } from "@/lint/output/text.ts";
 import { registerDefaultRules } from "@/lint/rules/index.ts";
-import { loadLintFile, scanFiles } from "@/lint/scanner.ts";
+import { loadFileForLint, scanFiles } from "@/lint/scanner.ts";
 
 /** Registers the lint command on the program */
 export function registerLintCommand(program: Command): void {
@@ -79,22 +78,29 @@ export function registerLintCommand(program: Command): void {
       for (const filePath of files) {
         result.filesChecked++;
 
-        let rawJSON: string;
-        let workflow: Workflow | null = null;
-        try {
-          const loaded = await loadLintFile(filePath);
-          rawJSON = loaded.rawJSON;
-          workflow = loaded.workflow;
-        } catch (e) {
+        const outcome = await loadFileForLint(filePath, filterByTags);
+        if (outcome.status === "skipped") {
+          result.violations.push({
+            file: filePath,
+            rule: "file-read",
+            severity: "warning",
+            message: outcome.message,
+          });
+          result.filesChecked--;
+          continue;
+        }
+        if (outcome.status === "error") {
           result.violations.push({
             file: filePath,
             rule: "file-read",
             severity: "error",
-            message: `Failed to read file: ${e instanceof Error ? e.message : String(e)}`,
+            message: outcome.message,
           });
           failedFiles.add(filePath);
           continue;
         }
+
+        const { rawJSON, workflow } = outcome.data;
 
         // Filter by tags
         if (workflow && filterByTags.length > 0) {

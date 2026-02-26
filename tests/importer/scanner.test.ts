@@ -84,6 +84,17 @@ describe("scanDirectory", () => {
     const idMap = scanDirectory(tmpDir);
     expect(idMap.count()).toBe(0);
   });
+
+  test("scans YAML files with numeric ID", () => {
+    const yamlContent = "id: 91\nname: Numeric ID WF\nnodes: []\nconnections: {}\n";
+    fs.writeFileSync(path.join(tmpDir, "numeric-id-wf__91.yaml"), yamlContent);
+
+    const idMap = scanDirectory(tmpDir);
+    expect(idMap.count()).toBe(1);
+    const [filePath, found] = idMap.get("91");
+    expect(found).toBe(true);
+    expect(filePath).toContain("numeric-id-wf__91.yaml");
+  });
 });
 
 describe("scanDirectoryWithOrphans", () => {
@@ -113,6 +124,17 @@ describe("scanDirectoryWithOrphans", () => {
   test("returns empty maps for nonexistent directory", () => {
     const [idMap, orphanMap] = scanDirectoryWithOrphans(path.join(tmpDir, "nonexistent"));
     expect(idMap.count()).toBe(0);
+    expect(orphanMap.count()).toBe(0);
+  });
+
+  test("handles YAML files with numeric ID correctly", () => {
+    const yamlContent = "id: 42\nname: Numeric WF\nnodes: []\nconnections: {}\n";
+    fs.writeFileSync(path.join(tmpDir, "numeric-wf__42.yaml"), yamlContent);
+
+    const [idMap, orphanMap] = scanDirectoryWithOrphans(tmpDir);
+    expect(idMap.count()).toBe(1);
+    const [, found] = idMap.get("42");
+    expect(found).toBe(true);
     expect(orphanMap.count()).toBe(0);
   });
 });

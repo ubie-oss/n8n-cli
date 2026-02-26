@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { loadLintFile, scanFiles } from "@/lint/scanner.ts";
+import { loadLintFile, loadLintFileWithoutIncludes, scanFiles } from "@/lint/scanner.ts";
 
 describe("scanFiles", () => {
   let tmpDir: string;
@@ -148,5 +148,59 @@ describe("loadLintFile", () => {
 
   test("throws on nonexistent YAML file", async () => {
     await expect(loadLintFile(path.join(tmpDir, "nope.yaml"))).rejects.toThrow();
+  });
+});
+
+describe("loadLintFileWithoutIncludes", () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "lint-noinc-test-"));
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  test("returns tags and name from YAML with broken !include", async () => {
+    const filePath = path.join(tmpDir, "wf.yaml");
+    const yamlContent = [
+      "id: wf1",
+      "name: Tagged Workflow",
+      "active: false",
+      "tags:",
+      "  - id: t1",
+      "    name: managed-as-code",
+      "nodes:",
+      "  - id: n1",
+      "    name: Node1",
+      "    type: test",
+      "    typeVersion: 1",
+      "    position: [0, 0]",
+      "    parameters:",
+      "      code: !include nonexistent-file.js",
+      "connections: {}",
+    ].join("\n");
+    fs.writeFileSync(filePath, yamlContent);
+
+    // loadLintFile should throw because !include target does not exist
+    await expect(loadLintFile(filePath)).rejects.toThrow();
+
+    // loadLintFileWithoutIncludes should succeed and return tags
+    const result = await loadLintFileWithoutIncludes(filePath);
+    expect(result.workflow).not.toBeNull();
+    expect(result.workflow!.name).toBe("Tagged Workflow");
+    expect(result.workflow!.tags).toHaveLength(1);
+    expect(result.workflow!.tags![0]!.name).toBe("managed-as-code");
+  });
+
+  test("works the same as loadLintFile for JSON files", async () => {
+    const wf = { id: "j1", name: "JSON WF", nodes: [], connections: {} };
+    const filePath = path.join(tmpDir, "wf.json");
+    fs.writeFileSync(filePath, JSON.stringify(wf));
+
+    const result = await loadLintFileWithoutIncludes(filePath);
+    expect(result.workflow).not.toBeNull();
+    expect(result.workflow!.name).toBe("JSON WF");
   });
 });

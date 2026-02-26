@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import type { Workflow } from "@/api/types.ts";
 import type { ListOptions, WorkflowService } from "@/api/workflow-service.ts";
 import { hasAllTags } from "@/common/tags.ts";
@@ -12,6 +14,7 @@ import {
 } from "./types.ts";
 import {
   ensureDirectory,
+  findExistingSubfilesDirs,
   generateFilePath,
   generateYamlFilePath,
   getSubfilesDir,
@@ -174,11 +177,26 @@ export class ImportExecutor {
     const [localPath, exists] = idMap.get(remote.id);
     let targetPath = localPath;
 
+    // Determine format: preserve existing format, or use yamlEnabled for new
+    let useYaml = false;
+    if (exists) {
+      const lowerPath = targetPath.toLowerCase();
+      useYaml = lowerPath.endsWith(".yaml") || lowerPath.endsWith(".yml");
+    } else {
+      useYaml = this.opts.yamlEnabled;
+    }
+
+    // Compute expected path under current naming rules
+    const expectedPath = useYaml
+      ? generateYamlFilePath(this.opts.directory, remote.id, remote.name)
+      : generateFilePath(this.opts.directory, remote.id, remote.name);
+    const needsRename = exists && path.resolve(localPath) !== path.resolve(expectedPath);
+
     if (exists) {
       // Check timestamps
       try {
         const localWorkflow = parseWorkflowFile(targetPath);
-        if (!shouldUpdate(localWorkflow.updatedAt, remote.updatedAt)) {
+        if (!shouldUpdate(localWorkflow.updatedAt, remote.updatedAt) && !needsRename) {
           result.addOperation({
             workflowID: remote.id,
             workflowName: remote.name,
@@ -193,27 +211,28 @@ export class ImportExecutor {
       }
     } else {
       // New workflow
-      targetPath = generateFilePath(this.opts.directory, remote.id, remote.name);
+      targetPath = expectedPath;
     }
 
-    const opType = exists ? "update" : "create";
-
-    // Determine format: preserve existing format, or use yamlEnabled for new
-    let useYaml = false;
-    if (exists) {
-      const lowerPath = targetPath.toLowerCase();
-      useYaml = lowerPath.endsWith(".yaml") || lowerPath.endsWith(".yml");
-    } else {
-      useYaml = this.opts.yamlEnabled;
+    // If renaming, update targetPath to the expected path
+    if (needsRename) {
+      targetPath = expectedPath;
     }
+
+    const opType = exists ? (needsRename ? "rename" : "update") : "create";
 
     // Write (unless dry-run)
     if (!this.opts.dryRun) {
       try {
+        // BEFORE write: save old subfiles directory paths for later cleanup
+        const oldSubfilesDirs = needsRename
+          ? findExistingSubfilesDirs(this.opts.directory, remote.id)
+          : [];
+
         if (useYaml) {
           const written = writeWorkflowYAML(
             this.opts.directory,
-            exists ? targetPath : null,
+            needsRename ? null : exists ? localPath : null,
             remote,
             this.opts.externalizeThreshold,
           );
@@ -229,6 +248,25 @@ export class ImportExecutor {
         } else {
           writeWorkflowJSON(targetPath, remote);
         }
+
+        // If renaming, delete the old file and old _subfiles directories
+        if (needsRename) {
+          try {
+            fs.unlinkSync(localPath);
+          } catch {
+            // old file may already be gone
+          }
+          const newSubfilesDir = getSubfilesDir(this.opts.directory, remote.id, remote.name);
+          for (const oldDir of oldSubfilesDirs) {
+            if (path.resolve(oldDir) !== path.resolve(newSubfilesDir)) {
+              try {
+                fs.rmSync(oldDir, { recursive: true, force: true });
+              } catch {
+                // ignore cleanup failure
+              }
+            }
+          }
+        }
       } catch (err) {
         result.addOperation({
           workflowID: remote.id,
@@ -239,7 +277,7 @@ export class ImportExecutor {
         });
         return;
       }
-    } else if (useYaml && this.opts.cleanupSubfiles && exists) {
+    } else if (useYaml && this.opts.cleanupSubfiles && exists && !needsRename) {
       // dry-run: report all non-description.md subfiles as potential orphans
       const subfilesDir = getSubfilesDir(this.opts.directory, remote.id!, remote.name);
       cleanupOrphanSubfiles(subfilesDir, [], true, result);
@@ -252,6 +290,7 @@ export class ImportExecutor {
       workflowName: remote.name,
       type: opType,
       localPath: targetPath,
+      oldPath: needsRename ? localPath : undefined,
       reason: "",
     });
   }
