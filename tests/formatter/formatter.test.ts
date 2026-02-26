@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import yaml from "js-yaml";
 import { formatWorkflowAsync, formatWorkflowWithOptions } from "@/formatter/formatter.ts";
-import { GRID_SIZE } from "@/formatter/workflow.ts";
+import { AI_SUBNODE_Y_OFFSET, GRID_SIZE } from "@/formatter/workflow.ts";
 
 const simpleWorkflow = {
   name: "Test",
@@ -616,7 +616,7 @@ describe("ai_* connections", () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  test("ai_* connected nodes are placed near their parent", () => {
+  test("ai_* connected nodes are placed below their parent Agent", () => {
     const workflow = {
       name: "AI Test",
       active: false,
@@ -645,6 +645,14 @@ describe("ai_* connections", () => {
           position: [1000, 500],
           parameters: {},
         },
+        {
+          id: "4",
+          name: "Tool",
+          type: "@n8n/n8n-nodes-langchain.toolHttpRequest",
+          typeVersion: 1,
+          position: [1000, 700],
+          parameters: {},
+        },
       ],
       connections: {
         Trigger: {
@@ -652,6 +660,9 @@ describe("ai_* connections", () => {
         },
         ChatModel: {
           ai_languageModel: [[{ node: "Agent", type: "ai_languageModel", index: 0 }]],
+        },
+        Tool: {
+          ai_tool: [[{ node: "Agent", type: "ai_tool", index: 0 }]],
         },
       },
     };
@@ -667,10 +678,85 @@ describe("ai_* connections", () => {
       content.nodes.map((n: { name: string; position: number[] }) => [n.name, n.position]),
     );
 
-    // All three nodes should be in the same connected component
-    // ChatModel connects to Agent via ai_languageModel, so they should be in the graph
-    expect(nodeMap.has("ChatModel")).toBe(true);
-    expect(nodeMap.has("Agent")).toBe(true);
-    expect(nodeMap.has("Trigger")).toBe(true);
+    const agentPos = nodeMap.get("Agent") as number[];
+    const chatModelPos = nodeMap.get("ChatModel") as number[];
+    const toolPos = nodeMap.get("Tool") as number[];
+
+    // AI sub-nodes should be below Agent
+    const expectedY = Math.round((agentPos[1]! + AI_SUBNODE_Y_OFFSET) / GRID_SIZE) * GRID_SIZE;
+    expect(chatModelPos[1]).toBe(expectedY);
+    expect(toolPos[1]).toBe(expectedY);
+
+    // Trigger should be to the left of Agent (main flow)
+    const triggerPos = nodeMap.get("Trigger") as number[];
+    expect(triggerPos[0]!).toBeLessThan(agentPos[0]!);
+  });
+
+  test("ai_* sub-node workflow is idempotent", () => {
+    const workflow = {
+      name: "AI Idempotent",
+      active: false,
+      nodes: [
+        {
+          id: "1",
+          name: "Trigger",
+          type: "n8n-nodes-base.manualTrigger",
+          typeVersion: 1,
+          position: [0, 0],
+          parameters: {},
+        },
+        {
+          id: "2",
+          name: "Agent",
+          type: "@n8n/n8n-nodes-langchain.agent",
+          typeVersion: 1,
+          position: [500, 0],
+          parameters: {},
+        },
+        {
+          id: "3",
+          name: "ChatModel",
+          type: "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+          typeVersion: 1,
+          position: [1000, 500],
+          parameters: {},
+        },
+        {
+          id: "4",
+          name: "Tool",
+          type: "@n8n/n8n-nodes-langchain.toolHttpRequest",
+          typeVersion: 1,
+          position: [1000, 700],
+          parameters: {},
+        },
+      ],
+      connections: {
+        Trigger: {
+          main: [[{ node: "Agent", type: "main", index: 0 }]],
+        },
+        ChatModel: {
+          ai_languageModel: [[{ node: "Agent", type: "ai_languageModel", index: 0 }]],
+        },
+        Tool: {
+          ai_tool: [[{ node: "Agent", type: "ai_tool", index: 0 }]],
+        },
+      },
+    };
+
+    const filePath = path.join(tmpDir, "wf.json");
+    fs.writeFileSync(filePath, JSON.stringify(workflow));
+
+    // First format
+    const r1 = formatWorkflowWithOptions(filePath, { dryRun: false });
+    expect(r1.success).toBe(true);
+    const after1 = fs.readFileSync(filePath, "utf-8");
+
+    // Second format
+    const r2 = formatWorkflowWithOptions(filePath, { dryRun: false });
+    expect(r2.success).toBe(true);
+    expect(r2.changes.length).toBe(0);
+
+    const after2 = fs.readFileSync(filePath, "utf-8");
+    expect(after2).toBe(after1);
   });
 });

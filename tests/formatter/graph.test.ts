@@ -1,6 +1,11 @@
 import { describe, expect, it } from "bun:test";
-import { buildFullGraph, newGraph } from "../../src/formatter/graph.ts";
-import type { FormatterWorkflow } from "../../src/formatter/workflow.ts";
+import {
+  type GraphNode,
+  buildFullGraph,
+  extractAiClusters,
+  newGraph,
+} from "../../src/formatter/graph.ts";
+import type { FormatterNode, FormatterWorkflow } from "../../src/formatter/workflow.ts";
 
 describe("newGraph", () => {
   it("creates an empty graph", () => {
@@ -63,6 +68,11 @@ describe("buildFullGraph", () => {
     const edgeMap = new Map(graph.edges.map((e) => [e.from, e.to]));
     expect(edgeMap.get("Start")).toBe("HTTP Request");
     expect(edgeMap.get("HTTP Request")).toBe("End");
+
+    // All edges should have type "main"
+    for (const edge of graph.edges) {
+      expect(edge.type).toBe("main");
+    }
   });
 
   it("excludes sticky notes from graph", () => {
@@ -169,5 +179,101 @@ describe("buildFullGraph", () => {
 
     const sources = graph.edges.map((e) => e.from).sort();
     expect(sources).toEqual(["ChatModel", "Memory", "Tool"]);
+
+    // Each edge should have the correct AI type
+    const typeMap = new Map(graph.edges.map((e) => [e.from, e.type]));
+    expect(typeMap.get("ChatModel")).toBe("ai_languageModel");
+    expect(typeMap.get("Tool")).toBe("ai_tool");
+    expect(typeMap.get("Memory")).toBe("ai_memory");
+  });
+});
+
+function makeNode(name: string): FormatterNode {
+  return {
+    id: name,
+    name,
+    type: "n8n-nodes-base.noOp",
+    typeVersion: 1,
+    position: [0, 0],
+    parameters: {},
+  };
+}
+
+function makeGraphNode(name: string): GraphNode {
+  return {
+    name,
+    original: makeNode(name),
+    position: { x: 0, y: 0 },
+  };
+}
+
+describe("extractAiClusters", () => {
+  it("extracts Agent and sub-nodes correctly", () => {
+    const graph = newGraph();
+    graph.nodes.set("Trigger", makeGraphNode("Trigger"));
+    graph.nodes.set("Agent", makeGraphNode("Agent"));
+    graph.nodes.set("ChatModel", makeGraphNode("ChatModel"));
+    graph.nodes.set("Tool", makeGraphNode("Tool"));
+    graph.nodes.set("Memory", makeGraphNode("Memory"));
+    graph.edges = [
+      { from: "Trigger", to: "Agent", type: "main" },
+      { from: "ChatModel", to: "Agent", type: "ai_languageModel" },
+      { from: "Tool", to: "Agent", type: "ai_tool" },
+      { from: "Memory", to: "Agent", type: "ai_memory" },
+    ];
+
+    const clusters = extractAiClusters(graph);
+
+    expect(clusters.length).toBe(1);
+    expect(clusters[0]!.agentName).toBe("Agent");
+    expect(clusters[0]!.subNodeNames).toEqual(["ChatModel", "Memory", "Tool"]);
+  });
+
+  it("returns empty array for workflow without AI nodes", () => {
+    const graph = newGraph();
+    graph.nodes.set("A", makeGraphNode("A"));
+    graph.nodes.set("B", makeGraphNode("B"));
+    graph.edges = [{ from: "A", to: "B", type: "main" }];
+
+    const clusters = extractAiClusters(graph);
+    expect(clusters).toEqual([]);
+  });
+
+  it("handles sub-node chain (Model → OutputParser → Agent)", () => {
+    const graph = newGraph();
+    graph.nodes.set("Agent", makeGraphNode("Agent"));
+    graph.nodes.set("Model", makeGraphNode("Model"));
+    graph.nodes.set("OutputParser", makeGraphNode("OutputParser"));
+    graph.edges = [
+      { from: "Model", to: "OutputParser", type: "ai_languageModel" },
+      { from: "OutputParser", to: "Agent", type: "ai_outputParser" },
+    ];
+
+    const clusters = extractAiClusters(graph);
+
+    expect(clusters.length).toBe(1);
+    expect(clusters[0]!.agentName).toBe("Agent");
+    expect(clusters[0]!.subNodeNames).toEqual(["Model", "OutputParser"]);
+  });
+
+  it("handles multiple Agents with separate sub-nodes", () => {
+    const graph = newGraph();
+    graph.nodes.set("Agent1", makeGraphNode("Agent1"));
+    graph.nodes.set("Agent2", makeGraphNode("Agent2"));
+    graph.nodes.set("Model1", makeGraphNode("Model1"));
+    graph.nodes.set("Model2", makeGraphNode("Model2"));
+    graph.edges = [
+      { from: "Agent1", to: "Agent2", type: "main" },
+      { from: "Model1", to: "Agent1", type: "ai_languageModel" },
+      { from: "Model2", to: "Agent2", type: "ai_languageModel" },
+    ];
+
+    const clusters = extractAiClusters(graph);
+
+    expect(clusters.length).toBe(2);
+    expect(clusters[0]!.agentName).toBe("Agent1");
+    expect(clusters[0]!.subNodeNames).toEqual(["Model1"]);
+    expect(clusters[1]!.agentName).toBe("Agent2");
+    expect(clusters[1]!.subNodeNames).toEqual(["Model2"]);
   });
 });

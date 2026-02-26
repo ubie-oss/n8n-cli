@@ -36,8 +36,8 @@ describe("decomposeSubgraphs", () => {
     graph.nodes.set("B", makeGraphNode("B"));
     graph.nodes.set("C", makeGraphNode("C"));
     graph.edges = [
-      { from: "A", to: "B" },
-      { from: "B", to: "C" },
+      { from: "A", to: "B", type: "main" },
+      { from: "B", to: "C", type: "main" },
     ];
 
     const subgraphs = decomposeSubgraphs(graph);
@@ -53,8 +53,8 @@ describe("decomposeSubgraphs", () => {
     graph.nodes.set("X", makeGraphNode("X"));
     graph.nodes.set("Y", makeGraphNode("Y"));
     graph.edges = [
-      { from: "A", to: "B" },
-      { from: "X", to: "Y" },
+      { from: "A", to: "B", type: "main" },
+      { from: "X", to: "Y", type: "main" },
     ];
 
     const subgraphs = decomposeSubgraphs(graph);
@@ -85,8 +85,8 @@ describe("decomposeSubgraphs", () => {
     graph.nodes.set("C", makeGraphNode("C"));
     graph.nodes.set("X", makeGraphNode("X"));
     graph.edges = [
-      { from: "A", to: "B" },
-      { from: "B", to: "C" },
+      { from: "A", to: "B", type: "main" },
+      { from: "B", to: "C", type: "main" },
     ];
 
     const subgraphs = decomposeSubgraphs(graph);
@@ -149,12 +149,12 @@ describe("composeSubgraphs", () => {
     const sg1 = newGraph();
     sg1.nodes.set("A", makeGraphNode("A"));
     sg1.nodes.set("B", makeGraphNode("B"));
-    sg1.edges = [{ from: "A", to: "B" }];
+    sg1.edges = [{ from: "A", to: "B", type: "main" }];
 
     const sg2 = newGraph();
     sg2.nodes.set("X", makeGraphNode("X"));
     sg2.nodes.set("Y", makeGraphNode("Y"));
-    sg2.edges = [{ from: "X", to: "Y" }];
+    sg2.edges = [{ from: "X", to: "Y", type: "main" }];
 
     const composed = composeSubgraphs([sg1, sg2]);
     expect(composed.edges.length).toBe(2);

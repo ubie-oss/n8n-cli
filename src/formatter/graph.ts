@@ -10,6 +10,18 @@ export interface Position {
 export interface Edge {
   from: string;
   to: string;
+  type: string; // "main" | "ai_languageModel" | "ai_tool" | "ai_memory" | "ai_outputParser" | ...
+}
+
+/** Returns true if the edge is an AI connection (ai_languageModel, ai_tool, etc.) */
+export function isAiEdge(edge: Edge): boolean {
+  return edge.type.startsWith("ai_");
+}
+
+/** AiCluster groups an Agent node with its AI sub-nodes */
+export interface AiCluster {
+  agentName: string;
+  subNodeNames: string[];
 }
 
 /** GraphNode represents a node in the graph with layout information */
@@ -50,7 +62,7 @@ export function buildFullGraph(workflow: FormatterWorkflow): Graph {
     }
 
     // Process all connection types (main, ai_languageModel, ai_outputParser, ai_tool, ai_memory, etc.)
-    for (const [_connType, conns] of Object.entries(connMap)) {
+    for (const [connType, conns] of Object.entries(connMap)) {
       if (!conns || !Array.isArray(conns)) {
         continue;
       }
@@ -76,7 +88,7 @@ export function buildFullGraph(workflow: FormatterWorkflow): Graph {
             continue;
           }
 
-          graph.edges.push({ from: sourceName, to: targetName });
+          graph.edges.push({ from: sourceName, to: targetName, type: connType });
         }
       }
     }
@@ -96,6 +108,84 @@ export function buildFullGraph(workflow: FormatterWorkflow): Graph {
   }
 
   return graph;
+}
+
+/** extractAiClusters identifies AI sub-nodes and groups them by their parent Agent node */
+export function extractAiClusters(graph: Graph): AiCluster[] {
+  const mainEdges = graph.edges.filter((e) => !isAiEdge(e));
+  const aiEdges = graph.edges.filter(isAiEdge);
+
+  if (aiEdges.length === 0) return [];
+
+  // Nodes that participate in main edges (as source or target)
+  const mainNodeNames = new Set<string>();
+  for (const edge of mainEdges) {
+    mainNodeNames.add(edge.from);
+    mainNodeNames.add(edge.to);
+  }
+
+  // AI sub-nodes: nodes that are sources of AI edges and do NOT participate in main edges.
+  // A node that is only a TARGET of AI edges (never a source) is an Agent, not a sub-node.
+  const aiSources = new Set(aiEdges.map((e) => e.from));
+  const aiSubNodeNames = new Set<string>();
+  for (const name of graph.nodes.keys()) {
+    if (!mainNodeNames.has(name) && aiSources.has(name)) {
+      aiSubNodeNames.add(name);
+    }
+  }
+
+  if (aiSubNodeNames.size === 0) return [];
+
+  // Non-sub-nodes (agents or main-flow nodes): everything except AI sub-nodes
+  const nonSubNodeNames = new Set<string>();
+  for (const name of graph.nodes.keys()) {
+    if (!aiSubNodeNames.has(name)) {
+      nonSubNodeNames.add(name);
+    }
+  }
+
+  // For each AI sub-node, find its Agent by following ai_* edges
+  const agentMap = new Map<string, Set<string>>(); // agentName -> Set of subNodeNames
+
+  for (const subNode of aiSubNodeNames) {
+    const agent = findAgent(subNode, aiEdges, nonSubNodeNames);
+    if (agent) {
+      if (!agentMap.has(agent)) {
+        agentMap.set(agent, new Set());
+      }
+      agentMap.get(agent)!.add(subNode);
+    }
+  }
+
+  return [...agentMap.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([agentName, subNodes]) => ({
+      agentName,
+      subNodeNames: [...subNodes].sort(),
+    }));
+}
+
+/** Recursively follows ai_* edges from a sub-node to find the Agent (a non-sub-node) */
+function findAgent(
+  nodeName: string,
+  aiEdges: Edge[],
+  nonSubNodeNames: Set<string>,
+  visited: Set<string> = new Set(),
+): string | undefined {
+  if (visited.has(nodeName)) return undefined;
+  visited.add(nodeName);
+
+  for (const edge of aiEdges) {
+    if (edge.from === nodeName) {
+      if (nonSubNodeNames.has(edge.to)) {
+        return edge.to;
+      }
+      // Chain case: follow through intermediate ai sub-nodes
+      const agent = findAgent(edge.to, aiEdges, nonSubNodeNames, visited);
+      if (agent) return agent;
+    }
+  }
+  return undefined;
 }
 
 /** findNodeByName finds a node by name in a workflow */

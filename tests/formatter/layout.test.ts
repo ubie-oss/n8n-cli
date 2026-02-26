@@ -2,7 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { type GraphNode, newGraph } from "../../src/formatter/graph.ts";
 import { layoutSubgraph } from "../../src/formatter/layout.ts";
 import type { FormatterNode } from "../../src/formatter/workflow.ts";
-import { GRID_SIZE } from "../../src/formatter/workflow.ts";
+import { AI_SUBNODE_X_SEP, AI_SUBNODE_Y_OFFSET, GRID_SIZE } from "../../src/formatter/workflow.ts";
 
 function makeNode(name: string, position: [number, number] = [0, 0]): FormatterNode {
   return {
@@ -30,8 +30,8 @@ describe("layoutSubgraph", () => {
     graph.nodes.set("B", makeGraphNode("B"));
     graph.nodes.set("C", makeGraphNode("C"));
     graph.edges = [
-      { from: "A", to: "B" },
-      { from: "B", to: "C" },
+      { from: "A", to: "B", type: "main" },
+      { from: "B", to: "C", type: "main" },
     ];
 
     layoutSubgraph(graph);
@@ -57,9 +57,9 @@ describe("layoutSubgraph", () => {
     graph.nodes.set("B", makeGraphNode("B"));
     graph.nodes.set("C", makeGraphNode("C"));
     graph.edges = [
-      { from: "A", to: "B" },
-      { from: "B", to: "C" },
-      { from: "C", to: "A" },
+      { from: "A", to: "B", type: "main" },
+      { from: "B", to: "C", type: "main" },
+      { from: "C", to: "A", type: "main" },
     ];
 
     layoutSubgraph(graph);
@@ -74,7 +74,7 @@ describe("layoutSubgraph", () => {
   it("handles self-loop", () => {
     const graph = newGraph();
     graph.nodes.set("A", makeGraphNode("A"));
-    graph.edges = [{ from: "A", to: "A" }];
+    graph.edges = [{ from: "A", to: "A", type: "main" }];
 
     layoutSubgraph(graph);
 
@@ -90,10 +90,10 @@ describe("layoutSubgraph", () => {
     graph.nodes.set("C", makeGraphNode("C"));
     graph.nodes.set("D", makeGraphNode("D"));
     graph.edges = [
-      { from: "A", to: "B" },
-      { from: "A", to: "C" },
-      { from: "B", to: "D" },
-      { from: "C", to: "D" },
+      { from: "A", to: "B", type: "main" },
+      { from: "A", to: "C", type: "main" },
+      { from: "B", to: "D", type: "main" },
+      { from: "C", to: "D", type: "main" },
     ];
 
     layoutSubgraph(graph);
@@ -146,5 +146,98 @@ describe("layoutSubgraph", () => {
       expect(node.position.x % GRID_SIZE).toBe(0);
       expect(node.position.y % GRID_SIZE).toBe(0);
     }
+  });
+
+  it("places AI sub-nodes below Agent at y = agent.y + AI_SUBNODE_Y_OFFSET", () => {
+    const graph = newGraph();
+    graph.nodes.set("Trigger", makeGraphNode("Trigger"));
+    graph.nodes.set("Agent", makeGraphNode("Agent"));
+    graph.nodes.set("ChatModel", makeGraphNode("ChatModel"));
+    graph.nodes.set("Tool", makeGraphNode("Tool"));
+    graph.edges = [
+      { from: "Trigger", to: "Agent", type: "main" },
+      { from: "ChatModel", to: "Agent", type: "ai_languageModel" },
+      { from: "Tool", to: "Agent", type: "ai_tool" },
+    ];
+
+    layoutSubgraph(graph);
+
+    const agentY = graph.nodes.get("Agent")!.position.y;
+    const chatModelY = graph.nodes.get("ChatModel")!.position.y;
+    const toolY = graph.nodes.get("Tool")!.position.y;
+
+    // Sub-nodes should be at agent.y + AI_SUBNODE_Y_OFFSET (snapped to grid)
+    const expectedY = Math.round((agentY + AI_SUBNODE_Y_OFFSET) / GRID_SIZE) * GRID_SIZE;
+    expect(chatModelY).toBe(expectedY);
+    expect(toolY).toBe(expectedY);
+
+    // All positions should be snapped to grid
+    for (const node of graph.nodes.values()) {
+      expect(node.position.x % GRID_SIZE).toBe(0);
+      expect(node.position.y % GRID_SIZE).toBe(0);
+    }
+  });
+
+  it("places AI sub-nodes horizontally centered around Agent with equal spacing", () => {
+    const graph = newGraph();
+    graph.nodes.set("Agent", makeGraphNode("Agent"));
+    graph.nodes.set("ChatModel", makeGraphNode("ChatModel"));
+    graph.nodes.set("Memory", makeGraphNode("Memory"));
+    graph.nodes.set("Tool", makeGraphNode("Tool"));
+    graph.edges = [
+      { from: "ChatModel", to: "Agent", type: "ai_languageModel" },
+      { from: "Memory", to: "Agent", type: "ai_memory" },
+      { from: "Tool", to: "Agent", type: "ai_tool" },
+    ];
+
+    layoutSubgraph(graph);
+
+    // Sub-nodes sorted by name: ChatModel, Memory, Tool
+    const chatModelX = graph.nodes.get("ChatModel")!.position.x;
+    const memoryX = graph.nodes.get("Memory")!.position.x;
+    const toolX = graph.nodes.get("Tool")!.position.x;
+
+    // They should be equally spaced (approximately, due to grid snapping)
+    const spacing1 = memoryX - chatModelX;
+    const spacing2 = toolX - memoryX;
+    // Grid snapping may cause slight differences, but they should be within one grid step
+    expect(Math.abs(spacing1 - spacing2)).toBeLessThanOrEqual(GRID_SIZE);
+  });
+
+  it("main-flow layout is unaffected by AI sub-nodes", () => {
+    // Layout without AI sub-nodes
+    const graphWithoutAi = newGraph();
+    graphWithoutAi.nodes.set("Trigger", makeGraphNode("Trigger"));
+    graphWithoutAi.nodes.set("Agent", makeGraphNode("Agent"));
+    graphWithoutAi.nodes.set("End", makeGraphNode("End"));
+    graphWithoutAi.edges = [
+      { from: "Trigger", to: "Agent", type: "main" },
+      { from: "Agent", to: "End", type: "main" },
+    ];
+
+    layoutSubgraph(graphWithoutAi);
+
+    const triggerPos1 = { ...graphWithoutAi.nodes.get("Trigger")!.position };
+    const agentPos1 = { ...graphWithoutAi.nodes.get("Agent")!.position };
+    const endPos1 = { ...graphWithoutAi.nodes.get("End")!.position };
+
+    // Layout with AI sub-nodes
+    const graphWithAi = newGraph();
+    graphWithAi.nodes.set("Trigger", makeGraphNode("Trigger"));
+    graphWithAi.nodes.set("Agent", makeGraphNode("Agent"));
+    graphWithAi.nodes.set("End", makeGraphNode("End"));
+    graphWithAi.nodes.set("ChatModel", makeGraphNode("ChatModel"));
+    graphWithAi.edges = [
+      { from: "Trigger", to: "Agent", type: "main" },
+      { from: "Agent", to: "End", type: "main" },
+      { from: "ChatModel", to: "Agent", type: "ai_languageModel" },
+    ];
+
+    layoutSubgraph(graphWithAi);
+
+    // Main-flow positions should be identical
+    expect(graphWithAi.nodes.get("Trigger")!.position).toEqual(triggerPos1);
+    expect(graphWithAi.nodes.get("Agent")!.position).toEqual(agentPos1);
+    expect(graphWithAi.nodes.get("End")!.position).toEqual(endPos1);
   });
 });

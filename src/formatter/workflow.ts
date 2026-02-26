@@ -11,6 +11,8 @@ export const NODE_SEP = 80.0;
 export const SUBGRAPH_GAP = 300.0;
 export const DEFAULT_NODE_WIDTH = 200.0;
 export const DEFAULT_NODE_HEIGHT = 80.0;
+export const AI_SUBNODE_Y_OFFSET = 160.0;
+export const AI_SUBNODE_X_SEP = 240.0;
 export const STICKY_NOTE_TYPE = "n8n-nodes-base.stickyNote";
 
 /** Error types */
