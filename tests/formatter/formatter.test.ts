@@ -682,10 +682,13 @@ describe("ai_* connections", () => {
     const chatModelPos = nodeMap.get("ChatModel") as number[];
     const toolPos = nodeMap.get("Tool") as number[];
 
-    // AI sub-nodes should be below Agent
-    const expectedY = Math.round((agentPos[1]! + AI_SUBNODE_Y_OFFSET) / GRID_SIZE) * GRID_SIZE;
-    expect(chatModelPos[1]).toBe(expectedY);
-    expect(toolPos[1]).toBe(expectedY);
+    // AI sub-nodes should be below Agent, stacked vertically
+    expect(chatModelPos[1]!).toBeGreaterThan(agentPos[1]!);
+    expect(toolPos[1]!).toBeGreaterThan(chatModelPos[1]!);
+
+    // AI sub-nodes should share same X as Agent
+    expect(chatModelPos[0]).toBe(agentPos[0]);
+    expect(toolPos[0]).toBe(agentPos[0]);
 
     // Trigger should be to the left of Agent (main flow)
     const triggerPos = nodeMap.get("Trigger") as number[];

@@ -1,8 +1,8 @@
 import dagre from "@dagrejs/dagre";
 import { type AiCluster, type Graph, extractAiClusters, isAiEdge } from "./graph.ts";
 import {
-  AI_SUBNODE_X_SEP,
   AI_SUBNODE_Y_OFFSET,
+  AI_SUBNODE_Y_SEP,
   DEFAULT_NODE_HEIGHT,
   DEFAULT_NODE_WIDTH,
   NODE_SEP,
@@ -65,7 +65,7 @@ export function layoutSubgraph(graph: Graph): void {
   }
 }
 
-/** Places AI sub-nodes horizontally centered below their parent Agent node */
+/** Places AI sub-nodes vertically stacked below their parent Agent node */
 function placeAiCluster(graph: Graph, cluster: AiCluster): void {
   const agentNode = graph.nodes.get(cluster.agentName);
   if (!agentNode) return;
@@ -76,14 +76,10 @@ function placeAiCluster(graph: Graph, cluster: AiCluster): void {
   const agentCenterX = agentNode.position.x + DEFAULT_NODE_WIDTH / 2;
   const baseY = agentNode.position.y + AI_SUBNODE_Y_OFFSET;
 
-  // Total width of the cluster
-  const totalWidth = (subNodes.length - 1) * AI_SUBNODE_X_SEP;
-  const startX = agentCenterX - totalWidth / 2;
-
   for (let i = 0; i < subNodes.length; i++) {
     const subNode = graph.nodes.get(subNodes[i]!);
     if (!subNode) continue;
-    subNode.position.x = snapToGrid(startX + i * AI_SUBNODE_X_SEP);
-    subNode.position.y = snapToGrid(baseY);
+    subNode.position.x = snapToGrid(agentCenterX - DEFAULT_NODE_WIDTH / 2);
+    subNode.position.y = snapToGrid(baseY + i * AI_SUBNODE_Y_SEP);
   }
 }

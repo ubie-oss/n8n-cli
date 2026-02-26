@@ -2,7 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { type GraphNode, newGraph } from "../../src/formatter/graph.ts";
 import { layoutSubgraph } from "../../src/formatter/layout.ts";
 import type { FormatterNode } from "../../src/formatter/workflow.ts";
-import { AI_SUBNODE_X_SEP, AI_SUBNODE_Y_OFFSET, GRID_SIZE } from "../../src/formatter/workflow.ts";
+import { AI_SUBNODE_Y_OFFSET, AI_SUBNODE_Y_SEP, GRID_SIZE } from "../../src/formatter/workflow.ts";
 
 function makeNode(name: string, position: [number, number] = [0, 0]): FormatterNode {
   return {
@@ -148,7 +148,7 @@ describe("layoutSubgraph", () => {
     }
   });
 
-  it("places AI sub-nodes below Agent at y = agent.y + AI_SUBNODE_Y_OFFSET", () => {
+  it("places AI sub-nodes vertically below Agent", () => {
     const graph = newGraph();
     graph.nodes.set("Trigger", makeGraphNode("Trigger"));
     graph.nodes.set("Agent", makeGraphNode("Agent"));
@@ -162,14 +162,22 @@ describe("layoutSubgraph", () => {
 
     layoutSubgraph(graph);
 
+    const agentX = graph.nodes.get("Agent")!.position.x;
     const agentY = graph.nodes.get("Agent")!.position.y;
-    const chatModelY = graph.nodes.get("ChatModel")!.position.y;
-    const toolY = graph.nodes.get("Tool")!.position.y;
+    const chatModelPos = graph.nodes.get("ChatModel")!.position;
+    const toolPos = graph.nodes.get("Tool")!.position;
 
-    // Sub-nodes should be at agent.y + AI_SUBNODE_Y_OFFSET (snapped to grid)
-    const expectedY = Math.round((agentY + AI_SUBNODE_Y_OFFSET) / GRID_SIZE) * GRID_SIZE;
-    expect(chatModelY).toBe(expectedY);
-    expect(toolY).toBe(expectedY);
+    // Sub-nodes sorted by name: ChatModel, Tool
+    // First sub-node at agent.y + Y_OFFSET, second at agent.y + Y_OFFSET + Y_SEP
+    const expectedY0 = Math.round((agentY + AI_SUBNODE_Y_OFFSET) / GRID_SIZE) * GRID_SIZE;
+    const expectedY1 =
+      Math.round((agentY + AI_SUBNODE_Y_OFFSET + AI_SUBNODE_Y_SEP) / GRID_SIZE) * GRID_SIZE;
+    expect(chatModelPos.y).toBe(expectedY0);
+    expect(toolPos.y).toBe(expectedY1);
+
+    // All sub-nodes should share the same X as Agent
+    expect(chatModelPos.x).toBe(agentX);
+    expect(toolPos.x).toBe(agentX);
 
     // All positions should be snapped to grid
     for (const node of graph.nodes.values()) {
@@ -178,7 +186,7 @@ describe("layoutSubgraph", () => {
     }
   });
 
-  it("places AI sub-nodes horizontally centered around Agent with equal spacing", () => {
+  it("places multiple AI sub-nodes vertically with equal spacing", () => {
     const graph = newGraph();
     graph.nodes.set("Agent", makeGraphNode("Agent"));
     graph.nodes.set("ChatModel", makeGraphNode("ChatModel"));
@@ -192,16 +200,26 @@ describe("layoutSubgraph", () => {
 
     layoutSubgraph(graph);
 
-    // Sub-nodes sorted by name: ChatModel, Memory, Tool
+    // Sub-nodes sorted by name: ChatModel, Memory, Tool — all stacked vertically
+    const chatModelY = graph.nodes.get("ChatModel")!.position.y;
+    const memoryY = graph.nodes.get("Memory")!.position.y;
+    const toolY = graph.nodes.get("Tool")!.position.y;
+
+    // Each subsequent sub-node should be below the previous
+    expect(chatModelY).toBeLessThan(memoryY);
+    expect(memoryY).toBeLessThan(toolY);
+
+    // Spacing should be approximately equal (within grid snap tolerance)
+    const spacing1 = memoryY - chatModelY;
+    const spacing2 = toolY - memoryY;
+    expect(Math.abs(spacing1 - spacing2)).toBeLessThanOrEqual(GRID_SIZE);
+
+    // All sub-nodes should share the same X
     const chatModelX = graph.nodes.get("ChatModel")!.position.x;
     const memoryX = graph.nodes.get("Memory")!.position.x;
     const toolX = graph.nodes.get("Tool")!.position.x;
-
-    // They should be equally spaced (approximately, due to grid snapping)
-    const spacing1 = memoryX - chatModelX;
-    const spacing2 = toolX - memoryX;
-    // Grid snapping may cause slight differences, but they should be within one grid step
-    expect(Math.abs(spacing1 - spacing2)).toBeLessThanOrEqual(GRID_SIZE);
+    expect(chatModelX).toBe(memoryX);
+    expect(memoryX).toBe(toolX);
   });
 
   it("main-flow layout is unaffected by AI sub-nodes", () => {
