@@ -1,5 +1,5 @@
 import dagre from "@dagrejs/dagre";
-import { type AiCluster, type Graph, extractAiClusters, isAiEdge } from "./graph.ts";
+import { type AiCluster, extractAiClusters, type Graph, isAiEdge } from "./graph.ts";
 import {
   AI_SUBNODE_Y_OFFSET,
   AI_SUBNODE_Y_SEP,

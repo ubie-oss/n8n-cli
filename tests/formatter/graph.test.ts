@@ -1,8 +1,8 @@
 import { describe, expect, it } from "bun:test";
 import {
-  type GraphNode,
   buildFullGraph,
   extractAiClusters,
+  type GraphNode,
   newGraph,
 } from "../../src/formatter/graph.ts";
 import type { FormatterNode, FormatterWorkflow } from "../../src/formatter/workflow.ts";
