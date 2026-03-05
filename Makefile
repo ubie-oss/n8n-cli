@@ -1,4 +1,4 @@
-.PHONY: all build cross-compile test typecheck lint format size-check clean
+.PHONY: all generate-schemas build cross-compile test test-integration typecheck lint format size-check clean
 
 all: build
 
@@ -17,7 +17,10 @@ DEFINE_FLAGS = \
 	--define "CLI_GIT_COMMIT='$(CLI_GIT_COMMIT)'" \
 	--define "CLI_BUILD_DATE='$(CLI_BUILD_DATE)'"
 
-build:
+generate-schemas:
+	bun run scripts/generate-schemas.ts
+
+build: generate-schemas
 	bun build src/index.ts --compile --outfile n8n-cli --minify $(DEFINE_FLAGS)
 
 cross-compile:
@@ -28,6 +31,9 @@ cross-compile:
 
 test:
 	bun test
+
+test-integration:
+	bun test tests/cli/
 
 typecheck:
 	bunx tsc --noEmit

@@ -1,4 +1,5 @@
 import type { Node, Workflow } from "@/api/types.ts";
+import { outputSchemaOverrides } from "./schema-overrides.ts";
 
 /** OutputCardinality describes how many output items a node produces */
 export type OutputCardinality = "1:1" | "1:N" | "N:1" | "pass-through" | "variable";
@@ -15,50 +16,7 @@ export interface OutputSchema {
 }
 
 /** Node output schema registry */
-const nodeSchemaRegistry: Record<string, OutputSchema> = {
-  "@n8n/n8n-nodes-langchain.agent": {
-    cardinality: "1:1",
-    fixedFields: ["output"],
-    dynamicFields: false,
-  },
-  "n8n-nodes-base.googleBigQuery": {
-    cardinality: "1:N",
-    dynamicFields: true,
-  },
-  "n8n-nodes-base.aggregate": {
-    cardinality: "N:1",
-    dynamicFields: false,
-    parameterDerivedFields: aggregateOutputFields,
-  },
-  "n8n-nodes-base.set": { cardinality: "pass-through", dynamicFields: true },
-  "n8n-nodes-base.filter": {
-    cardinality: "pass-through",
-    dynamicFields: true,
-  },
-  "n8n-nodes-base.if": { cardinality: "pass-through", dynamicFields: true },
-  "n8n-nodes-base.switch": {
-    cardinality: "pass-through",
-    dynamicFields: true,
-  },
-  "n8n-nodes-base.noOp": { cardinality: "pass-through", dynamicFields: true },
-  "n8n-nodes-base.splitInBatches": {
-    cardinality: "1:1",
-    dynamicFields: true,
-  },
-  "n8n-nodes-base.code": { cardinality: "variable", dynamicFields: true },
-  "n8n-nodes-base.httpRequest": {
-    cardinality: "variable",
-    dynamicFields: true,
-  },
-  "n8n-nodes-base.webhook": { cardinality: "1:1", dynamicFields: true },
-  "n8n-nodes-base.executeWorkflowTrigger": {
-    cardinality: "1:1",
-    dynamicFields: true,
-  },
-  "n8n-nodes-base.slack": { cardinality: "1:1", dynamicFields: true },
-  "n8n-nodes-base.merge": { cardinality: "variable", dynamicFields: true },
-  "n8n-nodes-base.notion": { cardinality: "variable", dynamicFields: true },
-};
+const nodeSchemaRegistry: Record<string, OutputSchema> = outputSchemaOverrides;
 
 /** NodeRef represents a parsed node reference expression */
 export interface NodeRef {
@@ -110,15 +68,6 @@ export function getKnownOutputFields(node: Node): string[] | null {
     return schema.parameterDerivedFields((node.parameters as Record<string, unknown>) ?? {});
   }
   return null;
-}
-
-/** Derives output field names from Aggregate node parameters */
-function aggregateOutputFields(params: Record<string, unknown>): string[] {
-  const destField =
-    typeof params.destinationFieldName === "string" && params.destinationFieldName !== ""
-      ? params.destinationFieldName
-      : "data";
-  return [destField];
 }
 
 /** Helper: get all connections from a NodeConn (main + ai_*) */

@@ -1,0 +1,101 @@
+# Workflow with intentional schema violations for integration testing.
+# Each node is designed to trigger specific lint violations.
+id: lint-test-001
+name: Lint Violations Test
+active: false
+nodes:
+  - id: "trigger-1"
+    name: Manual Trigger
+    type: n8n-nodes-base.manualTrigger
+    typeVersion: 1
+    position: [0, 0]
+    parameters: {}
+
+  # Violation: missing required parameter "jsCode"
+  - id: "code-missing-jscode"
+    name: Code Missing jsCode
+    type: n8n-nodes-base.code
+    typeVersion: 1
+    position: [200, 0]
+    parameters: {}
+
+  # Violation: missing required parameter "url"
+  # Violation: invalid enum value for "method"
+  - id: "http-invalid"
+    name: HTTP Invalid
+    type: n8n-nodes-base.httpRequest
+    typeVersion: 4
+    position: [400, 0]
+    parameters:
+      method: INVALID
+
+  # Violation: missing credentials
+  # Violation: missing required "channelId" (default resource="" mode)
+  - id: "slack-no-creds"
+    name: Slack No Creds
+    type: n8n-nodes-base.slack
+    typeVersion: 1
+    position: [600, 0]
+    parameters: {}
+
+  # Violation: missing required "conditions"
+  - id: "filter-empty"
+    name: Filter Empty
+    type: n8n-nodes-base.filter
+    typeVersion: 1
+    position: [800, 0]
+    parameters: {}
+
+  # Violation: missing required "assignments" (v3+)
+  - id: "set-v3-no-assignments"
+    name: Set V3 No Assignments
+    type: n8n-nodes-base.set
+    typeVersion: 3
+    position: [1000, 0]
+    parameters: {}
+
+  # Violation: missing required "promptType" and "text"
+  - id: "ai-agent-empty"
+    name: AI Agent Empty
+    type: "@n8n/n8n-nodes-langchain.agent"
+    typeVersion: 3
+    position: [1200, 0]
+    parameters: {}
+
+  # Violation: nested key "value" missing in workflowId
+  - id: "exec-wf-no-value"
+    name: Execute Workflow No Value
+    type: n8n-nodes-base.executeWorkflow
+    typeVersion: 1
+    position: [1400, 0]
+    parameters:
+      workflowId:
+        mode: id
+
+  # Violation: missing required "path"
+  # Violation: invalid enum for "httpMethod"
+  - id: "webhook-invalid"
+    name: Webhook Invalid
+    type: n8n-nodes-base.webhook
+    typeVersion: 1
+    position: [1600, 0]
+    parameters:
+      httpMethod: TRACE
+
+  # Violation: missing credentials
+  - id: "notion-no-creds"
+    name: Notion No Creds
+    type: n8n-nodes-base.notion
+    typeVersion: 1
+    position: [1800, 0]
+    parameters:
+      resource: page
+
+# Only Manual Trigger → Code Missing jsCode is connected.
+# The remaining 8 nodes are intentionally orphaned to test the orphaned-node rule.
+connections:
+  Manual Trigger:
+    main:
+      - - node: Code Missing jsCode
+          type: main
+          index: 0

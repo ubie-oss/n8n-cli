@@ -1,0 +1,72 @@
+# A workflow with no schema violations — all parameters are valid.
+id: lint-test-clean
+name: Clean Workflow
+active: false
+nodes:
+  - id: "trigger-1"
+    name: Manual Trigger
+    type: n8n-nodes-base.manualTrigger
+    typeVersion: 1
+    position: [0, 0]
+    parameters: {}
+
+  - id: "code-1"
+    name: Code
+    type: n8n-nodes-base.code
+    typeVersion: 1
+    position: [200, 0]
+    parameters:
+      jsCode: "return [{ json: { result: 'ok' } }];"
+
+  - id: "http-1"
+    name: HTTP Request
+    type: n8n-nodes-base.httpRequest
+    typeVersion: 4
+    position: [400, 0]
+    parameters:
+      url: "https://example.com/api"
+      method: GET
+
+  - id: "filter-1"
+    name: Filter
+    type: n8n-nodes-base.filter
+    typeVersion: 1
+    position: [600, 0]
+    parameters:
+      conditions:
+        rules:
+          - leftValue: "={{ $json.status }}"
+            rightValue: ok
+
+  - id: "set-1"
+    name: Set
+    type: n8n-nodes-base.set
+    typeVersion: 3
+    position: [800, 0]
+    parameters:
+      assignments:
+        assignments:
+          - name: result
+            value: "={{ $json.data }}"
+
+connections:
+  Manual Trigger:
+    main:
+      - - node: Code
+          type: main
+          index: 0
+  Code:
+    main:
+      - - node: HTTP Request
+          type: main
+          index: 0
+  HTTP Request:
+    main:
+      - - node: Filter
+          type: main
+          index: 0
+  Filter:
+    main:
+      - - node: Set
+          type: main
+          index: 0

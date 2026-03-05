@@ -37,6 +37,7 @@ export function createProgram(): Command {
   program
     .name("n8n-cli")
     .description("Command line interface for n8n workflow management")
+    .enablePositionalOptions()
     .option("--api-url <url>", "n8n API URL (env: N8N_API_URL)")
     .option("--api-key <key>", "n8n API key (env: N8N_API_KEY)")
     .option("--timeout <duration>", "Request timeout (default: 30s, env: N8N_API_TIMEOUT)")
