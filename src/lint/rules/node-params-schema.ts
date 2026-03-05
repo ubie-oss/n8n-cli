@@ -1,3 +1,6 @@
+import generatedSchemas from "@/generated/node-schemas.json";
+import { paramSchemaOverrides } from "./schema-overrides.ts";
+
 /** ParamType represents the expected JSON type of a parameter value */
 export type ParamType = "string" | "number" | "boolean" | "object" | "array" | "any";
 
@@ -21,146 +24,91 @@ export interface NodeTypeSchema {
   optionsParams?: Record<string, ParamSchema>;
 }
 
-/** Static schema definitions for common node types */
-const nodeTypeSchemas: NodeTypeSchema[] = [
-  // n8n-nodes-base.code
-  {
-    nodeType: "n8n-nodes-base.code",
-    params: { jsCode: { required: true, type: "string" } },
-  },
-  // n8n-nodes-base.slack (message mode, default)
-  {
-    nodeType: "n8n-nodes-base.slack",
-    requiresCredentials: true,
-    conditionParam: "resource",
-    conditionValue: "",
-    params: {
-      channelId: {
-        required: true,
-        type: "object",
-        nestedRequired: ["value"],
-      },
-    },
-  },
-  // n8n-nodes-base.slack (file mode)
-  {
-    nodeType: "n8n-nodes-base.slack",
-    requiresCredentials: true,
-    conditionParam: "resource",
-    conditionValue: "file",
-  },
-  // n8n-nodes-base.executeWorkflow
-  {
-    nodeType: "n8n-nodes-base.executeWorkflow",
-    params: {
-      workflowId: {
-        required: true,
-        type: "object",
-        nestedRequired: ["value"],
-      },
-    },
-  },
-  // @n8n/n8n-nodes-langchain.agent
-  {
-    nodeType: "@n8n/n8n-nodes-langchain.agent",
-    params: {
-      promptType: { required: true, type: "string" },
-      text: { required: true, type: "string" },
-    },
-  },
-  // n8n-nodes-base.scheduleTrigger
-  {
-    nodeType: "n8n-nodes-base.scheduleTrigger",
-    params: { rule: { required: true, type: "object" } },
-  },
-  // n8n-nodes-base.googleBigQuery
-  {
-    nodeType: "n8n-nodes-base.googleBigQuery",
-    requiresCredentials: true,
-    params: {
-      projectId: {
-        required: true,
-        type: "object",
-        nestedRequired: ["value"],
-      },
-    },
-  },
-  // n8n-nodes-base.httpRequest
-  {
-    nodeType: "n8n-nodes-base.httpRequest",
-    params: {
-      url: { required: true, type: "string" },
-      method: {
-        type: "string",
-        allowedValues: ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"],
-      },
-    },
-  },
-  // n8n-nodes-base.webhook
-  {
-    nodeType: "n8n-nodes-base.webhook",
-    params: {
-      path: { required: true, type: "string" },
-      httpMethod: {
-        type: "string",
-        allowedValues: ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"],
-      },
-    },
-  },
-  // n8n-nodes-base.filter
-  {
-    nodeType: "n8n-nodes-base.filter",
-    params: { conditions: { required: true, type: "object" } },
-  },
-  // n8n-nodes-base.if
-  {
-    nodeType: "n8n-nodes-base.if",
-    params: { conditions: { required: true, type: "object" } },
-  },
-  // n8n-nodes-base.set (v3+)
-  {
-    nodeType: "n8n-nodes-base.set",
-    minVersion: 3.0,
-    params: { assignments: { required: true, type: "object" } },
-  },
-  // n8n-nodes-base.notion
-  {
-    nodeType: "n8n-nodes-base.notion",
-    requiresCredentials: true,
-    params: { resource: { required: true, type: "string" } },
-  },
-  // n8n-nodes-base.splitInBatches
-  {
-    nodeType: "n8n-nodes-base.splitInBatches",
-    params: { batchSize: { type: "number" } },
-  },
-  // @n8n/n8n-nodes-langchain.lmChatGoogleVertex
-  {
-    nodeType: "@n8n/n8n-nodes-langchain.lmChatGoogleVertex",
-    requiresCredentials: true,
-    params: {
-      modelName: { required: true, type: "string" },
-      projectId: {
-        required: true,
-        type: "object",
-        nestedRequired: ["value"],
-      },
-    },
-  },
-  // @n8n/n8n-nodes-langchain.outputParserStructured
-  {
-    nodeType: "@n8n/n8n-nodes-langchain.outputParserStructured",
-    params: { inputSchema: { required: true, type: "string" } },
-  },
-];
+// ---------------------------------------------------------------------------
+// Build schema index from generated JSON + overrides
+// ---------------------------------------------------------------------------
+
+interface GeneratedParamSchema {
+  required?: boolean;
+  type?: ParamType;
+  allowedValues?: string[];
+  nestedRequired?: string[];
+}
+
+interface GeneratedNodeTypeSchema {
+  nodeType: string;
+  versions: number[];
+  requiresCredentials?: boolean;
+  params: Record<string, GeneratedParamSchema>;
+  conditionParam?: string;
+  conditionValue?: string;
+}
+
+interface GeneratedOutput {
+  paramSchemas: Record<string, GeneratedNodeTypeSchema[]>;
+}
+
+/** Convert a generated schema entry into NodeTypeSchema(s) with version ranges */
+function toNodeTypeSchemas(gen: GeneratedNodeTypeSchema): NodeTypeSchema {
+  const schema: NodeTypeSchema = {
+    nodeType: gen.nodeType,
+  };
+
+  if (gen.requiresCredentials) {
+    schema.requiresCredentials = true;
+  }
+
+  if (gen.versions.length > 0) {
+    schema.minVersion = Math.min(...gen.versions);
+    schema.maxVersion = Math.max(...gen.versions);
+  }
+
+  if (gen.conditionParam) {
+    schema.conditionParam = gen.conditionParam;
+    schema.conditionValue = gen.conditionValue ?? "";
+  }
+
+  // Only include params that have meaningful validation rules
+  const params: Record<string, ParamSchema> = {};
+  for (const [name, ps] of Object.entries(gen.params)) {
+    if (ps.required || ps.allowedValues || ps.nestedRequired) {
+      params[name] = { ...ps };
+    }
+  }
+  if (Object.keys(params).length > 0) {
+    schema.params = params;
+  }
+
+  return schema;
+}
+
+function buildSchemaIndex(
+  generated: GeneratedOutput,
+  overrides: Record<string, NodeTypeSchema[]>,
+): Map<string, NodeTypeSchema[]> {
+  const index = new Map<string, NodeTypeSchema[]>();
+
+  // Load from generated JSON
+  for (const [nodeType, genSchemas] of Object.entries(generated.paramSchemas)) {
+    const schemas = genSchemas.map(toNodeTypeSchemas);
+    index.set(nodeType, schemas);
+  }
+
+  // Apply overrides: replace generated schemas entirely for overridden nodes.
+  // nodes.json has complex displayOptions that don't always map cleanly
+  // to our simpler condition model, so curated overrides take full precedence.
+  for (const [nodeType, overrideSchemas] of Object.entries(overrides)) {
+    index.set(nodeType, overrideSchemas);
+  }
+
+  return index;
+}
 
 /** Schema index: maps node type to its schemas */
-const schemaIndex = new Map<string, NodeTypeSchema[]>();
-for (const s of nodeTypeSchemas) {
-  const existing = schemaIndex.get(s.nodeType) ?? [];
-  existing.push(s);
-  schemaIndex.set(s.nodeType, existing);
-}
+const schemaIndex = buildSchemaIndex(
+  generatedSchemas as unknown as GeneratedOutput,
+  paramSchemaOverrides,
+);
 
 /** Returns all matching schemas for a given node type and version */
 export function lookupSchemas(nodeType: string, typeVersion: number): NodeTypeSchema[] {
@@ -168,8 +116,8 @@ export function lookupSchemas(nodeType: string, typeVersion: number): NodeTypeSc
   if (!candidates) return [];
 
   return candidates.filter((s) => {
-    if (s.minVersion && typeVersion < s.minVersion) return false;
-    if (s.maxVersion && typeVersion > s.maxVersion) return false;
+    if (s.minVersion != null && typeVersion < s.minVersion) return false;
+    if (s.maxVersion != null && typeVersion > s.maxVersion) return false;
     return true;
   });
 }

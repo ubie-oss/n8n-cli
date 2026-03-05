@@ -7,6 +7,8 @@
   "license": "MIT",
   "scripts": {
     "dev": "bun run src/index.ts",
+    "generate-schemas": "bun run scripts/generate-schemas.ts",
+    "prebuild": "bun run generate-schemas",
     "build": "bun build src/index.ts --compile --outfile n8n-cli",
     "test": "bun test",
     "typecheck": "tsc --noEmit",
@@ -16,8 +18,10 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.1",
+    "@n8n/n8n-nodes-langchain": "^1",
     "@types/bun": "latest",
-    "@types/js-yaml": "^4.0.9"
+    "@types/js-yaml": "^4.0.9",
+    "n8n-nodes-base": "^1"
   },
   "peerDependencies": {
     "typescript": "^5"
