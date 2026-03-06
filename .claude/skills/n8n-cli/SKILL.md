@@ -175,9 +175,6 @@ cp .env.example .env
 
 # Specific workflow only (by ID)
 ./n8n-cli apply --dry-run --ids=<workflow-id>
-
-# Specific file only
-./n8n-cli apply --dry-run -d definitions/path/to/workflow.json
 ```
 
 **Example output:**
@@ -198,14 +195,11 @@ Summary (dry-run): 1 to create, 2 to update, 1 unchanged
 
 ### 4. Apply (Deploy)
 
-**AI assistants must always use --ids or specify a single file**
+**AI assistants must always use --ids**
 
 ```bash
 # Apply specific workflow only (recommended)
 ./n8n-cli apply --ids=<workflow-id>
-
-# Apply specific file only
-./n8n-cli apply -d definitions/path/to/workflow.json
 
 # Force apply (overwrite remote changes)
 ./n8n-cli apply --ids=<workflow-id> --force
@@ -276,13 +270,14 @@ Summary (dry-run): 1 to create, 2 to update, 1 unchanged
 | `--list-rules` | List all rules |
 | `-o, --output <format>` | Output format: text, json (default: text) |
 
-**Rules (10 rules):**
+**Rules (11 rules):**
 
 | Rule | Severity | Description |
 |------|----------|-------------|
 | `json-syntax` | error | JSON syntax check |
 | `required-fields` | error | Required fields (name, nodes, connections) check |
 | `connection-reference` | error | Connection target node existence check |
+| `webhook-id-required` | error | Check that webhook and formTrigger nodes have webhookId field |
 | `orphaned-node` | warning | Orphaned node detection |
 | `implicit-json-ref` | warning | Implicit `$json` reference detection |
 | `expression-mode-prefix` | warning | Missing `=` prefix detection |
@@ -320,9 +315,6 @@ Config file search order:
 # With test data
 ./n8n-cli test <workflow-id> -d '{"email": "test@example.com"}'
 
-# Test data from file
-./n8n-cli test <workflow-id> -f test-data.json
-
 # Wait for execution to complete (recommended)
 ./n8n-cli test <workflow-id> --wait-execution
 
@@ -341,19 +333,12 @@ Config file search order:
 | Option | Description |
 |--------|-------------|
 | `-d, --data <json>` | Test data (JSON string) |
-| `-f, --file <path>` | Test data file (JSON) |
 | `--timeout <duration>` | HTTP timeout (default: 30s) |
 | `--wait-execution` | Wait for execution to complete and show results |
 | `--activate` | Auto-activate inactive workflows |
 | `--dry-run` | Check webhook URL only |
 | `--show-inputs` | Display input parameters |
-| `-o, --output <fmt>` | Output format: text, json |
-
-**Test from local file:**
-```bash
-# Specify a local JSON file
-./n8n-cli test ./definitions/my-workflow.json
-```
+| `-o, --output <fmt>` | Output format: json, table (default: json) |
 
 ### 7. Execution (Logs & Errors)
 
@@ -575,6 +560,6 @@ Error: conflict: remote workflow has been modified since your local file
 ### Prohibited Actions
 
 - Reading the contents of `.env` files
-- Applying to an entire directory (always use `--ids` or specify a single file)
+- Applying to an entire directory (always use `--ids`)
 - Using `--force` carelessly
 - **Importing without checking the local format first**
