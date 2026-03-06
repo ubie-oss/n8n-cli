@@ -314,9 +314,6 @@ Config file search order:
 # With test data
 ./n8n-cli test <workflow-id> -d '{"email": "test@example.com"}'
 
-# Test data from file
-./n8n-cli test <workflow-id> -f test-data.json
-
 # Wait for execution to complete (recommended)
 ./n8n-cli test <workflow-id> --wait-execution
 
@@ -335,19 +332,12 @@ Config file search order:
 | Option | Description |
 |--------|-------------|
 | `-d, --data <json>` | Test data (JSON string) |
-| `-f, --file <path>` | Test data file (JSON) |
 | `--timeout <duration>` | HTTP timeout (default: 30s) |
 | `--wait-execution` | Wait for execution to complete and show results |
 | `--activate` | Auto-activate inactive workflows |
 | `--dry-run` | Check webhook URL only |
 | `--show-inputs` | Display input parameters |
-| `-o, --output <fmt>` | Output format: text, json |
-
-**Test from local file:**
-```bash
-# Specify a local JSON file
-./n8n-cli test ./definitions/my-workflow.json
-```
+| `-o, --output <fmt>` | Output format: json, table (default: json) |
 
 ### 7. Execution (Logs & Errors)
 
