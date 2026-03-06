@@ -270,13 +270,14 @@ Summary (dry-run): 1 to create, 2 to update, 1 unchanged
 | `--list-rules` | List all rules |
 | `-o, --output <format>` | Output format: text, json (default: text) |
 
-**Rules (10 rules):**
+**Rules (11 rules):**
 
 | Rule | Severity | Description |
 |------|----------|-------------|
 | `json-syntax` | error | JSON syntax check |
 | `required-fields` | error | Required fields (name, nodes, connections) check |
 | `connection-reference` | error | Connection target node existence check |
+| `webhook-id-required` | error | Check that webhook and formTrigger nodes have webhookId field |
 | `orphaned-node` | warning | Orphaned node detection |
 | `implicit-json-ref` | warning | Implicit `$json` reference detection |
 | `expression-mode-prefix` | warning | Missing `=` prefix detection |
