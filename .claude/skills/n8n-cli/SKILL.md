@@ -175,9 +175,6 @@ cp .env.example .env
 
 # Specific workflow only (by ID)
 ./n8n-cli apply --dry-run --ids=<workflow-id>
-
-# Specific file only
-./n8n-cli apply --dry-run -d definitions/path/to/workflow.json
 ```
 
 **Example output:**
@@ -198,14 +195,11 @@ Summary (dry-run): 1 to create, 2 to update, 1 unchanged
 
 ### 4. Apply (Deploy)
 
-**AI assistants must always use --ids or specify a single file**
+**AI assistants must always use --ids**
 
 ```bash
 # Apply specific workflow only (recommended)
 ./n8n-cli apply --ids=<workflow-id>
-
-# Apply specific file only
-./n8n-cli apply -d definitions/path/to/workflow.json
 
 # Force apply (overwrite remote changes)
 ./n8n-cli apply --ids=<workflow-id> --force
@@ -575,6 +569,6 @@ Error: conflict: remote workflow has been modified since your local file
 ### Prohibited Actions
 
 - Reading the contents of `.env` files
-- Applying to an entire directory (always use `--ids` or specify a single file)
+- Applying to an entire directory (always use `--ids`)
 - Using `--force` carelessly
 - **Importing without checking the local format first**
