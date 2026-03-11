@@ -138,3 +138,40 @@ export interface CLIConfig {
   autoTags?: string[];
   externalizeThreshold?: number;
 }
+
+/** Credential represents an n8n credential */
+export interface Credential {
+  id?: string;
+  name: string;
+  type: string;
+  data?: Record<string, unknown>;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+/** ListCredentialsResponse represents the response from listing credentials */
+export interface ListCredentialsResponse {
+  data: Credential[];
+  nextCursor?: string;
+}
+
+/** CredentialInput represents input for creating/updating a credential */
+export interface CredentialInput {
+  name: string;
+  type: string;
+  data: Record<string, unknown>;
+}
+
+/** CredentialSchema represents the schema for a credential type */
+export interface CredentialSchema {
+  additionalProperties?: boolean;
+  type?: string;
+  properties?: Record<string, CredentialSchemaProperty>;
+  required?: string[];
+}
+
+/** CredentialSchemaProperty represents a property in a credential schema */
+export interface CredentialSchemaProperty {
+  type?: string;
+  default?: unknown;
+}

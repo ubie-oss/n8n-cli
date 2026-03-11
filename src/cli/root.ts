@@ -1,5 +1,6 @@
 import { Command } from "commander";
 import { Client } from "../api/client.ts";
+import { CredentialService } from "../api/credential-service.ts";
 import { ExecutionService } from "../api/execution-service.ts";
 import { TagService } from "../api/tag-service.ts";
 import { WorkflowService } from "../api/workflow-service.ts";
@@ -18,6 +19,7 @@ export interface GlobalContext {
   workflowService: WorkflowService;
   tagService: TagService;
   executionService: ExecutionService;
+  credentialService: CredentialService;
 }
 
 function createContext(config: Config): GlobalContext {
@@ -28,6 +30,7 @@ function createContext(config: Config): GlobalContext {
     workflowService: new WorkflowService(client),
     tagService: new TagService(client),
     executionService: new ExecutionService(client),
+    credentialService: new CredentialService(client),
   };
 }
 

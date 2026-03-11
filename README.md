@@ -10,7 +10,9 @@ A command-line interface for managing [n8n](https://n8n.io/) workflows as code. 
 - **Format** - Auto-organize node positions for cleaner workflow layouts
 - **Test** - Execute CLI tests against workflows via webhook endpoints
 - **Workflow management** - List, get, create, update, delete, activate, and deactivate workflows via the n8n API
-- **Execution management** - List executions, get execution details, and view error information for debugging
+- **Execution management** - List executions, get execution details, delete, retry, and stop executions
+- **Tag management** - List, get, create, update, and delete tags
+- **Credential management** - List, get, create, update, delete credentials, get schema, and transfer between projects
 - **Git integration** - Apply only workflows changed in a Git diff
 - **YAML support** - Work with YAML workflow definitions and external code/SQL files
 - **CLAUDE.md integration** - Read project settings (default project ID, auto tags, YAML mode) from CLAUDE.md
@@ -246,6 +248,9 @@ n8n-cli execution <subcommand>
 |------------|-------------|
 | `list` | List workflow executions |
 | `get <id>` | Get execution details by ID |
+| `delete <id>` | Delete an execution by ID |
+| `retry <id>` | Retry a failed execution |
+| `stop <id>` | Stop a running execution |
 
 #### `execution list`
 
@@ -274,6 +279,192 @@ n8n-cli execution get <id> [options]
 - Start and stop timestamps
 - Error details (node, message, description) if the execution failed
 - Node execution summary (with `--show-data`)
+
+#### `execution delete`
+
+Delete an execution by ID.
+
+```bash
+n8n-cli execution delete <id>
+```
+
+#### `execution retry`
+
+Retry a failed execution.
+
+```bash
+n8n-cli execution retry <id>
+```
+
+#### `execution stop`
+
+Stop a running execution.
+
+```bash
+n8n-cli execution stop <id>
+```
+
+### `tag`
+
+Manage n8n tags.
+
+```bash
+n8n-cli tag <subcommand>
+```
+
+| Subcommand | Description |
+|------------|-------------|
+| `list` | List all tags |
+| `get <id>` | Get a tag by ID |
+| `create <name>` | Create a new tag |
+| `update <id>` | Update an existing tag |
+| `delete <ids...>` | Delete one or more tags |
+
+#### `tag list`
+
+```bash
+n8n-cli tag list [options]
+```
+
+| Option | Description |
+|--------|-------------|
+| `-l, --limit <n>` | Maximum number of tags to return |
+
+#### `tag get`
+
+Get a tag by ID.
+
+```bash
+n8n-cli tag get <id>
+```
+
+#### `tag create`
+
+Create a new tag.
+
+```bash
+n8n-cli tag create <name>
+```
+
+#### `tag update`
+
+Update an existing tag.
+
+```bash
+n8n-cli tag update <id> [options]
+```
+
+| Option | Description |
+|--------|-------------|
+| `-n, --name <name>` | New tag name (required) |
+
+#### `tag delete`
+
+Delete one or more tags.
+
+```bash
+n8n-cli tag delete <ids...> [options]
+```
+
+| Option | Description |
+|--------|-------------|
+| `--force` | Skip confirmation prompt |
+
+### `credential`
+
+Manage n8n credentials.
+
+```bash
+n8n-cli credential <subcommand>
+```
+
+| Subcommand | Description |
+|------------|-------------|
+| `list` | List all credentials |
+| `get <id>` | Get a credential by ID |
+| `create` | Create a new credential |
+| `update <id>` | Update an existing credential |
+| `delete <ids...>` | Delete one or more credentials |
+| `schema <typeName>` | Get the schema for a credential type |
+| `transfer <id>` | Transfer a credential to a different project |
+
+#### `credential list`
+
+```bash
+n8n-cli credential list [options]
+```
+
+| Option | Description |
+|--------|-------------|
+| `-l, --limit <n>` | Maximum number of credentials to return |
+
+#### `credential get`
+
+Get a credential by ID.
+
+```bash
+n8n-cli credential get <id>
+```
+
+#### `credential create`
+
+Create a new credential.
+
+```bash
+n8n-cli credential create [options]
+```
+
+| Option | Description |
+|--------|-------------|
+| `-n, --name <name>` | Credential name (required) |
+| `-t, --type <type>` | Credential type, e.g., `slackApi` (required) |
+| `-d, --data <json>` | Credential data as JSON string (required) |
+
+#### `credential update`
+
+Update an existing credential.
+
+```bash
+n8n-cli credential update <id> [options]
+```
+
+| Option | Description |
+|--------|-------------|
+| `-n, --name <name>` | New credential name |
+| `-t, --type <type>` | New credential type |
+| `-d, --data <json>` | New credential data as JSON string |
+
+#### `credential delete`
+
+Delete one or more credentials.
+
+```bash
+n8n-cli credential delete <ids...> [options]
+```
+
+| Option | Description |
+|--------|-------------|
+| `--force` | Skip confirmation prompt |
+
+#### `credential schema`
+
+Get the schema for a credential type.
+
+```bash
+n8n-cli credential schema <typeName>
+```
+
+#### `credential transfer`
+
+Transfer a credential to a different project.
+
+```bash
+n8n-cli credential transfer <id> [options]
+```
+
+| Option | Description |
+|--------|-------------|
+| `-p, --project <projectId>` | Destination project ID (required) |
 
 ### `version`
 
