@@ -4,6 +4,7 @@ import { registerExecutionCommand } from "./cli/commands/execution.ts";
 import { registerFmtCommand } from "./cli/commands/fmt.ts";
 import { registerImportCommand } from "./cli/commands/import.ts";
 import { registerLintCommand } from "./cli/commands/lint.ts";
+import { registerNodeSchemaCommand } from "./cli/commands/node-schema.ts";
 import { registerTagCommand } from "./cli/commands/tag.ts";
 import { registerTestCommand } from "./cli/commands/test.ts";
 import { registerWorkflowCommand } from "./cli/commands/workflow.ts";
@@ -19,6 +20,7 @@ registerCredentialCommand(program);
 registerApplyCommand(program);
 registerImportCommand(program);
 registerLintCommand(program);
+registerNodeSchemaCommand(program);
 registerFmtCommand(program);
 registerTestCommand(program);
 
