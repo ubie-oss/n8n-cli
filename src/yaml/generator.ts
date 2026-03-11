@@ -56,7 +56,7 @@ export function sanitizeNodeName(name: string): string {
 }
 
 /** Strips existing JS header comments to prevent duplication on re-import. */
-function stripJavaScriptHeaders(code: string): string {
+export function stripJavaScriptHeaders(code: string): string {
   const lines = code.split("\n");
   let startIdx = 0;
 
@@ -76,7 +76,7 @@ function stripJavaScriptHeaders(code: string): string {
 }
 
 /** Strips existing SQL header comments to prevent duplication on re-import. */
-function stripSQLHeaders(code: string): string {
+export function stripSQLHeaders(code: string): string {
   const lines = code.split("\n");
   let startIdx = 0;
 
@@ -99,7 +99,7 @@ function stripSQLHeaders(code: string): string {
  * Strips existing Markdown header comments and expression prefix.
  * Returns [cleanCode, hadExpressionPrefix].
  */
-function stripMarkdownHeaders(code: string): [string, boolean] {
+export function stripMarkdownHeaders(code: string): [string, boolean] {
   let hasExpression = false;
   let workingCode = code;
 
@@ -131,6 +131,26 @@ function stripMarkdownHeaders(code: string): [string, boolean] {
 
   if (startIdx >= lines.length) return ["", hasExpression];
   return [lines.slice(startIdx).join("\n"), hasExpression];
+}
+
+/**
+ * Strips file headers based on file extension.
+ * Dispatches to the appropriate strip function for .js, .sql, and .md files.
+ */
+export function stripFileHeaders(content: string, filePath: string): string {
+  const ext = path.extname(filePath).toLowerCase();
+  switch (ext) {
+    case ".js":
+      return stripJavaScriptHeaders(content);
+    case ".sql":
+      return stripSQLHeaders(content);
+    case ".md": {
+      const [clean, hasExpr] = stripMarkdownHeaders(content);
+      return hasExpr ? `=${clean}` : clean;
+    }
+    default:
+      return content;
+  }
 }
 
 /** Generates the content of an external file with header comments. */

@@ -102,7 +102,7 @@ export class Scanner {
   private parseYAMLFile(filePath: string): WorkflowFile {
     const wf: WorkflowFile = { path: filePath, sourceType: "yaml" };
     try {
-      const workflow = loadYamlWorkflow(filePath);
+      const workflow = loadYamlWorkflow(filePath, { stripFileHeaders: true });
       this.validateWorkflow(workflow);
       this.checkIDMismatch(filePath, workflow);
       wf.workflow = workflow;
