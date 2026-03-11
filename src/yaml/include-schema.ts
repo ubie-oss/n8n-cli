@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import yaml from "js-yaml";
+import { stripFileHeaders } from "./generator.ts";
 
 /**
  * Creates a js-yaml schema with a custom `!include` tag.
@@ -36,23 +37,31 @@ export class IncludeRef {
  * Recursively walks an object tree and replaces every `IncludeRef` with
  * the content of the referenced file (resolved relative to `baseDir`).
  */
-export function resolveIncludeRefs(obj: unknown, baseDir: string): unknown {
+export function resolveIncludeRefs(
+  obj: unknown,
+  baseDir: string,
+  options?: { stripFileHeaders?: boolean },
+): unknown {
   if (obj instanceof IncludeRef) {
     const filePath = path.resolve(baseDir, obj.path);
     try {
-      return fs.readFileSync(filePath, "utf-8");
+      let content = fs.readFileSync(filePath, "utf-8");
+      if (options?.stripFileHeaders) {
+        content = stripFileHeaders(content, filePath);
+      }
+      return content;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       throw new Error(`!include failed to read "${obj.path}" (resolved to "${filePath}"): ${msg}`);
     }
   }
   if (Array.isArray(obj)) {
-    return obj.map((item) => resolveIncludeRefs(item, baseDir));
+    return obj.map((item) => resolveIncludeRefs(item, baseDir, options));
   }
   if (obj && typeof obj === "object") {
     const result: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(obj)) {
-      result[key] = resolveIncludeRefs(value, baseDir);
+      result[key] = resolveIncludeRefs(value, baseDir, options);
     }
     return result;
   }

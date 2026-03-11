@@ -6,6 +6,8 @@ import { createIncludeSchema, resolveIncludeRefs } from "./include-schema.ts";
 export interface LoadYamlOptions {
   /** When true (default), `!include` refs are resolved to file contents. When false, `IncludeRef` objects are preserved. */
   resolveIncludes?: boolean;
+  /** When true, strip n8n-cli-generated file headers from included file contents. */
+  stripFileHeaders?: boolean;
 }
 
 /**
@@ -42,7 +44,8 @@ export function loadYamlWorkflow(filePath: string, options?: LoadYamlOptions): W
   }
 
   if (resolveIncludes) {
-    parsed = resolveIncludeRefs(parsed, baseDir);
+    const stripHeaders = options?.stripFileHeaders ?? false;
+    parsed = resolveIncludeRefs(parsed, baseDir, { stripFileHeaders: stripHeaders });
   }
 
   return parsed as Workflow;
