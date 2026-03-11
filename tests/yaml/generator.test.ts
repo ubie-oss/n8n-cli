@@ -2,8 +2,8 @@ import { describe, expect, test } from "bun:test";
 import {
   stripFileHeaders,
   stripJavaScriptHeaders,
-  stripSQLHeaders,
   stripMarkdownHeaders,
+  stripSQLHeaders,
 } from "@/yaml/generator.ts";
 
 describe("stripJavaScriptHeaders", () => {
