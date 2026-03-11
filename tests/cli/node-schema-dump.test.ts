@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { resolve } from "node:path";
 import { existsSync, rmSync } from "node:fs";
+import { resolve } from "node:path";
 
 const CLI_ENTRY = resolve("src/index.ts");
 
@@ -76,7 +76,7 @@ describe("node-schema dump", () => {
   });
 
   test("dumps to directory with -o", async () => {
-    const outDir = resolve("/tmp/n8n-cli-test-dump-" + Date.now());
+    const outDir = resolve(`/tmp/n8n-cli-test-dump-${Date.now()}`);
     try {
       const { exitCode } = await runCli(["dump", "--type", "n8n-nodes-base.slack", "-o", outDir]);
       expect(exitCode).toBe(0);

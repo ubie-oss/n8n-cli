@@ -26,8 +26,8 @@ export function registerNodeSchemaDumpCommand(parent: Command): void {
     .option("--type <nodeType>", "Specific node type (e.g. n8n-nodes-base.slack)")
     .option("-o, --output-dir <dir>", "Output directory for file dump")
     .action(async (options) => {
-      const descriptions: NodeDescription[] = (await import("@/generated/node-descriptions.json"))
-        .default;
+      const descriptions = (await import("@/generated/node-descriptions.json"))
+        .default as unknown as NodeDescription[];
       const typeFilter = options.type as string | undefined;
       const outputDir = options.outputDir as string | undefined;
 

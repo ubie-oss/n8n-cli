@@ -10,8 +10,8 @@ export function registerNodeSchemaListCommand(parent: Command): void {
     .option("--output <format>", "Output format: table or json", "table")
     .option("--group <name>", "Filter by group name")
     .action(async (options) => {
-      const descriptions: NodeDescription[] = (await import("@/generated/node-descriptions.json"))
-        .default;
+      const descriptions = (await import("@/generated/node-descriptions.json"))
+        .default as unknown as NodeDescription[];
 
       let filtered = descriptions;
       if (options.group) {
