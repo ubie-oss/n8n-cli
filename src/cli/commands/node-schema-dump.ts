@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import type { Command } from "commander";
 import { formatJSON } from "@/cli/output/json.ts";
+import { loadNodeDescriptions } from "./node-schema-loader.ts";
 import type { NodeDescription } from "./node-schema-types.ts";
 
 function buildIndex(descriptions: NodeDescription[]): object {
@@ -26,8 +27,7 @@ export function registerNodeSchemaDumpCommand(parent: Command): void {
     .option("--type <nodeType>", "Specific node type (e.g. n8n-nodes-base.slack)")
     .option("-o, --output-dir <dir>", "Output directory for file dump")
     .action(async (options) => {
-      const descriptions = (await import("@/generated/node-descriptions.json"))
-        .default as unknown as NodeDescription[];
+      const descriptions = await loadNodeDescriptions();
       const typeFilter = options.type as string | undefined;
       const outputDir = options.outputDir as string | undefined;
 

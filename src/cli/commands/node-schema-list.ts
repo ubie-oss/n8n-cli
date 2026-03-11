@@ -1,7 +1,7 @@
 import type { Command } from "commander";
 import { formatJSON } from "@/cli/output/json.ts";
 import { formatTable } from "@/cli/output/table.ts";
-import type { NodeDescription } from "./node-schema-types.ts";
+import { loadNodeDescriptions } from "./node-schema-loader.ts";
 
 export function registerNodeSchemaListCommand(parent: Command): void {
   parent
@@ -10,8 +10,7 @@ export function registerNodeSchemaListCommand(parent: Command): void {
     .option("--output <format>", "Output format: table or json", "table")
     .option("--group <name>", "Filter by group name")
     .action(async (options) => {
-      const descriptions = (await import("@/generated/node-descriptions.json"))
-        .default as unknown as NodeDescription[];
+      const descriptions = await loadNodeDescriptions();
 
       let filtered = descriptions;
       if (options.group) {

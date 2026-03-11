@@ -26,11 +26,8 @@ interface DisplayOptions {
 
 interface NodeProperty {
 	name: string;
-	displayName?: string;
 	type: string;
-	description?: string;
 	required?: boolean;
-	default?: unknown;
 	options?: NodePropertyOption[];
 	displayOptions?: DisplayOptions;
 }
@@ -42,13 +39,7 @@ interface CredentialEntry {
 
 interface NodeTypeDescription {
 	name: string;
-	displayName?: string;
-	description?: string;
 	version: number | number[];
-	group?: string[];
-	inputs?: string[];
-	outputs?: string[];
-	usableAsTool?: boolean;
 	properties: NodeProperty[];
 	credentials?: CredentialEntry[];
 }
@@ -271,104 +262,19 @@ async function loadNodesJson(packagePath: string): Promise<NodeTypeDescription[]
 	return await Bun.file(fullPath).json() as NodeTypeDescription[];
 }
 
-// ---------------------------------------------------------------------------
-// Full node description extraction (for node-schema command)
-// ---------------------------------------------------------------------------
-
-interface FullPropertyOutput {
-	name: string;
-	type: string;
-	description?: string;
-	required?: boolean;
-	default?: unknown;
-	options?: Array<{ name: string; value: string | number | boolean }>;
-	displayOptions?: DisplayOptions;
-}
-
-interface FullNodeDescription {
-	nodeType: string;
-	displayName: string;
-	description: string;
-	versions: number[];
-	group: string[];
-	inputs: string[];
-	outputs: string[];
-	usableAsTool?: boolean;
-	credentials?: Array<{ name: string; required?: boolean }>;
-	properties: FullPropertyOutput[];
-}
-
-function extractFullProperty(prop: NodeProperty): FullPropertyOutput | null {
-	if (UI_ONLY_TYPES.has(prop.type)) return null;
-
-	const out: FullPropertyOutput = {
-		name: prop.name,
-		type: prop.type,
-	};
-
-	if (prop.description) out.description = prop.description;
-	if (prop.required === true) out.required = true;
-	if (prop.default !== undefined) out.default = prop.default;
-
-	if (prop.options && prop.options.length > 0) {
-		out.options = prop.options
-			.filter((o): o is { name: string; value: string | number | boolean } => o.name != null)
-			.map((o) => ({ name: o.name!, value: o.value }));
-		if (out.options.length === 0) delete out.options;
-	}
-
-	if (prop.displayOptions) out.displayOptions = prop.displayOptions;
-
-	return out;
-}
-
-function extractFullNode(desc: NodeTypeDescription, prefix: string): FullNodeDescription {
-	const properties: FullPropertyOutput[] = [];
-	for (const prop of desc.properties) {
-		const extracted = extractFullProperty(prop);
-		if (extracted) properties.push(extracted);
-	}
-
-	const result: FullNodeDescription = {
-		nodeType: `${prefix}.${desc.name}`,
-		displayName: desc.displayName ?? desc.name,
-		description: desc.description ?? "",
-		versions: normalizeVersions(desc.version),
-		group: desc.group ?? [],
-		inputs: desc.inputs ?? ["main"],
-		outputs: desc.outputs ?? ["main"],
-		properties,
-	};
-
-	if (desc.usableAsTool) result.usableAsTool = true;
-
-	if (desc.credentials && desc.credentials.length > 0) {
-		result.credentials = desc.credentials.map((c) => {
-			const entry: { name: string; required?: boolean } = { name: c.name };
-			if (c.required) entry.required = true;
-			return entry;
-		});
-	}
-
-	return result;
-}
-
-// ---------------------------------------------------------------------------
-
-const packages = [
-	{
-		path: "node_modules/n8n-nodes-base/dist/types/nodes.json",
-		prefix: "n8n-nodes-base",
-	},
-	{
-		path: "node_modules/@n8n/n8n-nodes-langchain/dist/types/nodes.json",
-		prefix: "@n8n/n8n-nodes-langchain",
-	},
-];
-
 async function generate(): Promise<void> {
+	const packages = [
+		{
+			path: "node_modules/n8n-nodes-base/dist/types/nodes.json",
+			prefix: "n8n-nodes-base",
+		},
+		{
+			path: "node_modules/@n8n/n8n-nodes-langchain/dist/types/nodes.json",
+			prefix: "@n8n/n8n-nodes-langchain",
+		},
+	];
+
 	const output: GeneratedOutput = { paramSchemas: {} };
-	const fullDescriptions: FullNodeDescription[] = [];
 
 	for (const pkg of packages) {
 		const nodes = await loadNodesJson(pkg.path);
@@ -384,8 +290,6 @@ async function generate(): Promise<void> {
 			} else {
 				output.paramSchemas[nodeType] = schemas;
 			}
-
-			fullDescriptions.push(extractFullNode(node, prefix));
 		}
 	}
 
@@ -394,18 +298,11 @@ async function generate(): Promise<void> {
 		mkdirSync(outputDir, { recursive: true });
 	}
 
-	// Condensed schemas (for linter)
 	const outputPath = resolve(outputDir, "node-schemas.json");
 	writeFileSync(outputPath, JSON.stringify(output, null, 2));
 
 	const nodeCount = Object.keys(output.paramSchemas).length;
 	console.log(`Generated ${outputPath} with ${nodeCount} node schemas`);
-
-	// Full node descriptions (for node-schema command)
-	const descriptionsPath = resolve(outputDir, "node-descriptions.json");
-	writeFileSync(descriptionsPath, JSON.stringify(fullDescriptions));
-
-	console.log(`Generated ${descriptionsPath} with ${fullDescriptions.length} node descriptions`);
 }
 
 await generate();
