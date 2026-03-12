@@ -13,6 +13,7 @@ A command-line interface for managing [n8n](https://n8n.io/) workflows as code. 
 - **Execution management** - List executions, get execution details, delete, retry, and stop executions
 - **Tag management** - List, get, create, update, and delete tags
 - **Credential management** - List, get, create, update, delete credentials, get schema, and transfer between projects
+- **Data table management** - List, get, create, update, delete data tables and manage rows (insert, update, upsert, delete)
 - **Git integration** - Apply only workflows changed in a Git diff
 - **YAML support** - Work with YAML workflow definitions and external code/SQL files
 - **CLAUDE.md integration** - Read project settings (default project ID, auto tags, YAML mode) from CLAUDE.md
@@ -465,6 +466,159 @@ n8n-cli credential transfer <id> [options]
 | Option | Description |
 |--------|-------------|
 | `-p, --project <projectId>` | Destination project ID (required) |
+
+### `data-tables`
+
+Manage n8n data tables and their rows.
+
+```bash
+n8n-cli data-tables <subcommand>
+```
+
+| Subcommand | Description |
+|------------|-------------|
+| `list` | List all data tables |
+| `get <id>` | Get a data table by ID |
+| `create` | Create a new data table |
+| `update <id>` | Update an existing data table |
+| `delete <ids...>` | Delete one or more data tables |
+| `rows list <dataTableId>` | List rows in a data table |
+| `rows insert <dataTableId>` | Insert rows into a data table |
+| `rows update <dataTableId>` | Update rows in a data table |
+| `rows upsert <dataTableId>` | Upsert rows in a data table |
+| `rows delete <dataTableId>` | Delete rows from a data table |
+
+#### `data-tables list`
+
+```bash
+n8n-cli data-tables list [options]
+```
+
+| Option | Description |
+|--------|-------------|
+| `-l, --limit <n>` | Maximum number of data tables to return |
+| `--filter <json>` | Filter as JSON string |
+| `--sort-by <field:dir>` | Sort by field and direction (e.g., `name:asc`) |
+
+#### `data-tables get`
+
+Get a data table by ID, including column definitions.
+
+```bash
+n8n-cli data-tables get <id>
+```
+
+#### `data-tables create`
+
+Create a new data table with column definitions.
+
+```bash
+n8n-cli data-tables create [options]
+```
+
+| Option | Description |
+|--------|-------------|
+| `-n, --name <name>` | Data table name (required) |
+| `-c, --columns <json>` | Columns as JSON array (required), e.g., `'[{"name":"col1","type":"string"}]'` |
+
+Supported column types: `string`, `number`, `boolean`, `date`, `json`.
+
+#### `data-tables update`
+
+Update an existing data table (name only).
+
+```bash
+n8n-cli data-tables update <id> [options]
+```
+
+| Option | Description |
+|--------|-------------|
+| `-n, --name <name>` | New data table name (required) |
+
+#### `data-tables delete`
+
+Delete one or more data tables.
+
+```bash
+n8n-cli data-tables delete <ids...> [options]
+```
+
+| Option | Description |
+|--------|-------------|
+| `--force` | Skip confirmation prompt |
+
+#### `data-tables rows list`
+
+List rows in a data table.
+
+```bash
+n8n-cli data-tables rows list <dataTableId> [options]
+```
+
+| Option | Description |
+|--------|-------------|
+| `-l, --limit <n>` | Maximum number of rows to return |
+| `--filter <json>` | Filter as JSON string |
+| `--sort-by <field:dir>` | Sort by field and direction |
+| `--search <text>` | Search text |
+
+#### `data-tables rows insert`
+
+Insert rows into a data table.
+
+```bash
+n8n-cli data-tables rows insert <dataTableId> [options]
+```
+
+| Option | Description |
+|--------|-------------|
+| `-d, --data <json>` | Row data as JSON array (required), e.g., `'[{"col1":"value"}]'` |
+| `--return-type <type>` | Return type: `count`, `id`, or `all` (default: `count`) |
+
+#### `data-tables rows update`
+
+Update rows matching a filter.
+
+```bash
+n8n-cli data-tables rows update <dataTableId> [options]
+```
+
+| Option | Description |
+|--------|-------------|
+| `--filter <json>` | Filter as JSON string (required) |
+| `-d, --data <json>` | Update data as JSON object (required) |
+| `--return-data` | Return updated data |
+| `--dry-run` | Dry run without making changes |
+
+#### `data-tables rows upsert`
+
+Upsert rows matching a filter.
+
+```bash
+n8n-cli data-tables rows upsert <dataTableId> [options]
+```
+
+| Option | Description |
+|--------|-------------|
+| `--filter <json>` | Filter as JSON string (required) |
+| `-d, --data <json>` | Upsert data as JSON object (required) |
+| `--return-data` | Return upserted data |
+| `--dry-run` | Dry run without making changes |
+
+#### `data-tables rows delete`
+
+Delete rows matching a filter.
+
+```bash
+n8n-cli data-tables rows delete <dataTableId> [options]
+```
+
+| Option | Description |
+|--------|-------------|
+| `--filter <json>` | Filter as JSON string (required) |
+| `--return-data` | Return deleted data |
+| `--dry-run` | Dry run without making changes |
+| `--force` | Skip confirmation prompt |
 
 ### `version`
 

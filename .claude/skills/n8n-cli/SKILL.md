@@ -413,6 +413,68 @@ Config file search order:
 # 3. Review error details and fix the workflow
 ```
 
+### 8. Data Tables
+
+**Manage data tables and rows:**
+
+```bash
+# List all data tables
+./n8n-cli data-tables list
+./n8n-cli -o table data-tables list
+
+# Get a data table by ID (includes column definitions)
+./n8n-cli data-tables get <data-table-id>
+
+# Create a data table
+./n8n-cli data-tables create --name "My Table" --columns '[{"name":"col1","type":"string"},{"name":"col2","type":"number"}]'
+
+# Update a data table name
+./n8n-cli data-tables update <data-table-id> --name "New Name"
+
+# Delete data tables
+./n8n-cli data-tables delete <data-table-id> --force
+```
+
+**Row operations:**
+
+```bash
+# List rows
+./n8n-cli data-tables rows list <data-table-id>
+./n8n-cli data-tables rows list <data-table-id> --limit 10 --search "keyword"
+
+# Insert rows
+./n8n-cli data-tables rows insert <data-table-id> --data '[{"col1":"hello","col2":42}]'
+./n8n-cli data-tables rows insert <data-table-id> --data '[{"col1":"value"}]' --return-type all
+
+# Update rows matching a filter
+./n8n-cli data-tables rows update <data-table-id> \
+  --filter '{"type":"and","filters":[{"columnName":"col1","condition":"eq","value":"hello"}]}' \
+  --data '{"col2":99}' --dry-run
+
+# Upsert rows
+./n8n-cli data-tables rows upsert <data-table-id> \
+  --filter '{"type":"and","filters":[{"columnName":"col1","condition":"eq","value":"hello"}]}' \
+  --data '{"col1":"hello","col2":100}'
+
+# Delete rows matching a filter
+./n8n-cli data-tables rows delete <data-table-id> \
+  --filter '{"type":"and","filters":[{"columnName":"col1","condition":"eq","value":"hello"}]}' \
+  --force
+```
+
+**Options:**
+
+| Subcommand | Key Options |
+|------------|-------------|
+| `list` | `--limit`, `--filter <json>`, `--sort-by <field:dir>` |
+| `rows list` | `--limit`, `--filter <json>`, `--sort-by`, `--search <text>` |
+| `rows insert` | `-d, --data <json>` (required), `--return-type count\|id\|all` |
+| `rows update` | `--filter <json>` (required), `-d, --data <json>` (required), `--return-data`, `--dry-run` |
+| `rows upsert` | `--filter <json>` (required), `-d, --data <json>` (required), `--return-data`, `--dry-run` |
+| `rows delete` | `--filter <json>` (required), `--return-data`, `--dry-run`, `--force` |
+
+Supported column types: `string`, `number`, `boolean`, `date`, `json`.
+
 ## Typical Workflow Operations
 
 ### Editing Workflows
