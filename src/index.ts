@@ -1,5 +1,6 @@
 import { registerApplyCommand } from "./cli/commands/apply.ts";
 import { registerCredentialCommand } from "./cli/commands/credential.ts";
+import { registerDataTableCommand } from "./cli/commands/data-table.ts";
 import { registerExecutionCommand } from "./cli/commands/execution.ts";
 import { registerFmtCommand } from "./cli/commands/fmt.ts";
 import { registerImportCommand } from "./cli/commands/import.ts";
@@ -17,6 +18,7 @@ registerWorkflowCommand(program);
 registerExecutionCommand(program);
 registerTagCommand(program);
 registerCredentialCommand(program);
+registerDataTableCommand(program);
 registerApplyCommand(program);
 registerImportCommand(program);
 registerLintCommand(program);

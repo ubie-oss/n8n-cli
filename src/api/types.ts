@@ -175,3 +175,90 @@ export interface CredentialSchemaProperty {
   type?: string;
   default?: unknown;
 }
+
+/** DataTableColumnType represents the type of a data table column */
+export type DataTableColumnType = "string" | "number" | "boolean" | "date" | "json";
+
+/** DataTableColumn represents a column in a data table */
+export interface DataTableColumn {
+  id?: string;
+  name: string;
+  type: DataTableColumnType;
+  index?: number;
+}
+
+/** DataTable represents an n8n data table */
+export interface DataTable {
+  id: string;
+  name: string;
+  columns: DataTableColumn[];
+  projectId?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+/** ListDataTablesResponse represents the response from listing data tables */
+export interface ListDataTablesResponse {
+  data: DataTable[];
+  nextCursor?: string;
+}
+
+/** DataTableInput represents input for creating a data table */
+export interface DataTableInput {
+  name: string;
+  columns: DataTableColumn[];
+}
+
+/** DataTableUpdateInput represents input for updating a data table */
+export interface DataTableUpdateInput {
+  name: string;
+}
+
+/** DataTableRow represents a row in a data table */
+export interface DataTableRow {
+  id: number;
+  createdAt?: string;
+  updatedAt?: string;
+  [key: string]: unknown;
+}
+
+/** ListDataTableRowsResponse represents the response from listing data table rows */
+export interface ListDataTableRowsResponse {
+  data: DataTableRow[];
+  nextCursor?: string;
+}
+
+/** DataTableFilterCondition represents a single filter condition */
+export interface DataTableFilterCondition {
+  columnName: string;
+  condition: string;
+  value: unknown;
+}
+
+/** DataTableFilter represents a filter for querying data table rows */
+export interface DataTableFilter {
+  type: "and" | "or";
+  filters: DataTableFilterCondition[];
+}
+
+/** InsertRowsInput represents input for inserting rows */
+export interface InsertRowsInput {
+  data: Record<string, unknown>[];
+  returnType?: "count" | "id" | "all";
+}
+
+/** UpdateRowsInput represents input for updating rows */
+export interface UpdateRowsInput {
+  filter: DataTableFilter;
+  data: Record<string, unknown>;
+  returnData?: boolean;
+  dryRun?: boolean;
+}
+
+/** UpsertRowInput represents input for upserting rows */
+export interface UpsertRowInput {
+  filter: DataTableFilter;
+  data: Record<string, unknown>;
+  returnData?: boolean;
+  dryRun?: boolean;
+}
