@@ -131,7 +131,6 @@ export function analyzeWorkflow(workflow: Workflow, file: string): TraceResult {
   const nodeHints = new Map<string, string[]>();
 
   // Mark cycle nodes
-  const cycleSet = new Set(cycleNodes);
   for (const name of cycleNodes) {
     estimatedItems.set(name, "loop");
     nodeHints.set(name, []);

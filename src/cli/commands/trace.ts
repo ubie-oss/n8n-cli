@@ -1,6 +1,5 @@
 import type { Command } from "commander";
-import { parseTagFilter } from "@/common/tags.ts";
-import { hasAllTags } from "@/common/tags.ts";
+import { hasAllTags, parseTagFilter } from "@/common/tags.ts";
 import { loadFileForLint, scanFiles } from "@/lint/scanner.ts";
 import { analyzeWorkflow } from "@/trace/analyzer.ts";
 import { formatTraceJSON } from "@/trace/output/json.ts";
