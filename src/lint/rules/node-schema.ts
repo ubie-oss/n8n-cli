@@ -13,6 +13,8 @@ export interface OutputSchema {
   dynamicFields: boolean;
   /** Derive fields from node parameters */
   parameterDerivedFields?: (params: Record<string, unknown>) => string[];
+  /** Derive cardinality from node parameters (overrides static cardinality) */
+  parameterDerivedCardinality?: (params: Record<string, unknown>) => OutputCardinality;
 }
 
 /** Node output schema registry */

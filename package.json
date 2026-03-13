@@ -14,7 +14,7 @@
     "typecheck": "tsc --noEmit",
     "lint": "biome check src/ tests/",
     "lint:fix": "biome check --write src/ tests/",
-    "format": "biome format --write src/ tests/"
+    "format": "biome check --write src/ tests/"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.1",

@@ -53,11 +53,6 @@ function byRule(violations: LintViolation[], rule: string): LintViolation[] {
   return violations.filter((v) => v.rule === rule);
 }
 
-/** Filter violations matching a message substring. */
-function byMessage(violations: LintViolation[], substring: string): LintViolation[] {
-  return violations.filter((v) => v.message.includes(substring));
-}
-
 // ---------------------------------------------------------------------------
 // lint-clean.yaml — should have zero errors
 // ---------------------------------------------------------------------------

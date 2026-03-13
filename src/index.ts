@@ -8,6 +8,7 @@ import { registerLintCommand } from "./cli/commands/lint.ts";
 import { registerNodeSchemaCommand } from "./cli/commands/node-schema.ts";
 import { registerTagCommand } from "./cli/commands/tag.ts";
 import { registerTestCommand } from "./cli/commands/test.ts";
+import { registerTraceCommand } from "./cli/commands/trace.ts";
 import { registerWorkflowCommand } from "./cli/commands/workflow.ts";
 import { createProgram } from "./cli/root.ts";
 
@@ -25,6 +26,7 @@ registerLintCommand(program);
 registerNodeSchemaCommand(program);
 registerFmtCommand(program);
 registerTestCommand(program);
+registerTraceCommand(program);
 
 try {
   await program.parseAsync(process.argv);

@@ -16,6 +16,11 @@ export const outputSchemaOverrides: Record<string, OutputSchema> = {
   "n8n-nodes-base.googleBigQuery": {
     cardinality: "1:N",
     dynamicFields: true,
+    parameterDerivedCardinality: (params) => {
+      const op = params.operation;
+      if (op === "insert") return "1:1";
+      return "1:N"; // executeQuery, getAll
+    },
   },
   "n8n-nodes-base.aggregate": {
     cardinality: "N:1",
@@ -47,9 +52,35 @@ export const outputSchemaOverrides: Record<string, OutputSchema> = {
     cardinality: "1:1",
     dynamicFields: true,
   },
+  "n8n-nodes-base.formTrigger": { cardinality: "1:1", dynamicFields: true },
+  "n8n-nodes-base.manualTrigger": { cardinality: "1:1", dynamicFields: true },
+  "n8n-nodes-base.scheduleTrigger": { cardinality: "1:1", dynamicFields: true },
   "n8n-nodes-base.slack": { cardinality: "1:1", dynamicFields: true },
   "n8n-nodes-base.merge": { cardinality: "variable", dynamicFields: true },
-  "n8n-nodes-base.notion": { cardinality: "variable", dynamicFields: true },
+  "n8n-nodes-base.notion": {
+    cardinality: "variable",
+    dynamicFields: true,
+    parameterDerivedCardinality: (params) => {
+      const op = params.operation;
+      if (op === "getAll") return "1:N";
+      // get, create, update, append → 1:1
+      if (op === "get" || op === "create" || op === "update" || op === "append") return "1:1";
+      return "variable";
+    },
+  },
+  "n8n-nodes-base.googleSheets": {
+    cardinality: "variable",
+    dynamicFields: true,
+    parameterDerivedCardinality: (params) => {
+      const op = params.operation;
+      if (op === "getAll" || op === "lookup") return "1:N";
+      // get, append, update, delete, clear → 1:1
+      if (op === "get" || op === "append" || op === "update" || op === "delete" || op === "clear")
+        return "1:1";
+      return "variable";
+    },
+  },
+  "n8n-nodes-base.limit": { cardinality: "pass-through", dynamicFields: true },
 };
 
 /** Derives output field names from Aggregate node parameters */

@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import yaml from "js-yaml";
 import { formatWorkflowAsync, formatWorkflowWithOptions } from "@/formatter/formatter.ts";
-import { AI_SUBNODE_Y_OFFSET, GRID_SIZE } from "@/formatter/workflow.ts";
+import { GRID_SIZE } from "@/formatter/workflow.ts";
 
 const simpleWorkflow = {
   name: "Test",
