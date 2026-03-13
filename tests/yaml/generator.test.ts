@@ -1,10 +1,60 @@
 import { describe, expect, test } from "bun:test";
+import type { Workflow } from "@/api/types.ts";
 import {
+  buildYamlObject,
   stripFileHeaders,
   stripJavaScriptHeaders,
   stripMarkdownHeaders,
   stripSQLHeaders,
 } from "@/yaml/generator.ts";
+
+describe("buildYamlObject", () => {
+  const baseWorkflow: Workflow = {
+    id: "wf-1",
+    name: "Test Workflow",
+    active: true,
+    nodes: [],
+    connections: {},
+  };
+
+  test("includes tags with id and name only", () => {
+    const workflow: Workflow = {
+      ...baseWorkflow,
+      tags: [
+        { id: "tag-1", name: "production", createdAt: "2024-01-01", updatedAt: "2024-01-02" },
+        { id: "tag-2", name: "critical" },
+      ],
+    };
+    const result = buildYamlObject(workflow, {});
+    expect(result.tags).toEqual([
+      { id: "tag-1", name: "production" },
+      { id: "tag-2", name: "critical" },
+    ]);
+  });
+
+  test("omits id when tag has no id", () => {
+    const workflow: Workflow = {
+      ...baseWorkflow,
+      tags: [{ name: "new-tag" }],
+    };
+    const result = buildYamlObject(workflow, {});
+    expect(result.tags).toEqual([{ name: "new-tag" }]);
+  });
+
+  test("omits tags field when tags array is empty", () => {
+    const workflow: Workflow = {
+      ...baseWorkflow,
+      tags: [],
+    };
+    const result = buildYamlObject(workflow, {});
+    expect(result.tags).toBeUndefined();
+  });
+
+  test("omits tags field when tags is undefined", () => {
+    const result = buildYamlObject(baseWorkflow, {});
+    expect(result.tags).toBeUndefined();
+  });
+});
 
 describe("stripJavaScriptHeaders", () => {
   test("strips JS header comments", () => {
