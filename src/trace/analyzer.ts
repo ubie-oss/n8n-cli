@@ -1,7 +1,7 @@
 import type { Connection, Node, Workflow } from "@/api/types.ts";
 import { buildAdjacencyList } from "@/lint/rules/node-ref-cardinality.ts";
-import { getOutputSchema } from "@/lint/rules/node-schema.ts";
 import type { OutputCardinality } from "@/lint/rules/node-schema.ts";
+import { getOutputSchema } from "@/lint/rules/node-schema.ts";
 import type { NodeTrace, TraceResult } from "./types.ts";
 
 /** Build reverse adjacency list (target → sources) */
