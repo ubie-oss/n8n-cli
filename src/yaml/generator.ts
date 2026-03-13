@@ -314,7 +314,7 @@ export function generateYamlWorkflow(
  * Builds a YAML-ready object from a workflow, replacing externalized fields
  * with IncludeRef markers.
  */
-function buildYamlObject(
+export function buildYamlObject(
   workflow: Workflow,
   externalMap: Record<string, Record<string, string>>,
 ): Record<string, unknown> {
@@ -355,6 +355,13 @@ function buildYamlObject(
 
   if (workflow.settings) {
     result.settings = workflow.settings;
+  }
+
+  if (workflow.tags && workflow.tags.length > 0) {
+    result.tags = workflow.tags.map((tag) => ({
+      ...(tag.id ? { id: tag.id } : {}),
+      name: tag.name,
+    }));
   }
 
   return result;
