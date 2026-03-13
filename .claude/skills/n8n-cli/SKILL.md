@@ -459,7 +459,11 @@ Config file search order:
 # 3. Review error details and fix the workflow
 ```
 
+<<<<<<< HEAD
 ### 9. Data Tables
+=======
+### 8. Data Tables
+>>>>>>> 2127c8ac10de74433e5bdbf0da7fc5a9437c9369
 
 **Manage data tables and rows:**
 
@@ -521,6 +525,7 @@ Config file search order:
 
 Supported column types: `string`, `number`, `boolean`, `date`, `json`.
 
+<<<<<<< HEAD
 ### 10. Trace (Data Flow Analysis)
 
 **Analyze data flow and cardinality through a workflow:**
@@ -618,6 +623,8 @@ When a node shows `?` for estimated items, it means cardinality could not be sta
 | `--type <nodeType>` | Specific node type schema (e.g., `n8n-nodes-base.slack`) |
 | `-o, --output-dir <dir>` | Dump all nodes as individual files to directory |
 
+=======
+>>>>>>> 2127c8ac10de74433e5bdbf0da7fc5a9437c9369
 ## Typical Workflow Operations
 
 ### Editing Workflows
