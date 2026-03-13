@@ -14,6 +14,8 @@ A command-line interface for managing [n8n](https://n8n.io/) workflows as code. 
 - **Tag management** - List, get, create, update, and delete tags
 - **Credential management** - List, get, create, update, delete credentials, get schema, and transfer between projects
 - **Data table management** - List, get, create, update, delete data tables and manage rows (insert, update, upsert, delete)
+- **Node schema** - Inspect built-in node type schemas (list and dump)
+- **Trace** - Analyze data flow and item cardinality through workflow nodes
 - **Git integration** - Apply only workflows changed in a Git diff
 - **YAML support** - Work with YAML workflow definitions and external code/SQL files
 - **CLAUDE.md integration** - Read project settings (default project ID, auto tags, YAML mode) from CLAUDE.md
@@ -619,6 +621,69 @@ n8n-cli data-tables rows delete <dataTableId> [options]
 | `--return-data` | Return deleted data |
 | `--dry-run` | Dry run without making changes |
 | `--force` | Skip confirmation prompt |
+
+### `node-schema`
+
+Inspect built-in node type schemas.
+
+```bash
+n8n-cli node-schema <subcommand>
+```
+
+| Subcommand | Description |
+|------------|-------------|
+| `list` | List all built-in node types |
+| `dump` | Dump full node schema definitions |
+
+#### `node-schema list`
+
+```bash
+n8n-cli node-schema list [options]
+```
+
+| Option | Description |
+|--------|-------------|
+| `--output <format>` | Output format: `table`, `json` (default: `table`) |
+| `--group <name>` | Filter by group name (e.g., `trigger`, `transform`) |
+
+#### `node-schema dump`
+
+```bash
+n8n-cli node-schema dump [options]
+```
+
+| Option | Description |
+|--------|-------------|
+| `--type <nodeType>` | Dump a specific node type (e.g., `n8n-nodes-base.slack`) |
+| `-o, --output-dir <dir>` | Dump all nodes as individual JSON files to a directory |
+
+**Prerequisites:** Requires `n8n-nodes-base` and `@n8n/n8n-nodes-langchain` in `node_modules`.
+
+### `trace`
+
+Analyze data flow and item cardinality through workflow nodes.
+
+```bash
+n8n-cli trace [options]
+```
+
+| Option | Description |
+|--------|-------------|
+| `-d, --dir <directory>` | Directory to scan for workflow files |
+| `-f, --file <files...>` | Specific files to trace |
+| `--json` | Output in JSON format |
+| `--tags <tags>` | Filter by tags (comma-separated, AND condition) |
+
+**Output columns:**
+
+| Column | Description |
+|--------|-------------|
+| Node | Node name |
+| Type | n8n node type |
+| Cardinality | Output cardinality: `1:1`, `1:N`, `N:1`, `pass-through`, `variable`, `unknown` |
+| Items | Estimated output item count |
+| Inputs | Upstream nodes |
+| Outputs | Downstream nodes |
 
 ### `version`
 

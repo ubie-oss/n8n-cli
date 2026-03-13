@@ -12,7 +12,23 @@ A skill to assist with workflow management using n8n-cli (TypeScript/Bun).
 
 **For new sessions, always run the following first to ensure n8n-cli is up to date.**
 
-### Auto-Update from GitHub Releases (Preferred)
+### Priority 1: Build from Local Source (Development)
+
+If the n8n-cli source repository is available via add-dir (e.g., `/path/to/n8n-cli/Makefile` exists), build from local source instead of using a release. This ensures the latest development changes are reflected immediately.
+
+```bash
+# If n8n-cli repo is visible via add-dir
+N8N_CLI_REPO="/path/to/n8n-cli"  # Replace with add-dir path
+if [ -f "$N8N_CLI_REPO/Makefile" ]; then
+  echo "Building n8n-cli from local source: $N8N_CLI_REPO"
+  cd "$N8N_CLI_REPO" && bun install && make build
+  cp "$N8N_CLI_REPO/n8n-cli" /path/to/target/n8n-cli
+  cd /path/to/target
+  echo "Built from local source: $(./n8n-cli version 2>/dev/null | head -1)"
+fi
+```
+
+### Priority 2: Auto-Update from GitHub Releases (Preferred)
 
 Pre-built binaries are available on GitHub Releases. This is faster than building from source and ensures you're running the official release.
 
@@ -175,6 +191,9 @@ cp .env.example .env
 
 # Specific workflow only (by ID)
 ./n8n-cli apply --dry-run --ids=<workflow-id>
+
+# Specific file only
+./n8n-cli apply --dry-run -d definitions/path/to/workflow.json
 ```
 
 **Example output:**
@@ -200,6 +219,9 @@ Summary (dry-run): 1 to create, 2 to update, 1 unchanged
 ```bash
 # Apply specific workflow only (recommended)
 ./n8n-cli apply --ids=<workflow-id>
+
+# Apply a specific file only
+./n8n-cli apply -d definitions/path/to/workflow.json
 
 # Force apply (overwrite remote changes)
 ./n8n-cli apply --ids=<workflow-id> --force
@@ -304,7 +326,25 @@ Config file search order:
 2. `.n8nlintrc.json` / `.n8nlintrc` in the target directory
 3. `.n8nlintrc.json` / `.n8nlintrc` in the current directory
 
-### 6. Test (Execution)
+### 6. Formatter (Auto-format)
+
+**Note: `fmt` takes positional arguments for files (no `-f` option).**
+
+```bash
+# Format a specific file (positional argument)
+./n8n-cli fmt definitions/<filename>
+
+# Multiple files
+./n8n-cli fmt definitions/file1.yaml definitions/file2.yaml
+
+# Format an entire directory
+./n8n-cli fmt -d ./definitions
+
+# Preview only
+./n8n-cli fmt -d ./definitions --dry-run
+```
+
+### 7. Test (Execution)
 
 **Test workflows via test webhooks:**
 
@@ -340,7 +380,13 @@ Config file search order:
 | `--show-inputs` | Display input parameters |
 | `-o, --output <fmt>` | Output format: json, table (default: json) |
 
-### 7. Execution (Logs & Errors)
+**Test from a local file:**
+```bash
+# Specify a local JSON/YAML file
+./n8n-cli test ./definitions/my-workflow.json
+```
+
+### 8. Execution (Logs & Errors)
 
 **List recent executions:**
 
@@ -413,7 +459,7 @@ Config file search order:
 # 3. Review error details and fix the workflow
 ```
 
-### 8. Data Tables
+### 9. Data Tables
 
 **Manage data tables and rows:**
 
@@ -474,6 +520,103 @@ Config file search order:
 | `rows delete` | `--filter <json>` (required), `--return-data`, `--dry-run`, `--force` |
 
 Supported column types: `string`, `number`, `boolean`, `date`, `json`.
+
+### 10. Trace (Data Flow Analysis)
+
+**Analyze data flow and cardinality through a workflow:**
+
+```bash
+# Trace a workflow file
+./n8n-cli trace -f definitions/<filename>
+
+# JSON output
+./n8n-cli trace -f definitions/<filename> -o json
+```
+
+**Output columns:**
+
+| Column | Description |
+|--------|-------------|
+| Node | Node name |
+| Type | n8n node type |
+| Cardinality | Output cardinality: `1:1`, `1:N`, `N:1`, `pass-through`, `variable`, `unknown` |
+| Items | Estimated output item count: `1`, `N`, `?`, `loop`, etc. |
+| Inputs | Upstream nodes |
+| Outputs | Downstream nodes |
+
+**Cardinality meanings:**
+
+| Cardinality | Meaning |
+|-------------|---------|
+| `1:1` | One input item produces one output item |
+| `1:N` | One input item produces multiple output items |
+| `N:1` | Multiple input items produce one output item (e.g. Aggregate) |
+| `pass-through` | Items pass through unchanged (e.g. Filter, If, Set) |
+| `variable` | Output count depends on runtime behavior (e.g. Code, HTTP Request) |
+| `unknown` | Node type has no cardinality definition |
+
+**Interpreting `?` in estimated items:**
+
+When a node shows `?` for estimated items, it means cardinality could not be statically determined. AI assistants should:
+
+1. Check the node's `operation` parameter — many nodes (Notion, GoogleSheets, BigQuery) have operation-dependent cardinality that the trace already resolves
+2. Check `limit` parameters or SQL `LIMIT` clauses that may constrain output
+3. For `Code` nodes, read the code to determine if it produces 1 or N items
+4. For `HTTP Request`, check if the response is an array or single object
+5. **Do not assume `?` means "many"** — it simply means "unknown at static analysis time"
+
+### 11. Credential (Credential Management)
+
+**Check available credentials:**
+
+```bash
+# List all credentials
+./n8n-cli credential list
+
+# Get a specific credential's details
+./n8n-cli credential get <id>
+
+# Check credential type schema
+./n8n-cli credential schema <typeName>
+```
+
+**When designing workflows:**
+- If a node uses an external service, verify the corresponding credential exists
+- If a credential is missing, ask the user to create it in the n8n UI
+
+### 12. Node Schema (Node Schema Reference)
+
+**Check node parameter definitions:**
+
+```bash
+# List all nodes
+./n8n-cli node-schema list
+
+# JSON output
+./n8n-cli node-schema list --output json
+
+# Dump a specific node's schema
+./n8n-cli node-schema dump --type n8n-nodes-base.slack
+
+# Dump all nodes to a directory (individual JSON + _index.json)
+./n8n-cli node-schema dump -o ./schemas
+```
+
+**Prerequisites:** `n8n-nodes-base` and `@n8n/n8n-nodes-langchain` must be installed in `node_modules`.
+
+**Options (list):**
+
+| Option | Description |
+|--------|-------------|
+| `--output json` | JSON output |
+| `--group <group>` | Filter by group (trigger, transform, etc.) |
+
+**Options (dump):**
+
+| Option | Description |
+|--------|-------------|
+| `--type <nodeType>` | Specific node type schema (e.g., `n8n-nodes-base.slack`) |
+| `-o, --output-dir <dir>` | Dump all nodes as individual files to directory |
 
 ## Typical Workflow Operations
 
