@@ -17,5 +17,5 @@ export interface Rule {
    * @param workflow Parsed workflow, or null if JSON parsing failed
    * @param rawJSON Raw JSON string for rules that need line number extraction
    */
-  check(workflow: Workflow | null, rawJSON: string): Violation[];
+  check(workflow: Workflow | null, rawJSON: string, options?: Record<string, unknown>): Violation[];
 }
