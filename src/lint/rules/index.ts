@@ -1,5 +1,6 @@
 import { RuleRegistry } from "../registry.ts";
 import { aiAgentOutputRefRule } from "./ai-agent-output-ref.ts";
+import { bannedNodeRule } from "./banned-node.ts";
 import { connectionRefRule } from "./connection-ref.ts";
 import { expressionModePrefixRule } from "./expression-mode-prefix.ts";
 import { implicitJsonRefRule } from "./implicit-json-ref.ts";
@@ -27,5 +28,6 @@ export function registerDefaultRules(): RuleRegistry {
   registry.register(nodeRefCardinalityRule);
   registry.register(scheduleTriggerFrequencyRule);
   registry.register(webhookIdRequiredRule);
+  registry.register(bannedNodeRule);
   return registry;
 }

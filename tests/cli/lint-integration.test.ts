@@ -1,5 +1,7 @@
-import { describe, expect, test } from "bun:test";
-import { resolve } from "node:path";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import fs from "node:fs";
+import os from "node:os";
+import path, { resolve } from "node:path";
 
 /**
  * CLI integration tests for the lint command.
@@ -350,5 +352,149 @@ describe("CLI lint: text output", () => {
     expect(stdout).toContain("warning[node-params]");
     // And should NOT be parseable as JSON
     expect(() => JSON.parse(stdout)).toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// banned-node rule via config file
+// ---------------------------------------------------------------------------
+
+describe("CLI lint: banned-node rule", () => {
+  const fixture = resolve(FIXTURE_DIR, "lint-banned-node.yaml");
+  let tmpDir: string;
+  let configPath: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "lint-banned-node-"));
+    configPath = path.join(tmpDir, ".n8nlintrc.json");
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  test("detects banned nodes with config", async () => {
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        rules: {
+          "banned-node": [
+            "error",
+            {
+              nodes: [
+                {
+                  type: "n8n-nodes-base.executeCommand",
+                  reason: "Security risk: arbitrary command execution",
+                },
+                { type: "n8n-nodes-base.code", reason: "Use HTTP Request node instead" },
+              ],
+            },
+          ],
+        },
+      }),
+    );
+    const { output } = await runLint(["-f", fixture, "-c", configPath]);
+    const banned = byRule(output.violations, "banned-node");
+    expect(banned.length).toBe(2);
+  });
+
+  test("banned-node violations have correct severity from config", async () => {
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        rules: {
+          "banned-node": [
+            "error",
+            {
+              nodes: [{ type: "n8n-nodes-base.executeCommand" }],
+            },
+          ],
+        },
+      }),
+    );
+    const { output } = await runLint(["-f", fixture, "-c", configPath]);
+    const banned = byRule(output.violations, "banned-node");
+    expect(banned.length).toBe(1);
+    expect(banned[0]!.severity).toBe("error");
+  });
+
+  test("banned-node message includes reason when provided", async () => {
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        rules: {
+          "banned-node": [
+            "warning",
+            {
+              nodes: [{ type: "n8n-nodes-base.executeCommand", reason: "Security risk" }],
+            },
+          ],
+        },
+      }),
+    );
+    const { output } = await runLint(["-f", fixture, "-c", configPath]);
+    const banned = byRule(output.violations, "banned-node");
+    expect(banned.length).toBe(1);
+    expect(banned[0]!.message).toContain("Security risk");
+    expect(banned[0]!.message).toContain("Run Shell");
+    expect(banned[0]!.severity).toBe("warning");
+  });
+
+  test("banned-node message omits reason when not provided", async () => {
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        rules: {
+          "banned-node": [
+            "error",
+            {
+              nodes: [{ type: "n8n-nodes-base.code" }],
+            },
+          ],
+        },
+      }),
+    );
+    const { output } = await runLint(["-f", fixture, "-c", configPath]);
+    const banned = byRule(output.violations, "banned-node");
+    expect(banned.length).toBe(1);
+    expect(banned[0]!.message).toBe('Node "My Code" uses banned type "n8n-nodes-base.code"');
+  });
+
+  test("non-banned nodes are not flagged", async () => {
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        rules: {
+          "banned-node": [
+            "error",
+            {
+              nodes: [{ type: "n8n-nodes-base.ssh" }],
+            },
+          ],
+        },
+      }),
+    );
+    const { output } = await runLint(["-f", fixture, "-c", configPath]);
+    const banned = byRule(output.violations, "banned-node");
+    expect(banned.length).toBe(0);
+  });
+
+  test("no violations without banned-node config", async () => {
+    fs.writeFileSync(configPath, JSON.stringify({ rules: {} }));
+    const { output } = await runLint(["-f", fixture, "-c", configPath]);
+    const banned = byRule(output.violations, "banned-node");
+    expect(banned.length).toBe(0);
+  });
+
+  test("--list-rules includes banned-node", async () => {
+    const proc = Bun.spawn(["bun", "run", CLI_ENTRY, "lint", "--list-rules"], {
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const stdout = await new Response(proc.stdout).text();
+    const exitCode = await proc.exited;
+
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain("banned-node");
   });
 });
