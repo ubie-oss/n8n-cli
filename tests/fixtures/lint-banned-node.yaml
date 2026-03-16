@@ -1,0 +1,55 @@
+# Workflow with banned node types for integration testing.
+id: lint-banned-node-001
+name: Banned Node Test
+active: false
+nodes:
+  - id: "trigger-1"
+    name: Manual Trigger
+    type: n8n-nodes-base.manualTrigger
+    typeVersion: 1
+    position: [0, 0]
+    parameters: {}
+
+  # Should be flagged: executeCommand is banned
+  - id: "exec-cmd"
+    name: Run Shell
+    type: n8n-nodes-base.executeCommand
+    typeVersion: 1
+    position: [200, 0]
+    parameters:
+      command: "echo hello"
+
+  # Should be flagged: code node is banned
+  - id: "code-1"
+    name: My Code
+    type: n8n-nodes-base.code
+    typeVersion: 1
+    position: [400, 0]
+    parameters:
+      jsCode: "return [];"
+
+  # Should NOT be flagged: httpRequest is not banned
+  - id: "http-1"
+    name: HTTP Request
+    type: n8n-nodes-base.httpRequest
+    typeVersion: 4
+    position: [600, 0]
+    parameters:
+      url: "https://example.com"
+
+connections:
+  Manual Trigger:
+    main:
+      - - node: Run Shell
+          type: main
+          index: 0
+  Run Shell:
+    main:
+      - - node: My Code
+          type: main
+          index: 0
+  My Code:
+    main:
+      - - node: HTTP Request
+          type: main
+          index: 0

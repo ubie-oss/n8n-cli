@@ -147,6 +147,67 @@ n8n-cli lint [options]
 | `-o, --output <format>` | Output format: `text`, `json` (default: `text`) |
 | `--tags <tags>` | Filter by tags (comma-separated, AND condition) |
 
+#### Lint Configuration (`.n8nlintrc.json`)
+
+Create a `.n8nlintrc.json` file to configure lint rules. Each rule can be set to:
+
+- `"error"` / `"warning"` — enable with the specified severity
+- `"off"` or `false` — disable the rule
+- `["error", { ...options }]` — enable with severity and rule-specific options
+
+```json
+{
+  "rules": {
+    "orphaned-node": "warning",
+    "node-params": "error",
+    "webhook-id-required": "off"
+  }
+}
+```
+
+#### Lint Rules with Options
+
+##### `banned-node`
+
+Detects usage of banned node types. Requires the array config format to specify which nodes are banned.
+
+| Option | Type | Description |
+|--------|------|-------------|
+| `nodes` | `Array<{ type: string; reason?: string }>` | List of banned node types |
+
+- `type` — the `node.type` identifier (e.g., `n8n-nodes-base.executeCommand`)
+- `reason` — optional; included in the violation message when provided
+
+```json
+{
+  "rules": {
+    "banned-node": ["error", {
+      "nodes": [
+        { "type": "n8n-nodes-base.executeCommand", "reason": "Security risk: arbitrary command execution" },
+        { "type": "n8n-nodes-base.code", "reason": "Use HTTP Request node instead" },
+        { "type": "n8n-nodes-base.ssh" }
+      ]
+    }]
+  }
+}
+```
+
+##### `schedule-trigger-frequency`
+
+Validates that Schedule Trigger nodes don't fire more frequently than a configured minimum interval.
+
+| Option | Type | Description |
+|--------|------|-------------|
+| `minInterval` | `"minutes"` \| `"hourly"` \| `"daily"` \| `"weekly"` \| `"monthly"` | Minimum allowed trigger interval (default: `"hourly"`) |
+
+```json
+{
+  "rules": {
+    "schedule-trigger-frequency": ["warning", { "minInterval": "daily" }]
+  }
+}
+```
+
 ### `fmt`
 
 Format workflow files by reorganizing node positions.
