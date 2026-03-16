@@ -1,6 +1,6 @@
 import type { Command } from "commander";
 import { hasAllTags, parseTagFilter } from "@/common/tags.ts";
-import { loadLintConfig } from "@/lint/config.ts";
+import { getRuleOptions, loadLintConfig } from "@/lint/config.ts";
 import { formatJSON } from "@/lint/output/json.ts";
 import type { LintResult } from "@/lint/output/result.ts";
 import { hasErrors } from "@/lint/output/result.ts";
@@ -112,7 +112,7 @@ export function registerLintCommand(program: Command): void {
 
         // Run each enabled rule
         for (const { rule, severity } of enabledRules) {
-          const violations = rule.check(workflow, rawJSON);
+          const violations = rule.check(workflow, rawJSON, getRuleOptions(config, rule.name));
           for (const v of violations) {
             result.violations.push({
               ...v,
