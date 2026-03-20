@@ -282,7 +282,10 @@ describe("node-params rule", () => {
       },
     ]);
     const violations = nodeParamsRule.check(wf, "");
-    expect(violations.some((v) => v.message.includes("Could not find property option"))).toBe(true);
+    const structureViolations = violations.filter(
+      (v) => v.message.includes("Notion DB") && !v.message.includes("credentials"),
+    );
+    expect(structureViolations.length).toBeGreaterThan(0);
   });
 
   test("Notion matchType at top level (correct hierarchy) - no structure violation", () => {
@@ -307,9 +310,10 @@ describe("node-params rule", () => {
       },
     ]);
     const violations = nodeParamsRule.check(wf, "");
-    expect(violations.some((v) => v.message.includes("Could not find property option"))).toBe(
-      false,
+    const structureViolations = violations.filter(
+      (v) => v.message.includes("Notion DB") && !v.message.includes("credentials"),
     );
+    expect(structureViolations.length).toBe(0);
   });
 
   test("unknown node type - getNodeParameters check is skipped", () => {

@@ -28,7 +28,13 @@ function buildIndex(): Map<string, CachedNode[]> {
   for (const pkg of PACKAGES) {
     const fullPath = resolve(pkg.path);
     if (!existsSync(fullPath)) continue;
-    const rawNodes: RawNodeEntry[] = JSON.parse(readFileSync(fullPath, "utf-8"));
+    let rawNodes: RawNodeEntry[];
+    try {
+      rawNodes = JSON.parse(readFileSync(fullPath, "utf-8")) as RawNodeEntry[];
+    } catch {
+      console.warn(`Warning: Failed to load node properties from ${fullPath}`);
+      continue;
+    }
     for (const raw of rawNodes) {
       const nodeType = `${pkg.prefix}.${raw.name}`;
       const versions = Array.isArray(raw.version) ? raw.version : [raw.version];
