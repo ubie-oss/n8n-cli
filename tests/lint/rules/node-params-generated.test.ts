@@ -940,7 +940,7 @@ describe("node-params rule: filter and if", () => {
         id: "1",
         name: "Filter",
         type: "n8n-nodes-base.filter",
-        typeVersion: 1,
+        typeVersion: 2,
         position: [0, 0],
         parameters: { conditions: { rules: [{ leftValue: "a", rightValue: "b" }] } },
       },
