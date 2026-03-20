@@ -1,6 +1,9 @@
+import type { INodeParameters, INodeProperties } from "n8n-workflow";
+import { getNodeParameters } from "n8n-workflow";
 import type { Node, Workflow } from "@/api/types.ts";
 import type { NodeTypeSchema, ParamType } from "./node-params-schema.ts";
 import { lookupSchemas, matchesCondition } from "./node-params-schema.ts";
+import { lookupRawProperties } from "./node-properties-loader.ts";
 import type { Rule } from "./rule.ts";
 import type { Violation } from "./violation.ts";
 
@@ -19,6 +22,27 @@ export const nodeParamsRule: Rule = {
       for (const schema of schemas) {
         if (!matchesCondition(schema, (node.parameters as Record<string, unknown>) ?? {})) continue;
         violations.push(...checkNode(node, schema));
+      }
+
+      // Validate parameter structure using n8n-workflow's getNodeParameters
+      const rawProps = lookupRawProperties(node.type, node.typeVersion);
+      if (rawProps && node.parameters) {
+        try {
+          getNodeParameters(
+            rawProps as INodeProperties[],
+            node.parameters as INodeParameters,
+            false,
+            false,
+            { typeVersion: node.typeVersion },
+            null,
+          );
+        } catch (e) {
+          violations.push({
+            rule: "node-params",
+            severity: "warning",
+            message: `Node "${node.name}" (${node.type}): ${e instanceof Error ? e.message : String(e)}`,
+          });
+        }
       }
     }
     return violations;

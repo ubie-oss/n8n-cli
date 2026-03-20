@@ -258,6 +258,78 @@ describe("node-params rule", () => {
     expect(violations.some((v) => v.message.includes("text"))).toBe(true);
   });
 
+  // --- getNodeParameters structure validation tests ---
+
+  test("Notion matchType nested inside filters (wrong hierarchy) - violation", () => {
+    const wf = makeWorkflow([
+      {
+        id: "1",
+        name: "Notion DB",
+        type: "n8n-nodes-base.notion",
+        typeVersion: 2,
+        position: [0, 0],
+        parameters: {
+          resource: "databasePage",
+          operation: "getAll",
+          filterType: "manual",
+          filters: {
+            matchType: "anyFilter",
+            conditions: [
+              { key: "title|title", type: "title", condition: "equals", titleValue: "test" },
+            ],
+          },
+        },
+      },
+    ]);
+    const violations = nodeParamsRule.check(wf, "");
+    const structureViolations = violations.filter(
+      (v) => v.message.includes("Notion DB") && !v.message.includes("credentials"),
+    );
+    expect(structureViolations.length).toBeGreaterThan(0);
+  });
+
+  test("Notion matchType at top level (correct hierarchy) - no structure violation", () => {
+    const wf = makeWorkflow([
+      {
+        id: "1",
+        name: "Notion DB",
+        type: "n8n-nodes-base.notion",
+        typeVersion: 2,
+        position: [0, 0],
+        parameters: {
+          resource: "databasePage",
+          operation: "getAll",
+          filterType: "manual",
+          matchType: "anyFilter",
+          filters: {
+            conditions: [
+              { key: "title|title", type: "title", condition: "equals", titleValue: "test" },
+            ],
+          },
+        },
+      },
+    ]);
+    const violations = nodeParamsRule.check(wf, "");
+    const structureViolations = violations.filter(
+      (v) => v.message.includes("Notion DB") && !v.message.includes("credentials"),
+    );
+    expect(structureViolations.length).toBe(0);
+  });
+
+  test("unknown node type - getNodeParameters check is skipped", () => {
+    const wf = makeWorkflow([
+      {
+        id: "1",
+        name: "Custom",
+        type: "n8n-nodes-base.nonExistentNode",
+        typeVersion: 1,
+        position: [0, 0],
+        parameters: { foo: "bar" },
+      },
+    ]);
+    expect(nodeParamsRule.check(wf, "").length).toBe(0);
+  });
+
   test("condition-based schema - slack file mode", () => {
     const wf = makeWorkflow([
       {
