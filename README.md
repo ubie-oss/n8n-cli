@@ -208,6 +208,24 @@ Validates that Schedule Trigger nodes don't fire more frequently than a configur
 }
 ```
 
+#### Other Lint Rules
+
+##### `filter-operator-valid`
+
+Validates that If / Filter node conditions (typeVersion >= 2) use valid operator operations. For example, it flags `isNotEmpty` and suggests `notEmpty` instead. Invalid operations silently evaluate to `false` at runtime, making bugs hard to detect.
+
+Targets: `n8n-nodes-base.if`, `n8n-nodes-base.filter`
+
+Enabled by default with severity `error`.
+
+```json
+{
+  "rules": {
+    "filter-operator-valid": "error"
+  }
+}
+```
+
 ### `fmt`
 
 Format workflow files by reorganizing node positions.

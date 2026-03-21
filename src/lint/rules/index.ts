@@ -3,6 +3,7 @@ import { aiAgentOutputRefRule } from "./ai-agent-output-ref.ts";
 import { bannedNodeRule } from "./banned-node.ts";
 import { connectionRefRule } from "./connection-ref.ts";
 import { expressionModePrefixRule } from "./expression-mode-prefix.ts";
+import { filterOperatorValidRule } from "./filter-operator-valid.ts";
 import { implicitJsonRefRule } from "./implicit-json-ref.ts";
 import { jsonSyntaxRule } from "./json-syntax.ts";
 import { nodeParamsRule } from "./node-params.ts";
@@ -29,5 +30,6 @@ export function registerDefaultRules(): RuleRegistry {
   registry.register(scheduleTriggerFrequencyRule);
   registry.register(webhookIdRequiredRule);
   registry.register(bannedNodeRule);
+  registry.register(filterOperatorValidRule);
   return registry;
 }
