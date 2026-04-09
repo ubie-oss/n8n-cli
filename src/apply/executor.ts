@@ -325,6 +325,15 @@ export class Executor {
     return op;
   }
 
+  /** Strip settings the n8n API exports but rejects on write. */
+  private sanitizeSettings(settings?: Record<string, unknown>): Record<string, unknown> | undefined {
+    if (!settings) return undefined;
+    const STRIP_SETTINGS = ['availableInMCP', 'binaryMode', 'callerPolicy'];
+    return Object.fromEntries(
+      Object.entries(settings).filter(([k]) => !STRIP_SETTINGS.includes(k))
+    );
+  }
+
   /** Performs the actual create operation. */
   private async executeCreate(wf: WorkflowFile, op: ApplyOperation): Promise<void> {
     const workflow = wf.workflow!;
@@ -332,7 +341,7 @@ export class Executor {
       name: workflow.name,
       nodes: workflow.nodes,
       connections: workflow.connections,
-      settings: workflow.settings,
+      settings: this.sanitizeSettings(workflow.settings as Record<string, unknown>),
       staticData: workflow.staticData,
     };
 
@@ -353,7 +362,7 @@ export class Executor {
       name: workflow.name,
       nodes: workflow.nodes,
       connections: workflow.connections,
-      settings: workflow.settings,
+      settings: this.sanitizeSettings(workflow.settings as Record<string, unknown>),
       staticData: workflow.staticData,
     };
 
