@@ -1,4 +1,5 @@
 import { registerApplyCommand } from "./cli/commands/apply.ts";
+import { registerConvertCommand } from "./cli/commands/convert.ts";
 import { registerCredentialCommand } from "./cli/commands/credential.ts";
 import { registerDataTableCommand } from "./cli/commands/data-table.ts";
 import { registerExecutionCommand } from "./cli/commands/execution.ts";
@@ -21,6 +22,7 @@ registerTagCommand(program);
 registerCredentialCommand(program);
 registerDataTableCommand(program);
 registerApplyCommand(program);
+registerConvertCommand(program);
 registerImportCommand(program);
 registerLintCommand(program);
 registerNodeSchemaCommand(program);

@@ -5,6 +5,7 @@ A command-line interface for managing [n8n](https://n8n.io/) workflows as code. 
 ## Features
 
 - **Apply** - Deploy local workflow definitions (JSON/YAML) to an n8n server with dry-run support and conflict detection
+- **Convert** - Convert workflow files between JSON and YAML formats locally
 - **Import** - Pull workflows from an n8n server to local files, with optional YAML conversion and code externalization
 - **Lint** - Validate workflow definitions against configurable rules
 - **Format** - Auto-organize node positions for cleaner workflow layouts
@@ -108,6 +109,50 @@ n8n-cli apply [options]
 | `0` | Success |
 | `1` | Error detected |
 | `2` | Conflict detected (dry-run) or warning detected (non-force mode) |
+
+### `convert`
+
+Convert workflow files between formats (JSON ↔ YAML). This is a local-only operation that does not require an n8n server connection.
+
+```bash
+n8n-cli convert [options] [files...]
+```
+
+| Option | Description |
+|--------|-------------|
+| `--format <format>` | Target format: `json`, `yaml` (required) |
+| `-d, --directory <dir>` | Directory to scan for workflow files |
+| `--ids <ids>` | Comma-separated workflow IDs to convert |
+| `--tags <tags>` | Filter by tags (comma-separated, AND condition) |
+| `-t, --threshold <n>` | Minimum lines for code externalization (JSON→YAML) |
+| `--dry-run` | Preview conversions without writing files |
+| `--keep` | Keep original files after conversion |
+
+**Examples:**
+
+```bash
+# Convert all JSON workflows in a directory to YAML
+n8n-cli convert -d ./definitions --format yaml
+
+# Convert specific workflows by ID
+n8n-cli convert -d ./definitions --format json --ids wf-100,wf-200
+
+# Preview conversions without making changes
+n8n-cli convert -d ./definitions --format yaml --dry-run
+
+# Convert but keep the original files
+n8n-cli convert -d ./definitions --format yaml --keep
+
+# Convert a specific file
+n8n-cli convert --format yaml workflow__wf-100.json
+```
+
+**Behavior:**
+
+- **JSON → YAML**: Generates YAML with code externalization (`_subfiles/`) and `description.md`
+- **YAML → JSON**: Resolves `!include` directives (inlines external files) and removes `_subfiles/` directories
+- Files already in the target format are skipped
+- Original files are removed after conversion unless `--keep` is specified
 
 ### `import`
 

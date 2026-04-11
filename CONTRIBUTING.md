@@ -44,6 +44,7 @@ n8n-cli/
 │   ├── cli/              # CLI commands and output formatters
 │   ├── common/           # Shared utilities
 │   ├── config/           # Configuration loading
+│   ├── convert/          # Format conversion (JSON ↔ YAML)
 │   ├── formatter/        # Workflow formatting
 │   ├── git/              # Git integration
 │   ├── importer/         # Import command logic
