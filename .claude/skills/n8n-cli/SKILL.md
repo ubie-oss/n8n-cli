@@ -459,11 +459,46 @@ Config file search order:
 # 3. Review error details and fix the workflow
 ```
 
-<<<<<<< HEAD
-### 9. Data Tables
-=======
-### 8. Data Tables
->>>>>>> 2127c8ac10de74433e5bdbf0da7fc5a9437c9369
+### 9. Convert (Format Conversion)
+
+**Convert workflow files between JSON and YAML formats (local-only, no API needed):**
+
+```bash
+# Convert all JSON workflows to YAML
+./n8n-cli convert -d ./definitions --format yaml
+
+# Convert specific workflows by ID
+./n8n-cli convert -d ./definitions --format json --ids <workflow-id>
+
+# Preview without writing
+./n8n-cli convert -d ./definitions --format yaml --dry-run
+
+# Keep original files
+./n8n-cli convert -d ./definitions --format yaml --keep
+
+# Convert a single file
+./n8n-cli convert --format yaml definitions/<filename>.json
+```
+
+**Options:**
+
+| Option | Description |
+|--------|-------------|
+| `--format <format>` | Target format: `json`, `yaml` (required) |
+| `-d, --directory <dir>` | Directory to scan for workflow files |
+| `--ids <ids>` | Comma-separated workflow IDs to convert |
+| `--tags <tags>` | Filter by tags (comma-separated, AND condition) |
+| `-t, --threshold <n>` | Minimum lines for code externalization (JSON→YAML) |
+| `--dry-run` | Preview only |
+| `--keep` | Keep original files |
+
+**Behavior:**
+- JSON→YAML: generates YAML + `_subfiles/` with externalized code
+- YAML→JSON: resolves `!include` refs and removes `_subfiles/`
+- Files already in target format are skipped
+- Original files removed after conversion unless `--keep`
+
+### 10. Data Tables
 
 **Manage data tables and rows:**
 
@@ -525,8 +560,7 @@ Config file search order:
 
 Supported column types: `string`, `number`, `boolean`, `date`, `json`.
 
-<<<<<<< HEAD
-### 10. Trace (Data Flow Analysis)
+### 11. Trace (Data Flow Analysis)
 
 **Analyze data flow and cardinality through a workflow:**
 
@@ -570,7 +604,7 @@ When a node shows `?` for estimated items, it means cardinality could not be sta
 4. For `HTTP Request`, check if the response is an array or single object
 5. **Do not assume `?` means "many"** — it simply means "unknown at static analysis time"
 
-### 11. Credential (Credential Management)
+### 12. Credential (Credential Management)
 
 **Check available credentials:**
 
@@ -589,7 +623,7 @@ When a node shows `?` for estimated items, it means cardinality could not be sta
 - If a node uses an external service, verify the corresponding credential exists
 - If a credential is missing, ask the user to create it in the n8n UI
 
-### 12. Node Schema (Node Schema Reference)
+### 13. Node Schema (Node Schema Reference)
 
 **Check node parameter definitions:**
 
@@ -622,9 +656,6 @@ When a node shows `?` for estimated items, it means cardinality could not be sta
 |--------|-------------|
 | `--type <nodeType>` | Specific node type schema (e.g., `n8n-nodes-base.slack`) |
 | `-o, --output-dir <dir>` | Dump all nodes as individual files to directory |
-
-=======
->>>>>>> 2127c8ac10de74433e5bdbf0da7fc5a9437c9369
 ## Typical Workflow Operations
 
 ### Editing Workflows
