@@ -9,6 +9,7 @@ export type SourceType = "json" | "yaml";
 /** ApplyOptions holds configuration for the apply command. */
 export interface ApplyOptions {
   directory: string;
+  all: boolean;
   dryRun: boolean;
   force: boolean;
   projectID: string;
@@ -27,6 +28,7 @@ export interface ApplyOptions {
 export function defaultApplyOptions(): ApplyOptions {
   return {
     directory: "./definitions",
+    all: false,
     dryRun: false,
     force: false,
     projectID: "",

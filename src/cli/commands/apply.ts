@@ -28,6 +28,10 @@ export function registerApplyCommand(program: Command): void {
     .option("--yaml", "Enable YAML file processing")
     .option("--no-yaml", "Disable YAML processing")
     .option(
+      "--dangerously-apply-all",
+      "Apply ALL workflows in the directory, overwriting remote state (required when no scope filter is specified)",
+    )
+    .option(
       "--warn-duplicates",
       "Warn when creating workflows with names that already exist remotely",
     )
@@ -36,6 +40,7 @@ export function registerApplyCommand(program: Command): void {
 
       const opts = defaultApplyOptions();
       opts.directory = options.dir as string;
+      opts.all = !!options.dangerouslyApplyAll;
       opts.dryRun = !!options.dryRun;
       opts.force = !!options.force;
       opts.noAutoTag = !!options.noAutoTag;
@@ -73,6 +78,24 @@ export function registerApplyCommand(program: Command): void {
         if (opts.filterByTags.length > 0) {
           console.log(`Filtering by tags: ${opts.filterByTags.join(", ")} (AND)`);
         }
+      }
+
+      // Require explicit scope: --ids, --from-git-changes, or --dangerously-apply-all
+      const hasScope = opts.ids.length > 0 || opts.fromGitChanges || opts.filterByTags.length > 0;
+      if (!hasScope && !opts.all) {
+        console.error(
+          [
+            "Error: No scope specified — refusing to apply all workflows.",
+            "",
+            "You must specify which workflows to apply:",
+            "  --ids <id1>,<id2>              Apply specific workflows by ID",
+            "  --from-git-changes <spec>      Apply only files changed in Git diff",
+            "",
+            "Applying without a scope filter is not allowed by default.",
+            "See --help for more options.",
+          ].join("\n"),
+        );
+        process.exit(1);
       }
 
       // Load CLI config from CLAUDE.md
