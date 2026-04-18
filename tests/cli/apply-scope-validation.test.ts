@@ -19,7 +19,17 @@ async function runApply(
   env?: Record<string, string>,
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   const proc = Bun.spawn(
-    ["bun", "run", CLI_ENTRY, "--api-url", "http://localhost:0", "--api-key", "dummy", "apply", ...args],
+    [
+      "bun",
+      "run",
+      CLI_ENTRY,
+      "--api-url",
+      "http://localhost:0",
+      "--api-key",
+      "dummy",
+      "apply",
+      ...args,
+    ],
     {
       stdout: "pipe",
       stderr: "pipe",
