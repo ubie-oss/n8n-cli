@@ -12,8 +12,13 @@ import { registerTestCommand } from "./cli/commands/test.ts";
 import { registerTraceCommand } from "./cli/commands/trace.ts";
 import { registerWorkflowCommand } from "./cli/commands/workflow.ts";
 import { createProgram } from "./cli/root.ts";
+import { maybeShowUpdateNotice, runUpdateCheck } from "./cli/update-check.ts";
 
 const program = createProgram();
+
+// Kick off the update check in the background — result is persisted to the
+// cache file and shown on the *next* run (keeps this run's exit path fast).
+const updateCheckPromise = runUpdateCheck().catch(() => {});
 
 // Register commands
 registerWorkflowCommand(program);
@@ -32,6 +37,8 @@ registerTraceCommand(program);
 
 try {
   await program.parseAsync(process.argv);
+  await updateCheckPromise;
+  maybeShowUpdateNotice();
 } catch (err) {
   if (err instanceof Error) {
     console.error(`Error: ${err.message}`);
