@@ -53,16 +53,37 @@ export function intervalToSeconds(entry: IntervalEntry): number | undefined {
  * Estimates minimum interval in seconds from a cron expression.
  * Only handles simple patterns; returns undefined (safe-side skip) for complex expressions.
  *
- * Standard cron: minute hour day-of-month month day-of-week
+ * Supports both:
+ * - 5-field standard cron: minute hour day-of-month month day-of-week
+ * - 6-field n8n cron:      second minute hour day-of-month month day-of-week
  */
 export function estimateCronIntervalSeconds(cron: string): number | undefined {
   const parts = cron.trim().split(/\s+/);
-  if (parts.length !== 5) return undefined;
 
-  const [minute, hour, dayOfMonth, _month, _dayOfWeek] = parts;
+  let minute: string;
+  let hour: string;
+  let dayOfMonth: string;
 
+  if (parts.length === 6) {
+    // 6-field cron (n8n format): second minute hour dom month dow
+    [, minute, hour, dayOfMonth] = parts as [string, string, string, string, string, string];
+  } else if (parts.length === 5) {
+    // 5-field standard cron: minute hour dom month dow
+    [minute, hour, dayOfMonth] = parts as [string, string, string, string, string];
+  } else {
+    return undefined;
+  }
+
+  return estimateFromMinuteHourDay(minute, hour, dayOfMonth);
+}
+
+function estimateFromMinuteHourDay(
+  minute: string,
+  hour: string,
+  dayOfMonth: string,
+): number | undefined {
   // Check minute field first (finest granularity)
-  const minuteInterval = parseCronField(minute!);
+  const minuteInterval = parseCronField(minute);
   if (minuteInterval !== undefined) {
     // If minute is *, interval is every minute = 60s
     // If minute is */N, interval is N minutes
@@ -74,9 +95,15 @@ export function estimateCronIntervalSeconds(cron: string): number | undefined {
     }
   }
 
+  // Minute is a list (e.g., "0,30") — estimate from the count of values per hour
+  const minuteListCount = countListValues(minute);
+  if (minuteListCount !== undefined && minuteListCount > 1 && hour === "*") {
+    return Math.floor(3600 / minuteListCount);
+  }
+
   // Minute is a specific number (e.g., "0") — check hour field
-  if (isSpecificNumber(minute!)) {
-    const hourInterval = parseCronField(hour!);
+  if (isSpecificNumber(minute)) {
+    const hourInterval = parseCronField(hour);
     if (hourInterval !== undefined) {
       if (hourInterval === 1) {
         return 3600; // every hour at specific minute
@@ -86,9 +113,15 @@ export function estimateCronIntervalSeconds(cron: string): number | undefined {
       }
     }
 
+    // Hour is a list (e.g., "0,6,12,18") — estimate from count per day
+    const hourListCount = countListValues(hour);
+    if (hourListCount !== undefined && hourListCount > 1) {
+      return Math.floor(86400 / hourListCount);
+    }
+
     // Hour is specific — check day field
-    if (isSpecificNumber(hour!)) {
-      const dayInterval = parseCronField(dayOfMonth!);
+    if (isSpecificNumber(hour)) {
+      const dayInterval = parseCronField(dayOfMonth);
       if (dayInterval !== undefined) {
         if (dayInterval === 1) {
           return 86400; // daily
@@ -96,7 +129,7 @@ export function estimateCronIntervalSeconds(cron: string): number | undefined {
         return dayInterval * 86400;
       }
       // Day is specific number → at most once per month
-      if (isSpecificNumber(dayOfMonth!)) {
+      if (isSpecificNumber(dayOfMonth)) {
         return 2592000;
       }
     }
@@ -116,6 +149,12 @@ function parseCronField(field: string): number | undefined {
 
 function isSpecificNumber(field: string): boolean {
   return /^\d+$/.test(field);
+}
+
+// Parses a comma-separated list of numbers (e.g., "0,15,30,45"). Returns the count, or undefined.
+function countListValues(field: string): number | undefined {
+  if (!/^\d+(,\d+)+$/.test(field)) return undefined;
+  return field.split(",").length;
 }
 
 /**
