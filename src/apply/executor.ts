@@ -326,13 +326,13 @@ export class Executor {
   }
 
   /** Strip settings the n8n API exports but rejects on write. */
-  private sanitizeSettings(
+  private stripWriteUnsupportedSettings(
     settings?: Record<string, unknown>,
   ): Record<string, unknown> | undefined {
     if (!settings) return undefined;
-    const STRIP_SETTINGS = ["binaryMode"];
+    const WRITE_UNSUPPORTED_SETTINGS = ["binaryMode"];
     return Object.fromEntries(
-      Object.entries(settings).filter(([k]) => !STRIP_SETTINGS.includes(k)),
+      Object.entries(settings).filter(([k]) => !WRITE_UNSUPPORTED_SETTINGS.includes(k)),
     );
   }
 
@@ -343,7 +343,7 @@ export class Executor {
       name: workflow.name,
       nodes: workflow.nodes,
       connections: workflow.connections,
-      settings: this.sanitizeSettings(workflow.settings as Record<string, unknown>),
+      settings: this.stripWriteUnsupportedSettings(workflow.settings as Record<string, unknown>),
       staticData: workflow.staticData,
     };
 
@@ -364,7 +364,7 @@ export class Executor {
       name: workflow.name,
       nodes: workflow.nodes,
       connections: workflow.connections,
-      settings: this.sanitizeSettings(workflow.settings as Record<string, unknown>),
+      settings: this.stripWriteUnsupportedSettings(workflow.settings as Record<string, unknown>),
       staticData: workflow.staticData,
     };
 
