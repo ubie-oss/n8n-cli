@@ -12,6 +12,7 @@ interface JSONViolation {
   rule: string;
   message: string;
   severity: string;
+  url?: string;
 }
 
 interface JSONSummary {
@@ -34,6 +35,7 @@ export function formatJSON(result: LintResult): string {
       };
       if (v.line && v.line > 0) jv.line = v.line;
       if (v.column && v.column > 0) jv.column = v.column;
+      if (v.url) jv.url = v.url;
       return jv;
     }),
     summary: {

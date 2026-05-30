@@ -14,4 +14,6 @@ export interface Violation {
   message: string;
   /** Severity level (error or warning) */
   severity: Severity;
+  /** URL to the workflow in n8n UI (remote mode only) */
+  url?: string;
 }

@@ -20,6 +20,9 @@ export function formatText(result: LintResult): string {
 
     const severityLabel = v.severity === "warning" ? "warning" : "error";
     lines.push(`${location}: ${severityLabel}[${v.rule}]: ${v.message}`);
+    if (v.url) {
+      lines.push(`  ${v.url}`);
+    }
   }
 
   lines.push("");
