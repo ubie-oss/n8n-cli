@@ -330,7 +330,7 @@ export class Executor {
     settings?: Record<string, unknown>,
   ): Record<string, unknown> | undefined {
     if (!settings) return undefined;
-    const STRIP_SETTINGS = ["availableInMCP", "binaryMode", "callerPolicy"];
+    const STRIP_SETTINGS = ["binaryMode"];
     return Object.fromEntries(
       Object.entries(settings).filter(([k]) => !STRIP_SETTINGS.includes(k)),
     );
