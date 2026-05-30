@@ -326,11 +326,13 @@ export class Executor {
   }
 
   /** Strip settings the n8n API exports but rejects on write. */
-  private sanitizeSettings(settings?: Record<string, unknown>): Record<string, unknown> | undefined {
+  private sanitizeSettings(
+    settings?: Record<string, unknown>,
+  ): Record<string, unknown> | undefined {
     if (!settings) return undefined;
-    const STRIP_SETTINGS = ['availableInMCP', 'binaryMode', 'callerPolicy'];
+    const STRIP_SETTINGS = ["availableInMCP", "binaryMode", "callerPolicy"];
     return Object.fromEntries(
-      Object.entries(settings).filter(([k]) => !STRIP_SETTINGS.includes(k))
+      Object.entries(settings).filter(([k]) => !STRIP_SETTINGS.includes(k)),
     );
   }
 
