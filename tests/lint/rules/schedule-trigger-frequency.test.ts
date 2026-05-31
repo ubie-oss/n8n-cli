@@ -170,6 +170,55 @@ describe("estimateCronIntervalSeconds", () => {
   test("every 2 hours: 0 */2 * * *", () => {
     expect(estimateCronIntervalSeconds("0 */2 * * *")).toBe(7200);
   });
+
+  // 6-field cron (n8n format: second minute hour dom month dow)
+  test("6-field: every 5 minutes: 0 */5 * * * *", () => {
+    expect(estimateCronIntervalSeconds("0 */5 * * * *")).toBe(300);
+  });
+
+  test("6-field: every minute: 0 * * * * *", () => {
+    expect(estimateCronIntervalSeconds("0 * * * * *")).toBe(60);
+  });
+
+  test("6-field: every hour: 0 0 * * * *", () => {
+    expect(estimateCronIntervalSeconds("0 0 * * * *")).toBe(3600);
+  });
+
+  test("6-field: every 3 hours: 0 0 */3 * * *", () => {
+    expect(estimateCronIntervalSeconds("0 0 */3 * * *")).toBe(10800);
+  });
+
+  test("6-field: daily at midnight: 0 0 0 * * *", () => {
+    expect(estimateCronIntervalSeconds("0 0 0 * * *")).toBe(86400);
+  });
+
+  test("6-field: monthly: 0 0 0 1 * *", () => {
+    expect(estimateCronIntervalSeconds("0 0 0 1 * *")).toBe(2592000);
+  });
+
+  test("6-field: weekday restriction still works: 0 0 10 * * 1-5", () => {
+    // Minute=0, hour=10 (specific), day=* → daily
+    expect(estimateCronIntervalSeconds("0 0 10 * * 1-5")).toBe(86400);
+  });
+
+  // Comma-separated values
+  test("minute list: 0,30 * * * * (every 30 min)", () => {
+    expect(estimateCronIntervalSeconds("0,30 * * * *")).toBe(1800);
+  });
+
+  test("hour list: 0 0,6,12,18 * * * (every 6 hours)", () => {
+    expect(estimateCronIntervalSeconds("0 0,6,12,18 * * *")).toBe(21600);
+  });
+
+  test("6-field hour list: 0 0 0,6,12,18 * * * (every 6 hours)", () => {
+    expect(estimateCronIntervalSeconds("0 0 0,6,12,18 * * *")).toBe(21600);
+  });
+
+  test("6-field minute list: 0 0,30 8-20 * * 1-5", () => {
+    // minute=0,30 (2 per hour), hour=8-20 (not * but complex) → can't determine fully
+    // hour is not *, so minute list estimation doesn't apply; falls through to undefined
+    expect(estimateCronIntervalSeconds("0 0,30 8-20 * * 1-5")).toBeUndefined();
+  });
 });
 
 describe("cron-based schedule trigger", () => {
@@ -189,6 +238,25 @@ describe("cron-based schedule trigger", () => {
     const wf = makeWorkflow([{ field: "cronExpression", cronExpression: "*/5 * * * *" }]);
     const violations = scheduleTriggerFrequencyRule.check(wf, "", { minInterval: "hourly" });
     expect(violations.length).toBe(1);
+  });
+
+  test("6-field cron every 5 minutes with minInterval=hourly → violation", () => {
+    const wf = makeWorkflow([{ field: "cronExpression", cronExpression: "0 */5 * * * *" }]);
+    const violations = scheduleTriggerFrequencyRule.check(wf, "", { minInterval: "hourly" });
+    expect(violations.length).toBe(1);
+    expect(violations[0]!.message).toContain("300s");
+  });
+
+  test("6-field cron every hour with minInterval=hourly → OK", () => {
+    const wf = makeWorkflow([{ field: "cronExpression", cronExpression: "0 0 * * * *" }]);
+    const violations = scheduleTriggerFrequencyRule.check(wf, "", { minInterval: "hourly" });
+    expect(violations.length).toBe(0);
+  });
+
+  test("6-field cron daily with minInterval=hourly → OK", () => {
+    const wf = makeWorkflow([{ field: "cronExpression", cronExpression: "0 0 0 * * *" }]);
+    const violations = scheduleTriggerFrequencyRule.check(wf, "", { minInterval: "hourly" });
+    expect(violations.length).toBe(0);
   });
 });
 
