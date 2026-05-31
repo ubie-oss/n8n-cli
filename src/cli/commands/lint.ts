@@ -1,6 +1,6 @@
 import type { Command } from "commander";
 import { hasAllTags, parseTagFilter } from "@/common/tags.ts";
-import { getRuleOptions, loadLintConfig } from "@/lint/config.ts";
+import { findConfigFile, getRuleOptions, loadLintConfig } from "@/lint/config.ts";
 import { formatJSON } from "@/lint/output/json.ts";
 import type { LintResult } from "@/lint/output/result.ts";
 import { hasErrors } from "@/lint/output/result.ts";
@@ -32,8 +32,15 @@ export function registerLintCommand(program: Command): void {
         return;
       }
 
-      // Load config
-      const config = opts.config ? loadLintConfig(opts.config) : loadLintConfig();
+      // Load config (auto-discover from CWD when -c is not specified)
+      let resolvedConfigPath: string | undefined = opts.config;
+      if (!resolvedConfigPath) {
+        resolvedConfigPath = findConfigFile(process.cwd());
+        if (resolvedConfigPath && opts.output !== "json") {
+          console.error(`Using config: ${resolvedConfigPath}`);
+        }
+      }
+      const config = loadLintConfig(resolvedConfigPath);
 
       // Get enabled rules
       const enabledRules = registry.enabledRulesWithConfig(config, opts.disableRule);

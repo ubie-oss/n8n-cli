@@ -1,4 +1,24 @@
 import fs from "node:fs";
+import path from "node:path";
+
+const CONFIG_FILENAME = ".n8nlintrc.json";
+
+/**
+ * Searches for a config file by walking up from startDir to the filesystem root.
+ * Returns the first `.n8nlintrc.json` found, or undefined if none exists.
+ */
+export function findConfigFile(startDir: string): string | undefined {
+  let dir = path.resolve(startDir);
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    const candidate = path.join(dir, CONFIG_FILENAME);
+    if (fs.existsSync(candidate)) return candidate;
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return undefined;
+}
 
 /** RuleConfig represents the configuration for a single rule */
 export interface RuleConfig {
@@ -15,12 +35,13 @@ export interface LintConfig {
   rulesConfig: Map<string, RuleConfig>;
 }
 
-/** Load reads and parses a lint config file. Returns default if not found. */
+/** Load reads and parses a lint config file. Auto-discovers from CWD if no path given. */
 export function loadLintConfig(configPath?: string): LintConfig {
   const defaultConfig: LintConfig = { rulesConfig: new Map() };
 
   if (!configPath) {
-    return defaultConfig;
+    configPath = findConfigFile(process.cwd());
+    if (!configPath) return defaultConfig;
   }
 
   let data: string;
