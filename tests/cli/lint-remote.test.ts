@@ -117,7 +117,7 @@ async function startMockServer(
     },
   });
 
-  return { port: server.port, server };
+  return { port: server.port!, server };
 }
 
 /** Run `n8n-cli lint` with the given args and parse JSON output. */
