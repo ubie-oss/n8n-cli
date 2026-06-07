@@ -1,4 +1,5 @@
 import type { Command } from "commander";
+import { resolveContext } from "@/cli/root.ts";
 import { hasAllTags, parseTagFilter } from "@/common/tags.ts";
 import { findConfigFile, getRuleOptions, loadLintConfig } from "@/lint/config.ts";
 import { formatJSON } from "@/lint/output/json.ts";
@@ -15,12 +16,18 @@ export function registerLintCommand(program: Command): void {
     .description("Lint workflow definition files")
     .option("-d, --dir <directory>", "Directory to scan for workflow files")
     .option("-f, --file <files...>", "Specific files to lint (can be repeated)")
+    .option(
+      "--remote",
+      "Fetch workflows from n8n API instead of local files (requires N8N_API_URL and N8N_API_KEY)",
+    )
+    .option("--active-only", "Only lint active workflows (requires --remote)")
+    .option("--ui-url <url>", "n8n UI base URL for workflow links (env: N8N_UI_URL)")
     .option("-c, --config <path>", "Path to .n8nlintrc.json config file")
     .option("--disable-rule <rules...>", "Disable specific rules (can be repeated)")
     .option("--list-rules", "List all available rules and exit")
     .option("-o, --output <format>", "Output format: text, json", "text")
     .option("--tags <tags>", "Filter by tags (comma-separated, AND condition)")
-    .action(async (opts) => {
+    .action(async (opts, command) => {
       const registry = registerDefaultRules();
 
       // List rules mode
@@ -57,93 +64,188 @@ export function registerLintCommand(program: Command): void {
         }
       }
 
-      // Collect files to lint
-      let files: string[] = [];
-      if (opts.file) {
-        files = opts.file;
-      } else if (opts.dir) {
-        files = scanFiles(opts.dir);
+      if (opts.remote) {
+        // Remote mode: fetch workflows from n8n API
+        if (opts.dir || opts.file) {
+          console.error("Error: --remote cannot be used with --dir or --file");
+          process.exit(1);
+        }
+
+        const ctx = resolveContext(command.parent!);
+        const workflows = await ctx.workflowService.listAllWorkflows({
+          active: opts.activeOnly ? true : undefined,
+          tags: filterByTags.length > 0 ? filterByTags : undefined,
+        });
+
+        const uiURL = opts.uiUrl ?? process.env.N8N_UI_URL ?? deriveUIURL(ctx.config.apiURL);
+
+        await lintRemote(workflows, enabledRules, config, uiURL, opts);
       } else {
-        console.error("Error: specify --dir or --file to indicate files to lint");
-        process.exit(1);
-      }
-
-      if (files.length === 0) {
-        console.error("No files found to lint");
-        process.exit(1);
-      }
-
-      // Run linting
-      const result: LintResult = {
-        violations: [],
-        filesChecked: 0,
-        filesFailed: 0,
-      };
-
-      const failedFiles = new Set<string>();
-
-      for (const filePath of files) {
-        result.filesChecked++;
-
-        const outcome = await loadFileForLint(filePath, filterByTags);
-        if (outcome.status === "skipped") {
-          result.violations.push({
-            file: filePath,
-            rule: "file-read",
-            severity: "warning",
-            message: outcome.message,
-          });
-          result.filesChecked--;
-          continue;
-        }
-        if (outcome.status === "error") {
-          result.violations.push({
-            file: filePath,
-            rule: "file-read",
-            severity: "error",
-            message: outcome.message,
-          });
-          failedFiles.add(filePath);
-          continue;
-        }
-
-        const { rawJSON, workflow } = outcome.data;
-
-        // Filter by tags
-        if (workflow && filterByTags.length > 0) {
-          if (!hasAllTags(workflow.tags, filterByTags)) {
-            result.filesChecked--; // Don't count filtered files
-            continue;
-          }
-        }
-
-        // Run each enabled rule
-        for (const { rule, severity } of enabledRules) {
-          const violations = rule.check(workflow, rawJSON, getRuleOptions(config, rule.name));
-          for (const v of violations) {
-            result.violations.push({
-              ...v,
-              file: v.file ?? filePath,
-              severity,
-            });
-            failedFiles.add(filePath);
-          }
-        }
-      }
-
-      result.filesFailed = failedFiles.size;
-
-      // Output results
-      const outputFormat = opts.output ?? "text";
-      if (outputFormat === "json") {
-        console.log(formatJSON(result));
-      } else {
-        console.log(formatText(result));
-      }
-
-      // Exit with error code if there are errors
-      if (hasErrors(result)) {
-        process.exit(1);
+        // Local mode: read files from filesystem
+        await lintLocal(enabledRules, config, filterByTags, opts);
       }
     });
+}
+
+/**
+ * Derive the UI URL from the API URL by removing common API-only subdomains.
+ * e.g. "https://n8n-direct.ubie.dev" → "https://n8n.ubie.dev"
+ */
+function deriveUIURL(apiURL: string): string {
+  return apiURL.replace("n8n-direct.", "n8n.");
+}
+
+/** Display name for a remote workflow used in violation output. */
+function workflowDisplayName(name: string, id: string | undefined): string {
+  return id ? `${name} (${id})` : name;
+}
+
+/** Build the n8n UI URL for a workflow. */
+function workflowURL(baseURL: string, id: string | undefined): string | undefined {
+  if (!id) return undefined;
+  const base = baseURL.replace(/\/+$/, "");
+  return `${base}/workflow/${id}`;
+}
+
+/** Lint workflows fetched from the n8n API. */
+async function lintRemote(
+  workflows: import("@/api/types.ts").Workflow[],
+  enabledRules: ReturnType<ReturnType<typeof registerDefaultRules>["enabledRulesWithConfig"]>,
+  config: ReturnType<typeof loadLintConfig>,
+  uiURL: string,
+  opts: { output?: string },
+): Promise<void> {
+  const result: LintResult = {
+    violations: [],
+    filesChecked: 0,
+    filesFailed: 0,
+  };
+
+  const failedWorkflows = new Set<string>();
+
+  for (const workflow of workflows) {
+    result.filesChecked++;
+    const displayName = workflowDisplayName(workflow.name, workflow.id);
+    const rawJSON = JSON.stringify(workflow);
+    const url = workflowURL(uiURL, workflow.id);
+
+    for (const { rule, severity } of enabledRules) {
+      const violations = rule.check(workflow, rawJSON, getRuleOptions(config, rule.name));
+      for (const v of violations) {
+        result.violations.push({
+          ...v,
+          file: v.file ?? displayName,
+          url,
+          severity,
+        });
+        failedWorkflows.add(displayName);
+      }
+    }
+  }
+
+  result.filesFailed = failedWorkflows.size;
+
+  const outputFormat = opts.output ?? "text";
+  if (outputFormat === "json") {
+    console.log(formatJSON(result));
+  } else {
+    console.log(formatText(result));
+  }
+
+  if (hasErrors(result)) {
+    process.exit(1);
+  }
+}
+
+/** Lint workflow files from the local filesystem. */
+async function lintLocal(
+  enabledRules: ReturnType<ReturnType<typeof registerDefaultRules>["enabledRulesWithConfig"]>,
+  config: ReturnType<typeof loadLintConfig>,
+  filterByTags: string[],
+  opts: { dir?: string; file?: string[]; output?: string },
+): Promise<void> {
+  let files: string[] = [];
+  if (opts.file) {
+    files = opts.file;
+  } else if (opts.dir) {
+    files = scanFiles(opts.dir);
+  } else {
+    console.error("Error: specify --dir, --file, or --remote to indicate files to lint");
+    process.exit(1);
+  }
+
+  if (files.length === 0) {
+    console.error("No files found to lint");
+    process.exit(1);
+  }
+
+  const result: LintResult = {
+    violations: [],
+    filesChecked: 0,
+    filesFailed: 0,
+  };
+
+  const failedFiles = new Set<string>();
+
+  for (const filePath of files) {
+    result.filesChecked++;
+
+    const outcome = await loadFileForLint(filePath, filterByTags);
+    if (outcome.status === "skipped") {
+      result.violations.push({
+        file: filePath,
+        rule: "file-read",
+        severity: "warning",
+        message: outcome.message,
+      });
+      result.filesChecked--;
+      continue;
+    }
+    if (outcome.status === "error") {
+      result.violations.push({
+        file: filePath,
+        rule: "file-read",
+        severity: "error",
+        message: outcome.message,
+      });
+      failedFiles.add(filePath);
+      continue;
+    }
+
+    const { rawJSON, workflow } = outcome.data;
+
+    // Filter by tags
+    if (workflow && filterByTags.length > 0) {
+      if (!hasAllTags(workflow.tags, filterByTags)) {
+        result.filesChecked--;
+        continue;
+      }
+    }
+
+    // Run each enabled rule
+    for (const { rule, severity } of enabledRules) {
+      const violations = rule.check(workflow, rawJSON, getRuleOptions(config, rule.name));
+      for (const v of violations) {
+        result.violations.push({
+          ...v,
+          file: v.file ?? filePath,
+          severity,
+        });
+        failedFiles.add(filePath);
+      }
+    }
+  }
+
+  result.filesFailed = failedFiles.size;
+
+  const outputFormat = opts.output ?? "text";
+  if (outputFormat === "json") {
+    console.log(formatJSON(result));
+  } else {
+    console.log(formatText(result));
+  }
+
+  if (hasErrors(result)) {
+    process.exit(1);
+  }
 }
