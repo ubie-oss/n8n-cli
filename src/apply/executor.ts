@@ -330,7 +330,7 @@ export class Executor {
     settings?: Record<string, unknown>,
   ): Record<string, unknown> | undefined {
     if (!settings) return undefined;
-    const WRITE_UNSUPPORTED_SETTINGS = ["binaryMode"];
+    const WRITE_UNSUPPORTED_SETTINGS = ["binaryMode", "timeSavedMode", "credentialResolverId"];
     return Object.fromEntries(
       Object.entries(settings).filter(([k]) => !WRITE_UNSUPPORTED_SETTINGS.includes(k)),
     );
