@@ -1,7 +1,8 @@
 import type { Command } from "commander";
 import { resolveContext } from "@/cli/root.ts";
 import { hasAllTags, parseTagFilter } from "@/common/tags.ts";
-import { findConfigFile, getRuleOptions, loadLintConfig } from "@/lint/config.ts";
+import { findConfigFile, loadLintConfig } from "@/lint/config.ts";
+import { lintWorkflow } from "@/lint/engine.ts";
 import { formatJSON } from "@/lint/output/json.ts";
 import type { LintResult } from "@/lint/output/result.ts";
 import { hasErrors } from "@/lint/output/result.ts";
@@ -129,17 +130,10 @@ async function lintRemote(
     const rawJSON = JSON.stringify(workflow);
     const url = workflowURL(uiURL, workflow.id);
 
-    for (const { rule, severity } of enabledRules) {
-      const violations = rule.check(workflow, rawJSON, getRuleOptions(config, rule.name));
-      for (const v of violations) {
-        result.violations.push({
-          ...v,
-          file: v.file ?? displayName,
-          url,
-          severity,
-        });
-        failedWorkflows.add(displayName);
-      }
+    const violations = lintWorkflow(workflow, rawJSON, enabledRules, config);
+    for (const v of violations) {
+      result.violations.push({ ...v, file: v.file ?? displayName, url });
+      failedWorkflows.add(displayName);
     }
   }
 
@@ -222,17 +216,10 @@ async function lintLocal(
       }
     }
 
-    // Run each enabled rule
-    for (const { rule, severity } of enabledRules) {
-      const violations = rule.check(workflow, rawJSON, getRuleOptions(config, rule.name));
-      for (const v of violations) {
-        result.violations.push({
-          ...v,
-          file: v.file ?? filePath,
-          severity,
-        });
-        failedFiles.add(filePath);
-      }
+    const violations = lintWorkflow(workflow, rawJSON, enabledRules, config);
+    for (const v of violations) {
+      result.violations.push({ ...v, file: v.file ?? filePath });
+      failedFiles.add(filePath);
     }
   }
 

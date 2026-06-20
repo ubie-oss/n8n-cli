@@ -7,6 +7,7 @@ import { registerFmtCommand } from "./cli/commands/fmt.ts";
 import { registerImportCommand } from "./cli/commands/import.ts";
 import { registerLintCommand } from "./cli/commands/lint.ts";
 import { registerNodeSchemaCommand } from "./cli/commands/node-schema.ts";
+import { registerProxyCommand } from "./cli/commands/proxy.ts";
 import { registerTagCommand } from "./cli/commands/tag.ts";
 import { registerTestCommand } from "./cli/commands/test.ts";
 import { registerTraceCommand } from "./cli/commands/trace.ts";
@@ -34,6 +35,7 @@ registerNodeSchemaCommand(program);
 registerFmtCommand(program);
 registerTestCommand(program);
 registerTraceCommand(program);
+registerProxyCommand(program);
 
 try {
   await program.parseAsync(process.argv);
