@@ -828,6 +828,9 @@ n8n-cli proxy [options]
 | `--enforce <level>` | `off`, `warn`, or `error` (default: `error`) |
 | `--disable-rule <rules...>` | Disable specific rules (can be repeated) |
 | `--log-format <fmt>` | Log format: `text` or `json` (default: `text`) |
+| `--warn-duplicates` | Reject workflow creation when a workflow with the same name already exists upstream (409 under `error`, header under `warn`) |
+| `--duplicate-ttl <ms>` | TTL for the cached upstream workflow-name index (default: 60000) |
+| `--upstream-timeout <ms>` | Per-request upstream timeout in milliseconds (default: 30000, 0 disables) |
 
 **Enforcement levels:**
 
@@ -867,7 +870,9 @@ Clients then point at `http://proxy-host:8080` instead of n8n directly. From the
 }
 ```
 
-**Rollout tip:** start with `--enforce warn` to audit the violation distribution in production logs, then flip to `--enforce error` once the team has cleaned up existing violations. The proxy exposes `GET /healthz` for liveness probes.
+**Apply-style safety checks:** beyond lint, the proxy can also surface the same duplicate-name risk that `apply --warn-duplicates` catches locally. Pass `--warn-duplicates` to make the proxy fetch the upstream workflow list (cached for `--duplicate-ttl` milliseconds) and reject `POST /api/v1/workflows` when a same-named workflow already exists upstream. Under `--enforce error` this returns 409; under `--enforce warn` an `X-N8n-Duplicate-Warning` header is attached to the forwarded response. Lookups run under the caller's own `X-N8N-API-KEY` so duplicate detection never escalates privileges.
+
+**Rollout tip:** start with `--enforce warn` to audit the violation distribution in production logs, then flip to `--enforce error` once the team has cleaned up existing violations. The proxy exposes `GET /healthz` (and `HEAD /healthz`) for liveness probes.
 
 ### `version`
 

@@ -3,15 +3,30 @@ import { type LintConfig, loadLintConfig } from "@/lint/config.ts";
 import type { RuleWithConfig } from "@/lint/registry.ts";
 import { registerDefaultRules } from "@/lint/rules/index.ts";
 import { normalizeUpstream, type ProxyConfig, parseListenAddr } from "./config.ts";
+import { DuplicateChecker } from "./duplicate.ts";
 import { evaluate } from "./enforcer.ts";
 import { Logger } from "./logging.ts";
-import { buildErrorResponse, buildLintErrorResponse } from "./response.ts";
-import { matchWorkflowMutation } from "./rest/router.ts";
+import {
+  buildBadJSONResponse,
+  buildDuplicateResponse,
+  buildErrorResponse,
+  buildLintErrorResponse,
+} from "./response.ts";
+import { matchWorkflowMutation, type WorkflowMutation } from "./rest/router.ts";
 import { forwardRequest } from "./upstream.ts";
 
 export interface ProxyHandle {
   port: number;
   stop: () => Promise<void>;
+}
+
+interface HandlerDeps {
+  upstream: string;
+  rules: RuleWithConfig[];
+  lintConfig: LintConfig;
+  config: ProxyConfig;
+  logger: Logger;
+  duplicates: DuplicateChecker | null;
 }
 
 /** Starts the proxy server. Returns a handle so tests can stop it cleanly. */
@@ -22,15 +37,18 @@ export function startProxy(config: ProxyConfig): ProxyHandle {
 
   const registry = registerDefaultRules();
   const lintConfig: LintConfig = loadLintConfig(config.lintConfigPath);
-  const enabledRules: RuleWithConfig[] = registry.enabledRulesWithConfig(
-    lintConfig,
-    config.disableRules,
-  );
+  const rules: RuleWithConfig[] = registry.enabledRulesWithConfig(lintConfig, config.disableRules);
+
+  const duplicates = config.warnDuplicates
+    ? new DuplicateChecker(upstream, config.duplicateTtlMs)
+    : null;
+
+  const deps: HandlerDeps = { upstream, rules, lintConfig, config, logger, duplicates };
 
   const server = Bun.serve({
     hostname: host,
     port,
-    fetch: (req) => handle(req, upstream, enabledRules, lintConfig, config, logger),
+    fetch: (req) => handle(req, deps),
   });
 
   return {
@@ -41,32 +59,37 @@ export function startProxy(config: ProxyConfig): ProxyHandle {
   };
 }
 
-async function handle(
-  req: Request,
-  upstream: string,
-  rules: RuleWithConfig[],
-  lintConfig: LintConfig,
-  config: ProxyConfig,
-  logger: Logger,
-): Promise<Response> {
+async function handle(req: Request, deps: HandlerDeps): Promise<Response> {
   const url = new URL(req.url);
   const pathname = url.pathname;
 
-  // Internal health endpoint — never forwarded.
-  if (pathname === "/healthz" && req.method === "GET") {
-    return new Response("ok\n", { status: 200, headers: { "content-type": "text/plain" } });
+  // Internal endpoints — never forwarded. Allow GET and HEAD so load
+  // balancers using HEAD probes don't accidentally hit the upstream.
+  if (pathname === "/healthz" && (req.method === "GET" || req.method === "HEAD")) {
+    return new Response(req.method === "HEAD" ? null : "ok\n", {
+      status: 200,
+      headers: { "content-type": "text/plain" },
+    });
   }
 
   const mutation = matchWorkflowMutation(req.method, pathname);
-
   if (mutation) {
-    return handleWorkflowMutation(req, upstream, rules, lintConfig, config, logger, pathname);
+    return handleWorkflowMutation(req, mutation, pathname, deps);
   }
 
-  // Transparent forward.
+  return handleTransparentForward(req, pathname, deps);
+}
+
+async function handleTransparentForward(
+  req: Request,
+  pathname: string,
+  deps: HandlerDeps,
+): Promise<Response> {
   try {
-    const { response, elapsedMs } = await forwardRequest(req, upstream);
-    logger.log({
+    const { response, elapsedMs } = await forwardRequest(req, deps.upstream, undefined, {
+      timeoutMs: deps.config.upstreamTimeoutMs,
+    });
+    deps.logger.log({
       action: "forward",
       method: req.method,
       path: pathname,
@@ -75,35 +98,42 @@ async function handle(
     });
     return response;
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    logger.log({ action: "error", method: req.method, path: pathname, status: 502, message });
-    return buildErrorResponse(message);
+    return reportError(err, req, pathname, deps);
   }
 }
 
 async function handleWorkflowMutation(
   req: Request,
-  upstream: string,
-  rules: RuleWithConfig[],
-  lintConfig: LintConfig,
-  config: ProxyConfig,
-  logger: Logger,
+  mutation: WorkflowMutation,
   pathname: string,
+  deps: HandlerDeps,
 ): Promise<Response> {
   const rawJSON = await req.text();
+  const apiKey = req.headers.get("x-n8n-api-key");
+
+  // Malformed JSON: return 400 from the proxy itself rather than layering on
+  // an upstream 400. n8n would also reject it; one clear error beats two.
   let workflow: Workflow | null = null;
   try {
     workflow = JSON.parse(rawJSON) as Workflow;
-  } catch {
-    // Leave null; json-syntax rule will flag it. The upstream would also reject
-    // malformed JSON, so we still forward when enforcement is off/warn.
+  } catch (parseErr) {
+    const message = parseErr instanceof Error ? parseErr.message : String(parseErr);
+    deps.logger.log({
+      action: "block",
+      method: req.method,
+      path: pathname,
+      status: 400,
+      message: `invalid JSON: ${message}`,
+    });
+    return buildBadJSONResponse(message);
   }
 
-  const verdict = evaluate(workflow, rawJSON, rules, lintConfig, config.enforce);
+  // Lint
+  const verdict = evaluate(workflow, rawJSON, deps.rules, deps.lintConfig, deps.config.enforce);
   const workflowName = workflow?.name;
 
   if (verdict.block) {
-    logger.log({
+    deps.logger.log({
       action: "block",
       method: req.method,
       path: pathname,
@@ -118,10 +148,32 @@ async function handleWorkflowMutation(
     return buildLintErrorResponse(verdict.violations);
   }
 
+  // Duplicate detection (creates only — updates target a specific id).
+  let duplicateMatches: Awaited<ReturnType<DuplicateChecker["findByName"]>> = [];
+  if (mutation.kind === "create" && deps.duplicates && workflow?.name) {
+    try {
+      duplicateMatches = await deps.duplicates.findByName(workflow.name, apiKey);
+    } catch {
+      // Treat lookup failure as "no duplicate" — see DuplicateChecker for rationale.
+    }
+    if (duplicateMatches.length > 0 && deps.config.enforce === "error") {
+      deps.logger.log({
+        action: "block",
+        method: req.method,
+        path: pathname,
+        status: 409,
+        workflowName,
+        message: `duplicate name: ${duplicateMatches.length} match(es)`,
+      });
+      return buildDuplicateResponse(workflow.name, duplicateMatches);
+    }
+  }
+
+  // Forward
   try {
-    const { response, elapsedMs } = await forwardRequest(req, upstream, rawJSON);
-    const action = verdict.violations.length > 0 ? "warn" : "pass";
-    const status = response.status;
+    const { response, elapsedMs } = await forwardRequest(req, deps.upstream, rawJSON, {
+      timeoutMs: deps.config.upstreamTimeoutMs,
+    });
     if (verdict.violations.length > 0) {
       const errCount = verdict.violations.filter(
         (v) => v.severity === "error" || !v.severity,
@@ -129,11 +181,15 @@ async function handleWorkflowMutation(
       response.headers.set("x-n8n-lint-violations", String(verdict.violations.length));
       response.headers.set("x-n8n-lint-errors", String(errCount));
     }
-    logger.log({
+    if (duplicateMatches.length > 0) {
+      response.headers.set("x-n8n-duplicate-warning", String(duplicateMatches.length));
+    }
+    const action = verdict.violations.length > 0 || duplicateMatches.length > 0 ? "warn" : "pass";
+    deps.logger.log({
       action,
       method: req.method,
       path: pathname,
-      status,
+      status: response.status,
       upstreamMs: elapsedMs,
       workflowName,
       violations: verdict.violations.length
@@ -143,11 +199,19 @@ async function handleWorkflowMutation(
             message: v.message,
           }))
         : undefined,
+      message:
+        duplicateMatches.length > 0
+          ? `duplicate name: ${duplicateMatches.length} upstream match(es)`
+          : undefined,
     });
     return response;
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    logger.log({ action: "error", method: req.method, path: pathname, status: 502, message });
-    return buildErrorResponse(message);
+    return reportError(err, req, pathname, deps);
   }
+}
+
+function reportError(err: unknown, req: Request, pathname: string, deps: HandlerDeps): Response {
+  const message = err instanceof Error ? err.message : String(err);
+  deps.logger.log({ action: "error", method: req.method, path: pathname, status: 502, message });
+  return buildErrorResponse(message);
 }

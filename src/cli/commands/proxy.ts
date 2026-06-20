@@ -9,6 +9,9 @@ interface ProxyOptions {
   enforce: string;
   disableRule?: string[];
   logFormat: string;
+  warnDuplicates?: boolean;
+  duplicateTtl?: string;
+  upstreamTimeout?: string;
 }
 
 export function registerProxyCommand(program: Command): void {
@@ -23,6 +26,20 @@ export function registerProxyCommand(program: Command): void {
     .option("--enforce <level>", "Enforcement level for workflow saves: off, warn, error", "error")
     .option("--disable-rule <rules...>", "Disable specific rules (can be repeated)")
     .option("--log-format <fmt>", "Log format: text, json", "text")
+    .option(
+      "--warn-duplicates",
+      "Check upstream for an existing workflow of the same name on POST /api/v1/workflows. Under enforce=error a match returns 409; under enforce=warn a warning header is attached.",
+    )
+    .option(
+      "--duplicate-ttl <ms>",
+      "TTL (ms) for the cached upstream workflow-name index used by --warn-duplicates",
+      "60000",
+    )
+    .option(
+      "--upstream-timeout <ms>",
+      "Per-request upstream timeout in milliseconds (0 disables)",
+      "30000",
+    )
     .action((opts: ProxyOptions) => {
       const upstream = opts.upstream ?? process.env.N8N_API_URL;
       if (!upstream) {
@@ -34,6 +51,8 @@ export function registerProxyCommand(program: Command): void {
 
       const logFormat = opts.logFormat === "json" ? "json" : "text";
       const enforce = parseEnforceLevel(opts.enforce);
+      const duplicateTtlMs = parsePositiveInt(opts.duplicateTtl, "--duplicate-ttl");
+      const upstreamTimeoutMs = parsePositiveInt(opts.upstreamTimeout, "--upstream-timeout");
 
       const handle = startProxy({
         listen: opts.listen,
@@ -42,6 +61,9 @@ export function registerProxyCommand(program: Command): void {
         enforce,
         disableRules: opts.disableRule ?? [],
         logFormat,
+        warnDuplicates: !!opts.warnDuplicates,
+        duplicateTtlMs,
+        upstreamTimeoutMs,
       });
 
       // Friendly startup line on stderr so it never pollutes JSON log streams.
@@ -59,4 +81,13 @@ export function registerProxyCommand(program: Command): void {
       process.on("SIGINT", () => shutdown("SIGINT"));
       process.on("SIGTERM", () => shutdown("SIGTERM"));
     });
+}
+
+function parsePositiveInt(value: string | undefined, flag: string): number | undefined {
+  if (value === undefined) return undefined;
+  if (!/^\d+$/.test(value)) {
+    console.error(`Error: ${flag} expects a non-negative integer (got "${value}")`);
+    process.exit(1);
+  }
+  return Number.parseInt(value, 10);
 }

@@ -34,12 +34,18 @@ export function lintWorkflow(
   return violations;
 }
 
-/** Returns the number of error-level violations in a list. */
-export function countErrors(violations: Violation[]): number {
+/**
+ * Returns the number of error-level violations in a list.
+ *
+ * The `!v.severity` fallback treats unset severities as errors. `lintWorkflow`
+ * always sets `severity`, but external callers may pass violations from other
+ * sources, so the conservative default is "block unless explicitly downgraded".
+ */
+export function countErrorViolations(violations: Violation[]): number {
   return violations.filter((v) => v.severity === "error" || !v.severity).length;
 }
 
 /** Returns true if any violation is error-level. */
-export function hasErrors(violations: Violation[]): boolean {
-  return countErrors(violations) > 0;
+export function hasErrorViolations(violations: Violation[]): boolean {
+  return countErrorViolations(violations) > 0;
 }
