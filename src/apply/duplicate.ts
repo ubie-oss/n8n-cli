@@ -9,13 +9,20 @@ export class DuplicateChecker {
 
   constructor(private readonly workflowService: WorkflowService) {}
 
-  /** Fetches all remote workflows and indexes them by name. */
+  /**
+   * Fetches all remote workflows and indexes them by name.
+   *
+   * Capped at 50 pages (5000 workflows at the default limit) so a misbehaving
+   * upstream can't keep the apply step paginating forever. Real n8n
+   * deployments well above this size should pass `--allow-duplicates`.
+   */
   async loadRemoteWorkflows(): Promise<void> {
     if (this.loaded) return;
 
     this.remoteWorkflows = new Map();
     const workflows = await this.workflowService.listAllWorkflows({
       limit: 100,
+      maxPages: 50,
     });
 
     for (const workflow of workflows) {

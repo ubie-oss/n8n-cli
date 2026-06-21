@@ -32,8 +32,8 @@ export function registerApplyCommand(program: Command): void {
       "Apply ALL workflows in the directory, overwriting remote state (required when no scope filter is specified)",
     )
     .option(
-      "--warn-duplicates",
-      "Warn when creating workflows with names that already exist remotely",
+      "--allow-duplicates",
+      "Skip the upstream duplicate-name check (the check is on by default; use --force to push through warnings without disabling the check)",
     )
     .action(async (options, command) => {
       const ctx = resolveContext(command.parent!);
@@ -44,7 +44,7 @@ export function registerApplyCommand(program: Command): void {
       opts.dryRun = !!options.dryRun;
       opts.force = !!options.force;
       opts.noAutoTag = !!options.noAutoTag;
-      opts.warnDuplicates = !!options.warnDuplicates;
+      opts.allowDuplicates = !!options.allowDuplicates;
 
       if (options.yaml === true) opts.yamlEnabled = true;
       if (options.yaml === false) opts.noYaml = true;

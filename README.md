@@ -8,6 +8,7 @@ A command-line interface for managing [n8n](https://n8n.io/) workflows as code. 
 - **Convert** - Convert workflow files between JSON and YAML formats locally
 - **Import** - Pull workflows from an n8n server to local files, with optional YAML conversion and code externalization
 - **Lint** - Validate workflow definitions against configurable rules
+- **Proxy** - Transparent HTTP proxy that intercepts workflow saves to the n8n public API and runs lint server-side, blocking violations before they reach n8n
 - **Format** - Auto-organize node positions for cleaner workflow layouts
 - **Test** - Execute CLI tests against workflows via webhook endpoints
 - **Workflow management** - List, get, create, update, delete, activate, and deactivate workflows via the n8n API
@@ -100,7 +101,7 @@ n8n-cli apply [options]
 | `--force` | Override conflict detection and duplicate warnings |
 | `--no-auto-tag` | Disable automatic tagging |
 | `--yaml` / `--no-yaml` | Enable/disable YAML file processing |
-| `--warn-duplicates` | Warn when creating workflows with names that already exist remotely |
+| `--allow-duplicates` | Skip the upstream duplicate-name check (the check is on by default; use `--force` to push through warnings instead of disabling the check) |
 
 #### Exit Codes
 
@@ -808,6 +809,70 @@ n8n-cli trace [options]
 | Items | Estimated output item count |
 | Inputs | Upstream nodes |
 | Outputs | Downstream nodes |
+
+### `proxy`
+
+Run a transparent HTTP proxy in front of an n8n server that intercepts workflow saves on the public REST API and runs the linter server-side. Workflows that violate `error`-severity rules are rejected with HTTP 422 before they reach n8n.
+
+This solves a common problem: when humans or AI agents push workflows directly to the n8n API (bypassing client-side lint), poor quality definitions silently end up in production. The proxy makes lint enforcement structural rather than convention-based.
+
+```bash
+n8n-cli proxy [options]
+```
+
+| Option | Description |
+|--------|-------------|
+| `--listen <addr>` | Address to bind, e.g. `:8080` or `127.0.0.1:8080` (default: `:8080`) |
+| `--upstream <url>` | Upstream n8n base URL (env: `N8N_API_URL`) |
+| `-c, --lint-config <path>` | Path to `.n8nlintrc.json` (auto-discovered if omitted) |
+| `--enforce <level>` | `off`, `warn`, or `error` (default: `error`) |
+| `--disable-rule <rules...>` | Disable specific rules (can be repeated) |
+| `--log-format <fmt>` | Log format: `text` or `json` (default: `text`) |
+| `--allow-duplicates` | Skip the upstream duplicate-name check (the check is on by default) |
+| `--duplicate-ttl <ms>` | TTL for the cached upstream workflow-name index (default: 60000) |
+| `--upstream-timeout <ms>` | Per-request upstream timeout in milliseconds (default: 30000, 0 disables) |
+
+**Enforcement levels:**
+
+| Level | Behavior |
+|-------|----------|
+| `off` | Forwards every request; lint runs only for audit logging |
+| `warn` | Forwards every request; attaches `X-N8n-Lint-Violations` and `X-N8n-Lint-Errors` headers to the response |
+| `error` | Blocks requests with any error-level violation; returns HTTP 422 with a violations JSON body. Warnings still pass through |
+
+**Intercepted endpoints (n8n public API only):**
+
+- `POST /api/v1/workflows` (create)
+- `PUT /api/v1/workflows/:id` (update)
+
+All other paths (including the n8n editor's internal `/rest/*` routes) are forwarded transparently. The `X-N8N-API-KEY` header is passed through as-is.
+
+**Example: run the proxy in front of a production n8n**
+
+```bash
+n8n-cli proxy \
+  --listen :8080 \
+  --upstream https://n8n.example.com \
+  --enforce error \
+  --log-format json
+```
+
+Clients then point at `http://proxy-host:8080` instead of n8n directly. From the client's perspective the API is identical, except that lint-violating saves now return:
+
+```json
+{
+  "error": "workflow_lint_failed",
+  "message": "Workflow violates 2 linter rules and was not forwarded to n8n",
+  "violations": [
+    { "rule": "required-fields", "severity": "error", "message": "Missing required field: \"name\"" }
+  ],
+  "docs": "https://github.com/ubie-oss/n8n-cli#lint"
+}
+```
+
+**Apply-style safety checks:** beyond lint, the proxy mirrors the same default-on duplicate-name safety that `apply` enforces. On every `POST /api/v1/workflows` the proxy fetches the upstream workflow list (cached for `--duplicate-ttl` milliseconds) and rejects creates that collide with an existing remote name. Under `--enforce error` this returns 409; under `--enforce warn` an `X-N8n-Duplicate-Warning` header is attached to the forwarded response. Pass `--allow-duplicates` to disable the check entirely (e.g. during a one-off bulk import). Lookups run under the caller's own `X-N8N-API-KEY` so duplicate detection never escalates privileges.
+
+**Rollout tip:** start with `--enforce warn` to audit the violation distribution in production logs, then flip to `--enforce error` once the team has cleaned up existing violations. The proxy exposes `GET /healthz` (and `HEAD /healthz`) for liveness probes.
 
 ### `version`
 

@@ -240,7 +240,7 @@ Summary (dry-run): 1 to create, 2 to update, 1 unchanged
 |--------|-------------|
 | `--from-git-changes <spec>` | Apply only files changed in Git diff |
 | `--yaml` / `--no-yaml` | Enable/disable YAML processing |
-| `--warn-duplicates` | Warn if a workflow with the same name already exists |
+| `--allow-duplicates` | Skip the upstream duplicate-name check (default: on; use `--force` to push through warnings instead of disabling the check) |
 | `--no-auto-tag` | Disable automatic tagging (managed-as-code) |
 | `-p, --project <id>` | Specify target project ID |
 
