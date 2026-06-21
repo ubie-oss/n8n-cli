@@ -9,7 +9,7 @@ interface ProxyOptions {
   enforce: string;
   disableRule?: string[];
   logFormat: string;
-  warnDuplicates?: boolean;
+  allowDuplicates?: boolean;
   duplicateTtl?: string;
   upstreamTimeout?: string;
 }
@@ -27,14 +27,10 @@ export function registerProxyCommand(program: Command): void {
     .option("--disable-rule <rules...>", "Disable specific rules (can be repeated)")
     .option("--log-format <fmt>", "Log format: text, json", "text")
     .option(
-      "--warn-duplicates",
-      "Check upstream for an existing workflow of the same name on POST /api/v1/workflows. Under enforce=error a match returns 409; under enforce=warn a warning header is attached.",
+      "--allow-duplicates",
+      "Skip the upstream duplicate-name check on POST /api/v1/workflows (the check is on by default; under enforce=error a match returns 409, under enforce=warn a header is attached)",
     )
-    .option(
-      "--duplicate-ttl <ms>",
-      "TTL (ms) for the cached upstream workflow-name index used by --warn-duplicates",
-      "60000",
-    )
+    .option("--duplicate-ttl <ms>", "TTL (ms) for the cached upstream workflow-name index", "60000")
     .option(
       "--upstream-timeout <ms>",
       "Per-request upstream timeout in milliseconds (0 disables)",
@@ -61,7 +57,7 @@ export function registerProxyCommand(program: Command): void {
         enforce,
         disableRules: opts.disableRule ?? [],
         logFormat,
-        warnDuplicates: !!opts.warnDuplicates,
+        allowDuplicates: !!opts.allowDuplicates,
         duplicateTtlMs,
         upstreamTimeoutMs,
       });

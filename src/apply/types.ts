@@ -20,7 +20,15 @@ export interface ApplyOptions {
   gitDiffSpec: string;
   yamlEnabled: boolean;
   noYaml: boolean;
-  warnDuplicates: boolean;
+  /**
+   * When true, skip the upstream duplicate-name check.
+   *
+   * Default false (check ON): on every apply we list the upstream workflows
+   * and surface a warning if a local workflow would create a remotely-existing
+   * name. The warning causes a non-zero exit unless `--force` is also passed.
+   * Set true to disable the check entirely.
+   */
+  allowDuplicates: boolean;
   filterByTags: string[];
 }
 
@@ -39,7 +47,7 @@ export function defaultApplyOptions(): ApplyOptions {
     gitDiffSpec: "",
     yamlEnabled: false,
     noYaml: false,
-    warnDuplicates: false,
+    allowDuplicates: false,
     filterByTags: [],
   };
 }

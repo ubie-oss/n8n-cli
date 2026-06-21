@@ -39,9 +39,10 @@ export function startProxy(config: ProxyConfig): ProxyHandle {
   const lintConfig: LintConfig = loadLintConfig(config.lintConfigPath);
   const rules: RuleWithConfig[] = registry.enabledRulesWithConfig(lintConfig, config.disableRules);
 
-  const duplicates = config.warnDuplicates
-    ? new DuplicateChecker(upstream, config.duplicateTtlMs)
-    : null;
+  // Duplicate-name detection is on by default; opt out with allowDuplicates.
+  const duplicates = config.allowDuplicates
+    ? null
+    : new DuplicateChecker(upstream, config.duplicateTtlMs);
 
   const deps: HandlerDeps = { upstream, rules, lintConfig, config, logger, duplicates };
 

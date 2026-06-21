@@ -236,10 +236,10 @@ describe("proxy: upstream timeout", () => {
   }, 5000);
 });
 
-describe("proxy: --warn-duplicates", () => {
+describe("proxy: duplicate-name check is on by default", () => {
   test("enforce=error blocks with 409 when name already exists upstream", async () => {
     upstream.setWorkflows([{ id: "wf-existing", name: "My Workflow", active: true }]);
-    start({ warnDuplicates: true });
+    start();
 
     const res = await fetch(url("/api/v1/workflows"), {
       method: "POST",
@@ -257,7 +257,7 @@ describe("proxy: --warn-duplicates", () => {
 
   test("enforce=warn attaches a duplicate-warning header and still forwards", async () => {
     upstream.setWorkflows([{ id: "wf-existing", name: "Same Name", active: false }]);
-    start({ warnDuplicates: true, enforce: "warn" });
+    start({ enforce: "warn" });
 
     const res = await fetch(url("/api/v1/workflows"), {
       method: "POST",
@@ -272,7 +272,7 @@ describe("proxy: --warn-duplicates", () => {
 
   test("PUT (update) is never duplicate-checked", async () => {
     upstream.setWorkflows([{ id: "wf-existing", name: "X", active: false }]);
-    start({ warnDuplicates: true });
+    start();
 
     const res = await fetch(url("/api/v1/workflows/wf-existing"), {
       method: "PUT",
@@ -286,7 +286,7 @@ describe("proxy: --warn-duplicates", () => {
 
   test("no upstream match → forwards normally", async () => {
     upstream.setWorkflows([{ id: "wf-other", name: "Different", active: false }]);
-    start({ warnDuplicates: true });
+    start();
 
     const res = await fetch(url("/api/v1/workflows"), {
       method: "POST",
@@ -296,6 +296,23 @@ describe("proxy: --warn-duplicates", () => {
 
     expect(res.status).toBe(200);
     expect(res.headers.get("x-n8n-duplicate-warning")).toBeNull();
+  });
+
+  test("--allow-duplicates skips the check entirely, even on a match", async () => {
+    upstream.setWorkflows([{ id: "wf-existing", name: "Same Name", active: true }]);
+    start({ allowDuplicates: true });
+
+    const res = await fetch(url("/api/v1/workflows"), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "Same Name", nodes: [], connections: {} }),
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get("x-n8n-duplicate-warning")).toBeNull();
+    // The proxy must not have queried the upstream workflow list at all
+    // when the check is disabled.
+    expect(upstream.captured.filter((c) => c.method === "GET")).toHaveLength(0);
   });
 });
 

@@ -108,8 +108,8 @@ export class Executor {
   async execute(): Promise<ApplyResult> {
     const result = emptyResult(this.opts.dryRun);
 
-    // Initialize duplicate checker if warnings are enabled
-    if (this.opts.warnDuplicates) {
+    // Duplicate-name check is on by default; opt out with allowDuplicates.
+    if (!this.opts.allowDuplicates) {
       this.duplicateChecker = new DuplicateChecker(this.workflowService);
       await this.duplicateChecker.loadRemoteWorkflows();
     }

@@ -100,6 +100,9 @@ function startWithEnforce(enforce: "off" | "warn" | "error", configPath?: string
     enforce,
     disableRules: [],
     logFormat: "json",
+    // Duplicate-name detection is on by default; these older tests focus on
+    // lint enforcement and don't assert duplicate behavior, so opt out.
+    allowDuplicates: true,
   });
   return proxy;
 }

@@ -15,11 +15,15 @@ export interface ProxyConfig {
   /** Log format */
   logFormat: "text" | "json";
   /**
-   * When true, intercept workflow creation and check the upstream for an
-   * existing workflow of the same name. Under enforce=error a match returns
-   * 409; under enforce=warn an x-n8n-duplicate-warning header is attached.
+   * When true, skip the upstream duplicate-name check on workflow creation.
+   *
+   * Default false (check ON): on every `POST /api/v1/workflows` the proxy
+   * looks up the upstream for an existing workflow of the same name. Under
+   * `enforce=error` a match returns 409; under `enforce=warn` an
+   * `x-n8n-duplicate-warning` header is attached. Set true to disable the
+   * check entirely.
    */
-  warnDuplicates?: boolean;
+  allowDuplicates?: boolean;
   /** TTL for the duplicate-name index cache in ms. Default 60_000. */
   duplicateTtlMs?: number;
   /** Total upstream request timeout in ms. Default 30_000. 0 disables. */
