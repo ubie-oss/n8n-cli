@@ -31,6 +31,14 @@ interface CacheEntry {
   expiresAt: number;
 }
 
+/**
+ * TTL for cached upstream failures. Much shorter than the success TTL so a
+ * single transient 401/5xx doesn't poison duplicate detection for a full
+ * minute, but long enough that bursty requests under a permission outage
+ * don't hammer the upstream.
+ */
+const FAILURE_TTL_MS = 5_000;
+
 export class DuplicateChecker {
   private cache: CacheEntry | null = null;
 
@@ -47,27 +55,41 @@ export class DuplicateChecker {
   /**
    * Returns duplicate matches for the given name, or an empty array.
    *
+   * Callers without an API key are skipped (`apiKey == null` returns `[]`)
+   * rather than triggering an unauthenticated upstream call whose 401 would
+   * poison the cache for every subsequent caller.
+   *
    * @param apiKey The caller's `X-N8N-API-KEY` header value. Used as-is so
    *   the upstream query runs under the caller's permissions.
    */
   async findByName(name: string, apiKey: string | null): Promise<DuplicateMatch[]> {
     if (!name) return [];
+    if (!apiKey) return [];
     const index = await this.getIndex(apiKey);
     return index.get(name) ?? [];
   }
 
-  private async getIndex(apiKey: string | null): Promise<Map<string, DuplicateMatch[]>> {
+  private async getIndex(apiKey: string): Promise<Map<string, DuplicateMatch[]>> {
     const now = performance.now();
     if (this.cache && this.cache.expiresAt > now) {
       return this.cache.byName;
     }
 
-    const byName = await this.fetchWorkflowIndex(apiKey);
-    this.cache = { byName, expiresAt: now + this.ttlMs };
-    return byName;
+    const result = await this.fetchWorkflowIndex(apiKey);
+    const ttl = result.complete ? this.ttlMs : FAILURE_TTL_MS;
+    this.cache = { byName: result.byName, expiresAt: now + ttl };
+    return result.byName;
   }
 
-  private async fetchWorkflowIndex(apiKey: string | null): Promise<Map<string, DuplicateMatch[]>> {
+  /**
+   * Walks upstream pagination, returning the indexed names plus a `complete`
+   * flag indicating whether every page succeeded. Partial / empty results
+   * caused by an upstream error are returned as `complete: false` so the
+   * caller can pick a short cache TTL and recover quickly.
+   */
+  private async fetchWorkflowIndex(
+    apiKey: string,
+  ): Promise<{ byName: Map<string, DuplicateMatch[]>; complete: boolean }> {
     const byName = new Map<string, DuplicateMatch[]>();
     let cursor: string | undefined;
     let pages = 0;
@@ -79,15 +101,19 @@ export class DuplicateChecker {
       url.searchParams.set("limit", "100");
       if (cursor) url.searchParams.set("cursor", cursor);
 
-      const headers: Record<string, string> = { Accept: "application/json" };
-      if (apiKey) headers["X-N8N-API-KEY"] = apiKey;
+      const headers: Record<string, string> = {
+        Accept: "application/json",
+        "X-N8N-API-KEY": apiKey,
+      };
 
-      const res = await fetch(url.toString(), { headers });
+      let res: Response;
+      try {
+        res = await fetch(url.toString(), { headers });
+      } catch {
+        return { byName, complete: false };
+      }
       if (!res.ok) {
-        // On any upstream error, return whatever we collected so far and stop.
-        // The proxy will treat this as "no duplicate" — safer than blocking on
-        // a transient upstream hiccup.
-        break;
+        return { byName, complete: false };
       }
       const body = (await res.json()) as UpstreamListResponse;
       const items = body.data ?? [];
@@ -101,6 +127,6 @@ export class DuplicateChecker {
       if (!cursor) break;
     }
 
-    return byName;
+    return { byName, complete: true };
   }
 }

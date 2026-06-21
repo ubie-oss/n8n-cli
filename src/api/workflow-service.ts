@@ -7,6 +7,12 @@ export interface ListOptions {
   tags?: string[];
   limit?: number;
   cursor?: string;
+  /**
+   * Maximum number of pages to fetch in listAllWorkflows. Defaults to
+   * unlimited; pass a value to cap the walk on huge instances so a runaway
+   * paginator can't pin the process. Ignored by listWorkflows.
+   */
+  maxPages?: number;
 }
 
 /** WorkflowService handles workflow API operations */
@@ -48,12 +54,18 @@ export class WorkflowService {
     if (!paginationOpts.limit) {
       paginationOpts.limit = 100;
     }
+    const maxPages = paginationOpts.maxPages ?? Number.POSITIVE_INFINITY;
 
+    let page = 0;
     for (;;) {
       const resp = await this.listWorkflows(paginationOpts);
       allWorkflows.push(...resp.data);
+      page++;
 
       if (!resp.nextCursor) {
+        break;
+      }
+      if (page >= maxPages) {
         break;
       }
       paginationOpts.cursor = resp.nextCursor;

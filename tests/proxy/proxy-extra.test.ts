@@ -17,12 +17,15 @@ interface MockUpstream {
   setWorkflows: (workflows: Array<{ id: string; name: string; active?: boolean }>) => void;
   /** Make the next request hang forever, simulating a stuck upstream. */
   hangNext: () => void;
+  /** Make the next GET /api/v1/workflows return the given status. */
+  failNextList: (status: number) => void;
 }
 
 function startMockUpstream(): MockUpstream {
   const captured: CapturedRequest[] = [];
   let workflows: Array<{ id: string; name: string; active?: boolean }> = [];
   let hang = false;
+  let nextListFailStatus: number | null = null;
 
   const server = Bun.serve({
     port: 0,
@@ -42,6 +45,14 @@ function startMockUpstream(): MockUpstream {
       }
 
       if (req.method === "GET" && url.pathname === "/api/v1/workflows") {
+        if (nextListFailStatus !== null) {
+          const status = nextListFailStatus;
+          nextListFailStatus = null;
+          return new Response(JSON.stringify({ error: "denied" }), {
+            status,
+            headers: { "content-type": "application/json" },
+          });
+        }
         return new Response(JSON.stringify({ data: workflows, nextCursor: null }), {
           headers: { "content-type": "application/json" },
         });
@@ -62,6 +73,9 @@ function startMockUpstream(): MockUpstream {
     },
     hangNext() {
       hang = true;
+    },
+    failNextList(status) {
+      nextListFailStatus = status;
     },
   };
 }
@@ -329,4 +343,47 @@ describe("proxy: enforce=off short-circuits lint", () => {
     // an empty violations array under enforce=off.
     expect(res.headers.get("x-n8n-lint-violations")).toBeNull();
   });
+});
+
+describe("proxy: duplicate-check hardening", () => {
+  test("POST without X-N8N-API-KEY skips the upstream lookup entirely", async () => {
+    upstream.setWorkflows([{ id: "wf-existing", name: "Conflict", active: false }]);
+    start();
+
+    const res = await fetch(url("/api/v1/workflows"), {
+      method: "POST",
+      headers: { "content-type": "application/json" }, // no api key
+      body: JSON.stringify({ name: "Conflict", nodes: [], connections: {} }),
+    });
+
+    // No api key → no duplicate lookup → no GET to upstream, request forwarded.
+    expect(res.status).toBe(200);
+    expect(upstream.captured.filter((c) => c.method === "GET")).toHaveLength(0);
+  });
+
+  test("upstream list failure is cached with a short TTL, not the full 60s", async () => {
+    upstream.setWorkflows([{ id: "wf-existing", name: "Conflict", active: false }]);
+    upstream.failNextList(401);
+    start({ duplicateTtlMs: 60_000 });
+
+    // First POST hits the 401 → duplicate check is a "no match" (failure-mode
+    // empty index) AND the result is cached only for FAILURE_TTL_MS (5s).
+    const res1 = await fetch(url("/api/v1/workflows"), {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-n8n-api-key": "k" },
+      body: JSON.stringify({ name: "Conflict", nodes: [], connections: {} }),
+    });
+    expect(res1.status).toBe(200); // not blocked because lookup failed
+
+    // Wait past the failure TTL, then retry — the proxy should re-query and
+    // this time catch the duplicate.
+    await Bun.sleep(5100);
+
+    const res2 = await fetch(url("/api/v1/workflows"), {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-n8n-api-key": "k" },
+      body: JSON.stringify({ name: "Conflict", nodes: [], connections: {} }),
+    });
+    expect(res2.status).toBe(409);
+  }, 15_000);
 });

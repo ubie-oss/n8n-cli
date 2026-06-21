@@ -109,9 +109,21 @@ export class Executor {
     const result = emptyResult(this.opts.dryRun);
 
     // Duplicate-name check is on by default; opt out with allowDuplicates.
-    if (!this.opts.allowDuplicates) {
-      this.duplicateChecker = new DuplicateChecker(this.workflowService);
-      await this.duplicateChecker.loadRemoteWorkflows();
+    // Skip on dry-run so a local preview stays cheap and works offline. If
+    // the upstream list call fails (auth, transient 5xx), degrade to a
+    // warning rather than aborting the whole apply — the proxy does the
+    // same in src/proxy/duplicate.ts.
+    if (!this.opts.allowDuplicates && !this.opts.dryRun) {
+      const checker = new DuplicateChecker(this.workflowService);
+      try {
+        await checker.loadRemoteWorkflows();
+        this.duplicateChecker = checker;
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.warn(
+          `Warning: duplicate-name check skipped — could not list upstream workflows: ${message}`,
+        );
+      }
     }
 
     // Scan workflow files
