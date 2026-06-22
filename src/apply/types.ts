@@ -1,4 +1,5 @@
 import type { Workflow } from "../api/types.ts";
+import type { Violation } from "../lint/rules/violation.ts";
 
 /** OperationType represents the type of operation to perform on a workflow. */
 export type OperationType = "create" | "update" | "skip" | "conflict" | "error";
@@ -29,6 +30,23 @@ export interface ApplyOptions {
    * Set true to disable the check entirely.
    */
   allowDuplicates: boolean;
+  /**
+   * When true, skip the pre-write lint check that runs against every local
+   * workflow before it is created or updated upstream.
+   *
+   * Default false (check ON): the same rule set used by `n8n-cli lint` runs
+   * against each workflow about to be written. Any `error`-severity violation
+   * marks that workflow as failed and prevents the API call — the apply
+   * continues with the remaining workflows so a partial run still reports
+   * everything in one pass. Set true to disable the check entirely; this
+   * cannot be silenced by `--force` because lint failures represent policy,
+   * not merge conflicts.
+   */
+  noLint: boolean;
+  /** Optional override for the lint config path (auto-discovered when empty). */
+  lintConfigPath?: string;
+  /** Rule names disabled via CLI flag, forwarded to the lint registry. */
+  lintDisableRules: string[];
   filterByTags: string[];
 }
 
@@ -48,6 +66,8 @@ export function defaultApplyOptions(): ApplyOptions {
     yamlEnabled: false,
     noYaml: false,
     allowDuplicates: false,
+    noLint: false,
+    lintDisableRules: [],
     filterByTags: [],
   };
 }
@@ -86,6 +106,12 @@ export interface ApplyOperation {
   baseToRemoteFields: string[];
   activated?: boolean; // true: activated, false: deactivated, undefined: no change
   activationError?: Error; // activation/deactivation error
+  /**
+   * Violations surfaced by the pre-write lint check, when one ran. Present on
+   * both blocked (operation === "error") and passing operations so callers
+   * can surface warnings without forcing a re-lint.
+   */
+  lintViolations?: Violation[];
 }
 
 /** Creates a default ApplyOperation. */

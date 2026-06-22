@@ -19,6 +19,12 @@ export function report(result: ApplyResult): void {
     printWarningsSection(result.warnings);
   }
 
+  // Surface lint warnings that survived the gate (error-level violations were
+  // already promoted to operation=error and are printed by the ERROR section).
+  // Warnings would otherwise be silently dropped — the gate computes them but
+  // does not block, so without this section the user sees no diagnostic.
+  printLintWarningsSection(result.operations);
+
   // Group operations by type
   const creates = filterByOp(result.operations, "create");
   const updates = filterByOp(result.operations, "update");
@@ -33,6 +39,24 @@ export function report(result: ApplyResult): void {
   if (errors.length > 0) printErrorSection(errors);
 
   printSummary(result);
+}
+
+function printLintWarningsSection(ops: ApplyOperation[]): void {
+  const warnings: Array<{ file: string; rule: string; message: string }> = [];
+  for (const op of ops) {
+    if (op.operation === "error") continue; // already shown in ERROR section
+    if (!op.lintViolations) continue;
+    for (const v of op.lintViolations) {
+      if (v.severity === "warning") {
+        warnings.push({ file: op.file, rule: v.rule, message: v.message });
+      }
+    }
+  }
+  if (warnings.length === 0) return;
+  console.log(`\n=== LINT WARNINGS (${warnings.length}) ===`);
+  for (const w of warnings) {
+    console.log(`  ⚠ ${path.basename(w.file)}: warning[${w.rule}]: ${w.message}`);
+  }
 }
 
 function filterByOp(ops: ApplyOperation[], type: OperationType): ApplyOperation[] {

@@ -5,6 +5,13 @@ import type { TagService } from "../api/tag-service.ts";
 import type { Workflow, WorkflowInput } from "../api/types.ts";
 import type { WorkflowService } from "../api/workflow-service.ts";
 import { ContentRetriever, ErrFileNotExist } from "../git/content.ts";
+import type { Violation } from "../lint/rules/violation.ts";
+import {
+  checkWorkflowForWrite,
+  formatViolationLine,
+  prepareWriteLintContext,
+  type WriteLintContext,
+} from "../lint/write-check.ts";
 import { compare } from "./differ.ts";
 import { DuplicateChecker } from "./duplicate.ts";
 import { Scanner } from "./scanner.ts";
@@ -37,6 +44,7 @@ export class Executor {
   private threeWayDetector?: ThreeWayDetector;
   private gitContent?: ContentRetriever;
   private diffSpec?: DiffSpec;
+  private lintCtx?: WriteLintContext;
 
   constructor(
     private readonly workflowService: WorkflowService,
@@ -51,6 +59,23 @@ export class Executor {
       } catch {
         // Silently fall back to 2-way detection
       }
+    }
+
+    // Lint check is on by default. Resolve config and rules once per apply so
+    // we don't pay the registry cost for every workflow. Discovery starts from
+    // `opts.directory` so an in-tree `.n8nlintrc.json` (e.g. `workflows/.n8nlintrc.json`)
+    // is picked up regardless of where the user invoked the CLI from.
+    //
+    // `LintConfigLoadError` is intentionally NOT caught here — it would leave
+    // the user with a half-initialised Executor. The caller in
+    // `src/cli/commands/apply.ts` is responsible for catching the typed error
+    // and printing a friendly message.
+    if (!opts.noLint) {
+      this.lintCtx = prepareWriteLintContext(
+        opts.lintConfigPath,
+        opts.lintDisableRules,
+        opts.directory,
+      );
     }
   }
 
@@ -163,6 +188,22 @@ export class Executor {
     const workflow = wf.workflow!;
     op.workflowName = workflow.name;
     op.localUpdated = workflow.updatedAt;
+
+    // Pre-write lint gate. Runs before any remote fetch so a broken workflow
+    // never causes upstream traffic. Errors mark the op as failed; warnings
+    // are recorded on the op but do not block. Bypassed only when the user
+    // passed --no-lint (and `lintCtx` was therefore not built). `--force`
+    // intentionally does NOT override this — lint failures are policy, not
+    // merge conflicts.
+    if (this.lintCtx) {
+      const check = checkWorkflowForWrite(workflow, undefined, this.lintCtx);
+      op.lintViolations = check.violations;
+      if (check.hasErrors) {
+        op.operation = "error";
+        op.error = new Error(buildLintErrorMessage(wf.path, check.violations));
+        return op;
+      }
+    }
 
     // No ID = create
     if (!workflow.id) {
@@ -459,6 +500,21 @@ export class Executor {
       // Don't throw - activation failure is not a workflow update failure
     }
   }
+}
+
+/**
+ * Builds the multi-line error message used when lint blocks a workflow.
+ * Mirrors the layout of `n8n-cli lint` text output so users see the same
+ * `file:line: severity[rule]: message` shape they would when running lint
+ * standalone.
+ */
+function buildLintErrorMessage(filePath: string, violations: Violation[]): string {
+  const errorOnly = violations.filter((v) => v.severity === "error" || !v.severity);
+  const lines = errorOnly.map((v) => formatViolationLine(filePath, v));
+  const summary = `lint check failed (${errorOnly.length} error${
+    errorOnly.length === 1 ? "" : "s"
+  }); pass --no-lint to bypass`;
+  return [summary, ...lines].join("\n  ");
 }
 
 /** Updates the local workflow file with server response data. */
