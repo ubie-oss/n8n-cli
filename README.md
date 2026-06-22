@@ -102,6 +102,9 @@ n8n-cli apply [options]
 | `--no-auto-tag` | Disable automatic tagging |
 | `--yaml` / `--no-yaml` | Enable/disable YAML file processing |
 | `--allow-duplicates` | Skip the upstream duplicate-name check (the check is on by default; use `--force` to push through warnings instead of disabling the check) |
+| `--no-lint` | Skip the pre-write lint check (the check is on by default; an error-level violation marks the workflow as failed and prevents the API call. `--force` does NOT bypass lint failures — they represent policy, not merge conflicts) |
+| `--lint-config <path>` | Path to `.n8nlintrc.json` used by the pre-write lint check (auto-discovered if omitted) |
+| `--lint-disable-rule <rules>` | Comma-separated rule names to disable during the pre-write lint check |
 
 #### Exit Codes
 
@@ -333,20 +336,26 @@ Get a workflow by ID.
 
 #### `workflow create`
 
-Create a new workflow.
+Create a new workflow. The pre-write lint check runs by default — any error-level violation blocks the API call.
 
 | Option | Description |
 |--------|-------------|
 | `-f, --file <path>` | Path to workflow JSON file, use `-` for stdin (required) |
+| `--no-lint` | Skip the pre-write lint check (on by default) |
+| `--lint-config <path>` | Path to `.n8nlintrc.json` for the pre-write lint check |
+| `--lint-disable-rule <rules>` | Comma-separated rule names to disable during the pre-write lint check |
 
 #### `workflow update [id]`
 
-Update an existing workflow. The ID argument is optional if the JSON file contains an `id` field.
+Update an existing workflow. The ID argument is optional if the JSON file contains an `id` field. The pre-write lint check runs by default — any error-level violation blocks the API call.
 
 | Option | Description |
 |--------|-------------|
 | `-f, --file <path>` | Path to workflow JSON file, use `-` for stdin (required) |
 | `--force` | Force update even if remote has been modified |
+| `--no-lint` | Skip the pre-write lint check (on by default) |
+| `--lint-config <path>` | Path to `.n8nlintrc.json` for the pre-write lint check |
+| `--lint-disable-rule <rules>` | Comma-separated rule names to disable during the pre-write lint check |
 
 #### `workflow delete <ids...>`
 

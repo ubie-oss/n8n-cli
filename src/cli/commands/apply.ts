@@ -9,6 +9,7 @@ import {
   getEffectiveYamlEnabled,
   loadCLIConfig,
 } from "../../config/claude-md.ts";
+import { LintConfigLoadError } from "../../lint/write-check.ts";
 import { resolveContext } from "../root.ts";
 
 export function registerApplyCommand(program: Command): void {
@@ -35,6 +36,18 @@ export function registerApplyCommand(program: Command): void {
       "--allow-duplicates",
       "Skip the upstream duplicate-name check (the check is on by default; use --force to push through warnings without disabling the check)",
     )
+    .option(
+      "--no-lint",
+      "Skip the pre-write lint check (the check is on by default; --force does NOT bypass it because lint failures are policy, not merge conflicts)",
+    )
+    .option(
+      "--lint-config <path>",
+      "Path to .n8nlintrc.json for the pre-write lint check (auto-discovered if omitted)",
+    )
+    .option(
+      "--lint-disable-rule <rules>",
+      "Comma-separated rule names to disable during the pre-write lint check",
+    )
     .action(async (options, command) => {
       const ctx = resolveContext(command.parent!);
 
@@ -45,6 +58,18 @@ export function registerApplyCommand(program: Command): void {
       opts.force = !!options.force;
       opts.noAutoTag = !!options.noAutoTag;
       opts.allowDuplicates = !!options.allowDuplicates;
+      // commander's `--no-lint` flips `options.lint` to false. When the flag is
+      // not passed, `options.lint` is undefined and the check stays ON.
+      opts.noLint = options.lint === false;
+      if (typeof options.lintConfig === "string") {
+        opts.lintConfigPath = options.lintConfig;
+      }
+      if (typeof options.lintDisableRule === "string") {
+        opts.lintDisableRules = (options.lintDisableRule as string)
+          .split(",")
+          .map((r) => r.trim())
+          .filter((r) => r.length > 0);
+      }
 
       if (options.yaml === true) opts.yamlEnabled = true;
       if (options.yaml === false) opts.noYaml = true;
@@ -112,8 +137,21 @@ export function registerApplyCommand(program: Command): void {
       // Apply YAML settings
       opts.yamlEnabled = getEffectiveYamlEnabled(opts.yamlEnabled, opts.noYaml, cliConfig);
 
-      // Create executor
-      const executor = new Executor(ctx.workflowService, opts);
+      // Create executor. The constructor may throw `LintConfigLoadError` when
+      // `.n8nlintrc.json` is malformed; surface it with a friendly message
+      // instead of a raw SyntaxError stack so users know the fix is in the
+      // config file (or to pass --no-lint as a temporary bypass).
+      let executor: Executor;
+      try {
+        executor = new Executor(ctx.workflowService, opts);
+      } catch (err) {
+        if (err instanceof LintConfigLoadError) {
+          console.error(`Error: ${err.message}`);
+          console.error("Fix the config file, or pass --no-lint to bypass the pre-write check.");
+          process.exit(1);
+        }
+        throw err;
+      }
       executor.setTagService(ctx.tagService);
 
       // Display Git diff mode message if enabled

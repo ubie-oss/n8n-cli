@@ -1,6 +1,7 @@
 import type { Command } from "commander";
-import type { Workflow } from "../../api/types.ts";
+import type { Workflow, WorkflowInput } from "../../api/types.ts";
 import { readWorkflowInput } from "../../input/reader.ts";
+import { runPreWriteLintGate } from "../../lint/cli-gate.ts";
 import { formatJSON } from "../output/json.ts";
 import { formatKeyValue } from "../output/table.ts";
 import { resolveContext } from "../root.ts";
@@ -12,15 +13,41 @@ export function registerUpdateCommand(parent: Command): void {
     .argument("[id]", "Workflow ID (optional if JSON file contains 'id' field)")
     .requiredOption("-f, --file <path>", "Path to workflow JSON file (use - for stdin)")
     .option("--force", "Force update even if remote has been modified")
+    .option(
+      "--no-lint",
+      "Skip the pre-write lint check (the check is on by default; pass to bypass on a one-off basis)",
+    )
+    .option(
+      "--lint-config <path>",
+      "Path to .n8nlintrc.json for the pre-write lint check (auto-discovered if omitted)",
+    )
+    .option(
+      "--lint-disable-rule <rules>",
+      "Comma-separated rule names to disable during the pre-write lint check",
+    )
     .action(async (id: string | undefined, options, command) => {
       const ctx = resolveContext(command.parent?.parent!);
 
-      const input = await readWorkflowInput(options.file as string);
+      // Catch reader validation errors and surface them as CLI errors so
+      // missing-required-field cases produce a consistent message instead of
+      // a raw stack trace. See workflow-create.ts for the same pattern.
+      let input: WorkflowInput;
+      try {
+        input = await readWorkflowInput(options.file as string);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.error(`Error: ${options.file as string}: ${message}`);
+        process.exit(1);
+      }
 
-      // Resolve workflow ID: argument > file content
+      // Resolve workflow ID: argument > file content.
+      // Defer the "Using workflow ID from file" log until AFTER the lint gate
+      // — otherwise a lint failure prints that line first and reads as
+      // "update started, then failed" to humans and stdout scrapers, when in
+      // reality nothing was sent upstream.
       let workflowID = id;
+      let workflowIDFromFile = false;
       if (!workflowID) {
-        // Try to get ID from the raw file data
         const rawData = await readRawID(options.file as string);
         if (!rawData) {
           console.error(
@@ -29,6 +56,24 @@ export function registerUpdateCommand(parent: Command): void {
           process.exit(1);
         }
         workflowID = rawData;
+        workflowIDFromFile = true;
+      }
+
+      runPreWriteLintGate({
+        source: options.file as string,
+        workflow: input,
+        noLint: options.lint === false,
+        configPath: typeof options.lintConfig === "string" ? options.lintConfig : undefined,
+        disableRules:
+          typeof options.lintDisableRule === "string"
+            ? (options.lintDisableRule as string)
+                .split(",")
+                .map((r) => r.trim())
+                .filter((r) => r.length > 0)
+            : undefined,
+      });
+
+      if (workflowIDFromFile) {
         console.log(`Using workflow ID from file: ${workflowID}`);
       }
 
