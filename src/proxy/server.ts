@@ -15,6 +15,8 @@ import {
 import { matchWorkflowMutation, type WorkflowMutation } from "./rest/router.ts";
 import { forwardRequest } from "./upstream.ts";
 
+const MIDDLEWARES_ENV_VAR = "N8N_MIDDLEWARES";
+
 export interface ProxyHandle {
   port: number;
   stop: () => Promise<void>;
@@ -38,9 +40,16 @@ export function startProxy(config: ProxyConfig): ProxyHandle {
   const upstream = normalizeUpstream(config.upstream);
   const logger = new Logger(config.logFormat);
 
-  // Decide which middlewares to run. Defaults to ["lint"] when the caller
-  // hasn't configured one, preserving legacy behavior bit-for-bit.
-  const enabled = config.middlewares?.length ? config.middlewares : DEFAULT_MIDDLEWARE_CHAIN;
+  // Decide which middlewares to run. Precedence: explicit config (set by
+  // the CLI from --middleware) > N8N_MIDDLEWARES env var > legacy default
+  // ["lint"]. Matches apply's behavior so the env-var contract documented
+  // on --middleware ("env: N8N_MIDDLEWARES") holds for the proxy too.
+  const enabled = resolveEnabledList({
+    cliValue: config.middlewares?.join(","),
+    env: process.env,
+    envVar: MIDDLEWARES_ENV_VAR,
+    fallback: DEFAULT_MIDDLEWARE_CHAIN,
+  });
 
   // Stitch the legacy --enforce / --lint-config / --disable-rule flags into
   // the lint middleware's CLI options bag. This lets the existing test

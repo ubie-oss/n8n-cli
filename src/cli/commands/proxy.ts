@@ -114,10 +114,15 @@ export function registerProxyCommand(program: Command): void {
       });
 
       // Friendly startup line on stderr so it never pollutes JSON log streams.
+      // The displayed middleware list reflects what was passed via --middleware;
+      // when empty, the env-var (N8N_MIDDLEWARES) or default chain wins inside
+      // startProxy, so this line just says "(env/default)" to avoid lying about
+      // an empty chain.
+      const mwDisplay = middlewares.length
+        ? middlewares.join(",")
+        : (process.env.N8N_MIDDLEWARES ?? "lint (default)");
       console.error(
-        `n8n-cli proxy listening on ${opts.listen} → ${upstream} (enforce=${enforce}, middlewares=${
-          middlewares.length ? middlewares.join(",") : "lint"
-        })`,
+        `n8n-cli proxy listening on ${opts.listen} → ${upstream} (enforce=${enforce}, middlewares=${mwDisplay})`,
       );
 
       const shutdown = async (signal: string) => {

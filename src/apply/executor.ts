@@ -44,7 +44,7 @@ export class Executor {
   private gitContent?: ContentRetriever;
   private diffSpec?: DiffSpec;
   private middlewares: PreWriteMiddleware[] = [];
-  private middlewaresPrepared = false;
+  private preparedNames = new Set<string>();
 
   constructor(
     private readonly workflowService: WorkflowService,
@@ -95,6 +95,30 @@ export class Executor {
       env: process.env,
       cliOpts: legacyCliOpts,
     });
+
+    // Eagerly run prepare() on every middleware whose prepare() is
+    // synchronous (currently lint, which reads .n8nlintrc.json from disk).
+    // This restores the legacy behavior where a malformed lint config
+    // throws `LintConfigLoadError` from `new Executor(...)`, letting the
+    // friendly error handler in `src/cli/commands/apply.ts` (which wraps
+    // only the constructor call) fire and print the bypass hint.
+    //
+    // Middlewares with async prepare() (e.g. future HTTP-fetching policies)
+    // remain deferred to execute()'s `preparePipeline` call. The
+    // synchronously-prepared set is tracked so execute() does not call
+    // prepare() on them a second time.
+    for (const mw of this.middlewares) {
+      const fn = mw.prepare;
+      if (!fn) {
+        this.preparedNames.add(mw.name);
+        continue;
+      }
+      const result = fn.call(mw);
+      if (result === undefined) {
+        this.preparedNames.add(mw.name);
+      }
+      // Promise return → defer; execute() will await it.
+    }
   }
 
   setTagService(tagService: TagService): void {
@@ -151,13 +175,15 @@ export class Executor {
   async execute(): Promise<ApplyResult> {
     const result = emptyResult(this.opts.dryRun);
 
-    // Initialize middlewares once per apply. Prepare may make a network
-    // call (authz resolving the actor's groups) or load config off disk
-    // (lint reading `.n8nlintrc.json`); doing it here avoids paying that
-    // cost once per workflow.
-    if (!this.middlewaresPrepared) {
-      await preparePipeline(this.middlewares);
-      this.middlewaresPrepared = true;
+    // Prepare any middlewares not already initialised by the constructor.
+    // Sync-prepare middlewares (lint) ran in the constructor so config
+    // errors propagate to `new Executor(...)`. Async-prepare middlewares
+    // (e.g. authz fetching the actor's groups) run here, once, before the
+    // per-workflow loop so the cost is paid once per apply.
+    const pending = this.middlewares.filter((m) => !this.preparedNames.has(m.name));
+    if (pending.length > 0) {
+      await preparePipeline(pending);
+      for (const m of pending) this.preparedNames.add(m.name);
     }
 
     // Duplicate-name check is on by default; opt out with allowDuplicates.
@@ -559,9 +585,16 @@ function buildMiddlewareErrorMessage(
   const errorOnly = violations.filter((v) => v.severity === "error" || !v.severity);
   const lines = errorOnly.map((v) => formatViolationLine(filePath, v));
   const mwLabel = blockedBy ?? "middleware";
+  // Append the bypass hint for the known middleware. Authz has no
+  // equivalent bypass flag (dropping it from --middleware is an explicit
+  // declarative action, not a per-run override), so we only add the lint
+  // hint here. The legacy `buildLintErrorMessage` always emitted this
+  // tail; keeping it preserves the existing CLI UX and any consumers
+  // grepping for "--no-lint to bypass" in apply output.
+  const hint = blockedBy === "lint" ? "; pass --no-lint to bypass" : "";
   const summary = `${mwLabel} check failed (${errorOnly.length} error${
     errorOnly.length === 1 ? "" : "s"
-  })`;
+  })${hint}`;
   return [summary, ...lines].join("\n  ");
 }
 

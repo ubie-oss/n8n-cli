@@ -63,10 +63,40 @@ export function buildMiddlewares(input: BuildMiddlewaresInput): PreWriteMiddlewa
     }
     const fromEnv = factory.loadFromEnv(env);
     const fromCli = factory.loadFromCLI(cliOpts);
-    const merged = { ...fromEnv, ...fromCli };
+    // Deep-merge per top-level key so partial CLI overrides don't wipe
+    // env-supplied fields inside nested option buckets (e.g. when a user
+    // sets N8N_AUTHZ_GROUPS_URL + N8N_AUTHZ_GROUPS_EXTRACT via env and then
+    // overrides only --authz-groups-url on the CLI, the extract field
+    // must survive). One level of nesting is enough for current options;
+    // arrays are replaced wholesale (intended: a CLI list overrides env).
+    const merged = mergeOptions(
+      fromEnv as Record<string, unknown>,
+      fromCli as Record<string, unknown>,
+    );
     built.push(factory.build(merged));
   }
   return built;
+}
+
+function mergeOptions(
+  base: Record<string, unknown>,
+  override: Record<string, unknown>,
+): Record<string, unknown> {
+  const out: Record<string, unknown> = { ...base };
+  for (const [key, ovValue] of Object.entries(override)) {
+    if (ovValue === undefined) continue;
+    const baseValue = out[key];
+    if (isPlainObject(baseValue) && isPlainObject(ovValue)) {
+      out[key] = { ...baseValue, ...ovValue };
+    } else {
+      out[key] = ovValue;
+    }
+  }
+  return out;
+}
+
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
 /**

@@ -279,3 +279,46 @@ describe("proxy + authz: chained with lint", () => {
     expect(groups.hits).toHaveLength(0);
   });
 });
+
+describe("proxy + authz: N8N_MIDDLEWARES env var", () => {
+  test("env var enables authz when --middleware is not passed", async () => {
+    const prev = process.env.N8N_MIDDLEWARES;
+    process.env.N8N_MIDDLEWARES = "authz";
+    try {
+      groups.table.set("ryo@example.com", []);
+      // No middlewares: [] config — would default to ["lint"] before the fix.
+      proxy = startProxy({
+        listen: "127.0.0.1:0",
+        upstream: `http://127.0.0.1:${upstream.port}`,
+        enforce: "off",
+        disableRules: [],
+        logFormat: "json",
+        allowDuplicates: true,
+        middlewares: [],
+        middlewareCliOptions: {
+          authzEnforce: "error",
+          authzIdentitySource: "header",
+          authzIdentityName: "X-User-Email",
+          authzGroupsUrl: `http://127.0.0.1:${groups.port}/groups`,
+          authzGroupsBody: '{"email": ${json:identity}}',
+          authzGroupsExtract: "$.groups[*].id",
+          authzWorkflowExtract: "$.tags[*].name",
+          authzWorkflowStripPrefix: "owner:",
+          authzGroupsCacheTtlMs: "0",
+        },
+      });
+
+      const res = await fetch(url("/api/v1/workflows"), {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-user-email": "ryo@example.com" },
+        body: workflowBody("wf", ["eng"]),
+      });
+      expect(res.status).toBe(403);
+      expect(upstream.captured).toHaveLength(0);
+      expect(groups.hits.length).toBeGreaterThan(0);
+    } finally {
+      if (prev === undefined) delete process.env.N8N_MIDDLEWARES;
+      else process.env.N8N_MIDDLEWARES = prev;
+    }
+  });
+});

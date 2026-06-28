@@ -118,4 +118,24 @@ describe("buildMiddlewares", () => {
       /strict: at least one option must be provided/,
     );
   });
+
+  test("nested options bucket: CLI partial override merges with env fields", () => {
+    let observed: unknown;
+    const f: MiddlewareFactory<{ nested?: { a?: string; b?: string }; required?: string }> = {
+      name: "nested",
+      loadFromEnv: () => ({ nested: { a: "env-a", b: "env-b" } }),
+      loadFromCLI: () => ({ nested: { a: "cli-a" } }),
+      build: (o) => {
+        observed = o;
+        return { name: "nested", evaluate: () => ({ block: false, violations: [] }) };
+      },
+    };
+    registerFactory(f);
+    buildMiddlewares({ enabled: ["nested"] });
+    // CLI's `a` wins; env's `b` survives — was lost before the deep-merge fix.
+    expect((observed as { nested: { a: string; b: string } }).nested).toEqual({
+      a: "cli-a",
+      b: "env-b",
+    });
+  });
 });
