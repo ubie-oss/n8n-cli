@@ -121,6 +121,9 @@ describe("apply pre-write lint check", () => {
     expect(result.operations[0]?.operation).toBe("error");
     expect(result.operations[0]?.error?.message).toContain("lint check failed");
     expect(result.operations[0]?.error?.message).toContain("connection-reference");
+    // The "; pass --no-lint to bypass" tail is part of the documented apply
+    // UX — CI consumers grep for it. Keep it in the error message.
+    expect(result.operations[0]?.error?.message).toContain("pass --no-lint to bypass");
     expect(calls.creates).toHaveLength(0);
   });
 
@@ -233,5 +236,20 @@ describe("apply pre-write lint check", () => {
     // At least one warning should be present (orphaned-node).
     const warns = op?.lintViolations?.filter((v) => v.severity === "warning") ?? [];
     expect(warns.length).toBeGreaterThan(0);
+  });
+
+  test("malformed .n8nlintrc.json throws LintConfigLoadError from `new Executor(...)`", async () => {
+    // Write an invalid lint config so prepare() must throw.
+    const badConfig = path.join(tmpDir, ".n8nlintrc.json");
+    fs.writeFileSync(badConfig, "{ not valid json");
+    fs.writeFileSync(path.join(tmpDir, "wf.json"), JSON.stringify(goodWorkflow()));
+    opts.lintConfigPath = badConfig;
+
+    const { service } = mockWorkflowService();
+    // The apply CLI catches this around `new Executor(...)` to print a
+    // friendly error + bypass hint. The throw must happen from the
+    // constructor — not from execute() — for that catch to fire.
+    const { LintConfigLoadError } = await import("@/lint/write-check.ts");
+    expect(() => new Executor(service, opts)).toThrow(LintConfigLoadError);
   });
 });

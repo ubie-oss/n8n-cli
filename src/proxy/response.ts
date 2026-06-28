@@ -1,4 +1,5 @@
 import type { Violation } from "@/lint/rules/violation.ts";
+import type { PipelineVerdict } from "@/middleware/types.ts";
 
 export interface LintErrorBody {
   error: "workflow_lint_failed";
@@ -35,6 +36,40 @@ export function buildLintErrorResponse(violations: Violation[]): Response {
   };
   return new Response(JSON.stringify(body), {
     status: 422,
+    headers: { "content-type": "application/json" },
+  });
+}
+
+/**
+ * Builds a response for a pipeline verdict. The shape is determined by the
+ * blocking middleware's `denial` hint:
+ *
+ *   - status:  HTTP status code (e.g. 422 for lint, 403 for authz)
+ *   - error:   machine-readable code, used by clients to branch on
+ *   - message: human-readable summary
+ *
+ * Without a denial hint we default to 422 + "policy_failed" so future
+ * middlewares that forget to declare one still produce a usable response.
+ */
+export function buildDenialResponse(verdict: PipelineVerdict): Response {
+  const status = verdict.denial?.status ?? 422;
+  const error = verdict.denial?.error ?? "policy_failed";
+  const message = verdict.denial?.message ?? "Workflow blocked by policy";
+  const body = {
+    error,
+    message,
+    middleware: verdict.blockedBy,
+    violations: verdict.violations.map((v) => ({
+      rule: v.rule,
+      severity: v.severity,
+      message: v.message,
+      line: v.line,
+      column: v.column,
+    })),
+    docs: DOCS_URL,
+  };
+  return new Response(JSON.stringify(body), {
+    status,
     headers: { "content-type": "application/json" },
   });
 }

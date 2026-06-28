@@ -1,7 +1,7 @@
 import type { Command } from "commander";
 import type { Workflow, WorkflowInput } from "../../api/types.ts";
 import { readWorkflowInput } from "../../input/reader.ts";
-import { runPreWriteLintGate } from "../../lint/cli-gate.ts";
+import { runPreWriteGate } from "../../middleware/cli-gate.ts";
 import { formatJSON } from "../output/json.ts";
 import { formatKeyValue } from "../output/table.ts";
 import { resolveContext } from "../root.ts";
@@ -40,12 +40,12 @@ export function registerCreateCommand(parent: Command): void {
         process.exit(1);
       }
 
-      runPreWriteLintGate({
+      await runPreWriteGate({
         source: options.file as string,
         workflow: input,
         noLint: options.lint === false,
-        configPath: typeof options.lintConfig === "string" ? options.lintConfig : undefined,
-        disableRules:
+        lintConfigPath: typeof options.lintConfig === "string" ? options.lintConfig : undefined,
+        lintDisableRules:
           typeof options.lintDisableRule === "string"
             ? (options.lintDisableRule as string)
                 .split(",")

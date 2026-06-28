@@ -48,6 +48,32 @@ export function registerApplyCommand(program: Command): void {
       "--lint-disable-rule <rules>",
       "Comma-separated rule names to disable during the pre-write lint check",
     )
+    .option(
+      "--middleware <list>",
+      "Comma-separated middleware chain (default: lint; env: N8N_MIDDLEWARES). Example: lint,authz",
+    )
+    // Authz options (relevant when "authz" is in the middleware chain).
+    .option("--authz-enforce <level>", "Authz enforcement level: off, warn, error")
+    .option("--authz-on-error <mode>", "Behavior when groups API fails: deny, allow")
+    .option("--authz-identity-source <kind>", "Where to read identity: header, env, none")
+    .option("--authz-identity-name <name>", "Header or env-var name holding the identity")
+    .option("--authz-identity-decode <mode>", "Identity decode strategy: raw, jwt")
+    .option("--authz-identity-claim <name>", "JWT claim name (decode=jwt)")
+    .option("--authz-groups-url <url>", "Groups API endpoint")
+    .option("--authz-groups-method <method>", "HTTP method for groups API")
+    .option("--authz-groups-headers <json>", "Headers as JSON object string")
+    .option(
+      "--authz-groups-body <template>",
+      "Body template; supports ${env:X} and ${json:identity}",
+    )
+    .option("--authz-groups-extract <jsonpath>", "JSONPath to extract group ids from response")
+    .option("--authz-groups-cache-ttl-ms <ms>", "Identity→groups cache TTL in milliseconds")
+    .option("--authz-groups-timeout-ms <ms>", "Groups API HTTP timeout in milliseconds")
+    .option("--authz-workflow-extract <jsonpath>", "JSONPath to extract ACL values from workflow")
+    .option(
+      "--authz-workflow-strip-prefix <prefix>",
+      "Prefix to strip from each extracted ACL value",
+    )
     .action(async (options, command) => {
       const ctx = resolveContext(command.parent!);
 
@@ -69,6 +95,38 @@ export function registerApplyCommand(program: Command): void {
           .split(",")
           .map((r) => r.trim())
           .filter((r) => r.length > 0);
+      }
+
+      // Middleware chain. Parsed lazily — the executor falls back to
+      // env / default when this is empty.
+      if (typeof options.middleware === "string") {
+        opts.middlewares = (options.middleware as string)
+          .split(",")
+          .map((s) => s.trim())
+          .filter((s) => s.length > 0);
+      }
+
+      // Forward the flat authz-* options to the middleware factory bag.
+      const authzKeys = [
+        "authzEnforce",
+        "authzOnError",
+        "authzIdentitySource",
+        "authzIdentityName",
+        "authzIdentityDecode",
+        "authzIdentityClaim",
+        "authzGroupsUrl",
+        "authzGroupsMethod",
+        "authzGroupsHeaders",
+        "authzGroupsBody",
+        "authzGroupsExtract",
+        "authzGroupsCacheTtlMs",
+        "authzGroupsTimeoutMs",
+        "authzWorkflowExtract",
+        "authzWorkflowStripPrefix",
+      ] as const;
+      for (const k of authzKeys) {
+        const v = (options as Record<string, unknown>)[k];
+        if (v !== undefined) opts.middlewareCliOptions[k] = v;
       }
 
       if (options.yaml === true) opts.yamlEnabled = true;

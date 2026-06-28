@@ -48,6 +48,18 @@ export interface ApplyOptions {
   /** Rule names disabled via CLI flag, forwarded to the lint registry. */
   lintDisableRules: string[];
   filterByTags: string[];
+  /**
+   * Ordered list of middleware names to run before writing each workflow
+   * upstream. Defaults to ["lint"] when empty for legacy compatibility.
+   * Set via --middleware or N8N_MIDDLEWARES.
+   */
+  middlewares: string[];
+  /**
+   * Flat commander-style options bag forwarded to each middleware factory.
+   * Populated by `cli/commands/apply.ts` so each middleware can pick out
+   * its own keys (e.g. authzGroupsUrl).
+   */
+  middlewareCliOptions: Record<string, unknown>;
 }
 
 /** Returns ApplyOptions with default values. */
@@ -69,6 +81,8 @@ export function defaultApplyOptions(): ApplyOptions {
     noLint: false,
     lintDisableRules: [],
     filterByTags: [],
+    middlewares: [],
+    middlewareCliOptions: {},
   };
 }
 
@@ -110,8 +124,19 @@ export interface ApplyOperation {
    * Violations surfaced by the pre-write lint check, when one ran. Present on
    * both blocked (operation === "error") and passing operations so callers
    * can surface warnings without forcing a re-lint.
+   *
+   * Kept for backwards compatibility with existing reporters; for non-lint
+   * middlewares see `middlewareViolations` below.
    */
   lintViolations?: Violation[];
+  /**
+   * Violations surfaced by any middleware in the pipeline (including lint).
+   * Set in addition to `lintViolations` so existing consumers continue to
+   * work unchanged.
+   */
+  middlewareViolations?: Violation[];
+  /** Name of the middleware that blocked this operation, if any. */
+  blockedByMiddleware?: string;
 }
 
 /** Creates a default ApplyOperation. */
