@@ -1,16 +1,16 @@
 import type { Workflow } from "@/api/types.ts";
-import { type LintConfig, loadLintConfig } from "@/lint/config.ts";
-import type { RuleWithConfig } from "@/lint/registry.ts";
-import { registerDefaultRules } from "@/lint/rules/index.ts";
+import { runPipeline } from "@/middleware/pipeline.ts";
+import { buildMiddlewares, resolveEnabledList } from "@/middleware/registry.ts";
+import type { PreWriteMiddleware } from "@/middleware/types.ts";
+import { DEFAULT_MIDDLEWARE_CHAIN, registerBuiltins } from "@/middleware/wiring.ts";
 import { normalizeUpstream, type ProxyConfig, parseListenAddr } from "./config.ts";
 import { DuplicateChecker } from "./duplicate.ts";
-import { evaluate } from "./enforcer.ts";
 import { Logger } from "./logging.ts";
 import {
   buildBadJSONResponse,
+  buildDenialResponse,
   buildDuplicateResponse,
   buildErrorResponse,
-  buildLintErrorResponse,
 } from "./response.ts";
 import { matchWorkflowMutation, type WorkflowMutation } from "./rest/router.ts";
 import { forwardRequest } from "./upstream.ts";
@@ -22,29 +22,54 @@ export interface ProxyHandle {
 
 interface HandlerDeps {
   upstream: string;
-  rules: RuleWithConfig[];
-  lintConfig: LintConfig;
   config: ProxyConfig;
   logger: Logger;
   duplicates: DuplicateChecker | null;
+  middlewares: PreWriteMiddleware[];
 }
 
 /** Starts the proxy server. Returns a handle so tests can stop it cleanly. */
 export function startProxy(config: ProxyConfig): ProxyHandle {
+  // Register builtin middleware factories. Idempotent — safe to call once
+  // per `startProxy` invocation (tests call this repeatedly).
+  registerBuiltins();
+
   const { host, port } = parseListenAddr(config.listen);
   const upstream = normalizeUpstream(config.upstream);
   const logger = new Logger(config.logFormat);
 
-  const registry = registerDefaultRules();
-  const lintConfig: LintConfig = loadLintConfig(config.lintConfigPath);
-  const rules: RuleWithConfig[] = registry.enabledRulesWithConfig(lintConfig, config.disableRules);
+  // Decide which middlewares to run. Defaults to ["lint"] when the caller
+  // hasn't configured one, preserving legacy behavior bit-for-bit.
+  const enabled = config.middlewares?.length ? config.middlewares : DEFAULT_MIDDLEWARE_CHAIN;
+
+  // Stitch the legacy --enforce / --lint-config / --disable-rule flags into
+  // the lint middleware's CLI options bag. This lets the existing test
+  // surface keep working without callers having to change to the new flags.
+  const legacyCliOpts: Record<string, unknown> = {
+    lintEnforce: config.enforce,
+    ...(config.lintConfigPath ? { lintConfig: config.lintConfigPath } : {}),
+    ...(config.disableRules.length ? { lintDisableRule: config.disableRules } : {}),
+    ...(config.middlewareCliOptions ?? {}),
+  };
+
+  const middlewares = buildMiddlewares({
+    enabled,
+    env: process.env,
+    cliOpts: legacyCliOpts,
+  });
+
+  // Run prepare() up front so identity-resolution / config-load failures
+  // surface at startup rather than on the first request.
+  for (const mw of middlewares) {
+    void mw.prepare?.();
+  }
 
   // Duplicate-name detection is on by default; opt out with allowDuplicates.
   const duplicates = config.allowDuplicates
     ? null
     : new DuplicateChecker(upstream, config.duplicateTtlMs);
 
-  const deps: HandlerDeps = { upstream, rules, lintConfig, config, logger, duplicates };
+  const deps: HandlerDeps = { upstream, config, logger, duplicates, middlewares };
 
   const server = Bun.serve({
     hostname: host,
@@ -56,6 +81,7 @@ export function startProxy(config: ProxyConfig): ProxyHandle {
     port: server.port ?? port,
     stop: async () => {
       await server.stop(true);
+      await Promise.all(middlewares.map((m) => m.dispose?.()));
     },
   };
 }
@@ -129,8 +155,17 @@ async function handleWorkflowMutation(
     return buildBadJSONResponse(message);
   }
 
-  // Lint
-  const verdict = evaluate(workflow, rawJSON, deps.rules, deps.lintConfig, deps.config.enforce);
+  // Middleware pipeline (lint + authz + future policies).
+  // Identity is left undefined here so each middleware can resolve from
+  // its own spec; the proxy doesn't need to know which middleware needs
+  // identity or which header it lives on.
+  const verdict = await runPipeline(deps.middlewares, {
+    workflow,
+    rawJSON,
+    request: req,
+    mode: "proxy",
+  });
+
   const workflowName = workflow?.name;
 
   if (verdict.block) {
@@ -138,15 +173,16 @@ async function handleWorkflowMutation(
       action: "block",
       method: req.method,
       path: pathname,
-      status: 422,
+      status: verdict.denial?.status ?? 422,
       workflowName,
       violations: verdict.violations.map((v) => ({
         rule: v.rule,
         severity: v.severity,
         message: v.message,
       })),
+      message: verdict.blockedBy ? `blocked by middleware ${verdict.blockedBy}` : undefined,
     });
-    return buildLintErrorResponse(verdict.violations);
+    return buildDenialResponse(verdict);
   }
 
   // Duplicate detection (creates only — updates target a specific id).

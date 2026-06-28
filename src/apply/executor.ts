@@ -6,12 +6,11 @@ import type { Workflow, WorkflowInput } from "../api/types.ts";
 import type { WorkflowService } from "../api/workflow-service.ts";
 import { ContentRetriever, ErrFileNotExist } from "../git/content.ts";
 import type { Violation } from "../lint/rules/violation.ts";
-import {
-  checkWorkflowForWrite,
-  formatViolationLine,
-  prepareWriteLintContext,
-  type WriteLintContext,
-} from "../lint/write-check.ts";
+import { formatViolationLine } from "../lint/write-check.ts";
+import { disposePipeline, preparePipeline, runPipeline } from "../middleware/pipeline.ts";
+import { buildMiddlewares, resolveEnabledList } from "../middleware/registry.ts";
+import type { PreWriteMiddleware } from "../middleware/types.ts";
+import { DEFAULT_MIDDLEWARE_CHAIN, registerBuiltins } from "../middleware/wiring.ts";
 import { compare } from "./differ.ts";
 import { DuplicateChecker } from "./duplicate.ts";
 import { Scanner } from "./scanner.ts";
@@ -44,7 +43,8 @@ export class Executor {
   private threeWayDetector?: ThreeWayDetector;
   private gitContent?: ContentRetriever;
   private diffSpec?: DiffSpec;
-  private lintCtx?: WriteLintContext;
+  private middlewares: PreWriteMiddleware[] = [];
+  private middlewaresPrepared = false;
 
   constructor(
     private readonly workflowService: WorkflowService,
@@ -61,22 +61,40 @@ export class Executor {
       }
     }
 
-    // Lint check is on by default. Resolve config and rules once per apply so
-    // we don't pay the registry cost for every workflow. Discovery starts from
-    // `opts.directory` so an in-tree `.n8nlintrc.json` (e.g. `workflows/.n8nlintrc.json`)
-    // is picked up regardless of where the user invoked the CLI from.
+    // Build the middleware pipeline. Default chain is ["lint"] for legacy
+    // compatibility; users opt-in to authz (or future policies) via
+    // --middleware or N8N_MIDDLEWARES.
+    //
+    // `--no-lint` is honored by *removing* lint from the chain rather than
+    // by passing enforce=off, so users keep getting backwards-compatible
+    // behavior even when they enable authz alongside.
     //
     // `LintConfigLoadError` is intentionally NOT caught here — it would leave
     // the user with a half-initialised Executor. The caller in
     // `src/cli/commands/apply.ts` is responsible for catching the typed error
     // and printing a friendly message.
-    if (!opts.noLint) {
-      this.lintCtx = prepareWriteLintContext(
-        opts.lintConfigPath,
-        opts.lintDisableRules,
-        opts.directory,
-      );
-    }
+    registerBuiltins();
+    const enabled = resolveEnabledList({
+      cliValue: opts.middlewares.join(","),
+      env: process.env,
+      envVar: "N8N_MIDDLEWARES",
+      fallback: DEFAULT_MIDDLEWARE_CHAIN,
+    });
+    const filtered = opts.noLint ? enabled.filter((n) => n !== "lint") : enabled;
+
+    // Stitch legacy lint flags into the CLI options bag the lint factory
+    // expects. Keeps `--lint-config` / `--lint-disable-rule` working.
+    const legacyCliOpts: Record<string, unknown> = {
+      ...(opts.lintConfigPath ? { lintConfig: opts.lintConfigPath } : {}),
+      ...(opts.lintDisableRules.length ? { lintDisableRule: opts.lintDisableRules } : {}),
+      lintStartDir: opts.directory,
+      ...opts.middlewareCliOptions,
+    };
+    this.middlewares = buildMiddlewares({
+      enabled: filtered,
+      env: process.env,
+      cliOpts: legacyCliOpts,
+    });
   }
 
   setTagService(tagService: TagService): void {
@@ -133,6 +151,15 @@ export class Executor {
   async execute(): Promise<ApplyResult> {
     const result = emptyResult(this.opts.dryRun);
 
+    // Initialize middlewares once per apply. Prepare may make a network
+    // call (authz resolving the actor's groups) or load config off disk
+    // (lint reading `.n8nlintrc.json`); doing it here avoids paying that
+    // cost once per workflow.
+    if (!this.middlewaresPrepared) {
+      await preparePipeline(this.middlewares);
+      this.middlewaresPrepared = true;
+    }
+
     // Duplicate-name check is on by default; opt out with allowDuplicates.
     // Skip on dry-run so a local preview stays cheap and works offline. If
     // the upstream list call fails (auth, transient 5xx), degrade to a
@@ -168,6 +195,7 @@ export class Executor {
 
     updateCounts(result);
     result.warningCount = result.warnings.length;
+    await disposePipeline(this.middlewares);
     return result;
   }
 
@@ -189,18 +217,29 @@ export class Executor {
     op.workflowName = workflow.name;
     op.localUpdated = workflow.updatedAt;
 
-    // Pre-write lint gate. Runs before any remote fetch so a broken workflow
-    // never causes upstream traffic. Errors mark the op as failed; warnings
-    // are recorded on the op but do not block. Bypassed only when the user
-    // passed --no-lint (and `lintCtx` was therefore not built). `--force`
-    // intentionally does NOT override this — lint failures are policy, not
-    // merge conflicts.
-    if (this.lintCtx) {
-      const check = checkWorkflowForWrite(workflow, undefined, this.lintCtx);
-      op.lintViolations = check.violations;
-      if (check.hasErrors) {
+    // Pre-write middleware pipeline. Runs every enabled middleware (lint,
+    // authz, future policies) before any remote fetch so a broken or
+    // unauthorized workflow never causes upstream traffic. Errors mark the
+    // op as failed; warnings are recorded on the op but do not block.
+    // `--force` intentionally does NOT override this — middleware failures
+    // are policy, not merge conflicts.
+    if (this.middlewares.length > 0) {
+      const verdict = await runPipeline(this.middlewares, {
+        workflow,
+        rawJSON: undefined,
+        mode: "apply",
+      });
+      op.middlewareViolations = verdict.violations;
+      // Preserve `lintViolations` for any consumer that still reads it.
+      op.lintViolations = verdict.violations.filter(
+        (v) => v.rule !== "authz-denied" && !v.rule.startsWith("authz-"),
+      );
+      if (verdict.block) {
         op.operation = "error";
-        op.error = new Error(buildLintErrorMessage(wf.path, check.violations));
+        op.blockedByMiddleware = verdict.blockedBy;
+        op.error = new Error(
+          buildMiddlewareErrorMessage(wf.path, verdict.blockedBy, verdict.violations),
+        );
         return op;
       }
     }
@@ -503,17 +542,26 @@ export class Executor {
 }
 
 /**
- * Builds the multi-line error message used when lint blocks a workflow.
- * Mirrors the layout of `n8n-cli lint` text output so users see the same
- * `file:line: severity[rule]: message` shape they would when running lint
- * standalone.
+ * Builds the multi-line error message used when a middleware blocks a
+ * workflow. Mirrors the layout of `n8n-cli lint` text output so users see
+ * the same `file:line: severity[rule]: message` shape they would when
+ * running lint standalone.
+ *
+ * The summary line names the blocking middleware so users know whether to
+ * pass `--no-lint`, drop the authz middleware from `--middleware`, or fix
+ * the workflow.
  */
-function buildLintErrorMessage(filePath: string, violations: Violation[]): string {
+function buildMiddlewareErrorMessage(
+  filePath: string,
+  blockedBy: string | undefined,
+  violations: Violation[],
+): string {
   const errorOnly = violations.filter((v) => v.severity === "error" || !v.severity);
   const lines = errorOnly.map((v) => formatViolationLine(filePath, v));
-  const summary = `lint check failed (${errorOnly.length} error${
+  const mwLabel = blockedBy ?? "middleware";
+  const summary = `${mwLabel} check failed (${errorOnly.length} error${
     errorOnly.length === 1 ? "" : "s"
-  }); pass --no-lint to bypass`;
+  })`;
   return [summary, ...lines].join("\n  ");
 }
 

@@ -8,7 +8,7 @@ export interface ProxyConfig {
   upstream: string;
   /** Optional path to .n8nlintrc.json (auto-discovered if omitted) */
   lintConfigPath?: string;
-  /** Enforcement level */
+  /** Enforcement level (legacy field used by the lint middleware) */
   enforce: EnforceLevel;
   /** Rule names to disable */
   disableRules: string[];
@@ -28,6 +28,20 @@ export interface ProxyConfig {
   duplicateTtlMs?: number;
   /** Total upstream request timeout in ms. Default 30_000. 0 disables. */
   upstreamTimeoutMs?: number;
+  /**
+   * Ordered list of middleware names to run before forwarding to upstream.
+   *
+   * Defaults to ["lint"] when omitted (legacy behavior). To add authz,
+   * pass ["lint", "authz"]. Order matters: short-circuiting at the first
+   * blocker means earlier names are checked first.
+   */
+  middlewares?: string[];
+  /**
+   * Flat commander-style options bag forwarded to each middleware factory.
+   * Populated by `cli/commands/proxy.ts` so each middleware can pick out
+   * its own keys (`lintEnforce`, `authzGroupsUrl`, ...).
+   */
+  middlewareCliOptions?: Record<string, unknown>;
 }
 
 /**
