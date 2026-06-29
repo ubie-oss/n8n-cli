@@ -1,4 +1,5 @@
 import type { Command } from "commander";
+import { parseTagFilter } from "@/common/tags.ts";
 import { parseMiddlewareList } from "@/middleware/registry.ts";
 import { parseEnforceLevel } from "@/proxy/config.ts";
 import { startProxy } from "@/proxy/server.ts";
@@ -14,6 +15,7 @@ interface ProxyOptions {
   duplicateTtl?: string;
   upstreamTimeout?: string;
   middleware?: string;
+  tags?: string;
   // Authz middleware options (flat namespace so commander stays happy).
   authzEnforce?: string;
   authzOnError?: string;
@@ -58,6 +60,10 @@ export function registerProxyCommand(program: Command): void {
       "--middleware <list>",
       "Comma-separated middleware chain (default: lint; env: N8N_MIDDLEWARES). Example: lint,authz",
     )
+    .option(
+      "--tags <tags>",
+      "Only run middleware against workflow saves whose tags contain ALL of the listed names (AND condition; env: PROXY_FILTER_BY_TAGS). Non-matching saves are forwarded transparently.",
+    )
     // Authz options — only meaningful when "authz" is in the middleware chain.
     .option("--authz-enforce <level>", "Authz enforcement level: off, warn, error")
     .option("--authz-on-error <mode>", "Behavior when groups API fails: deny, allow")
@@ -98,6 +104,7 @@ export function registerProxyCommand(program: Command): void {
       const upstreamTimeoutMs = parsePositiveInt(opts.upstreamTimeout, "--upstream-timeout");
 
       const middlewares = parseMiddlewareList(opts.middleware);
+      const filterByTags = parseTagFilter(opts.tags ?? process.env.PROXY_FILTER_BY_TAGS);
 
       const handle = startProxy({
         listen: opts.listen,
@@ -111,6 +118,7 @@ export function registerProxyCommand(program: Command): void {
         upstreamTimeoutMs,
         middlewares,
         middlewareCliOptions: extractMiddlewareCliOpts(opts),
+        filterByTags: filterByTags.length > 0 ? filterByTags : undefined,
       });
 
       // Friendly startup line on stderr so it never pollutes JSON log streams.
@@ -121,8 +129,9 @@ export function registerProxyCommand(program: Command): void {
       const mwDisplay = middlewares.length
         ? middlewares.join(",")
         : (process.env.N8N_MIDDLEWARES ?? "lint (default)");
+      const tagsDisplay = filterByTags.length > 0 ? `, tags=${filterByTags.join(",")}` : "";
       console.error(
-        `n8n-cli proxy listening on ${opts.listen} → ${upstream} (enforce=${enforce}, middlewares=${mwDisplay})`,
+        `n8n-cli proxy listening on ${opts.listen} → ${upstream} (enforce=${enforce}, middlewares=${mwDisplay}${tagsDisplay})`,
       );
 
       const shutdown = async (signal: string) => {
