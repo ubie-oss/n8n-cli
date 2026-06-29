@@ -42,6 +42,14 @@ export interface ProxyConfig {
    * its own keys (`lintEnforce`, `authzGroupsUrl`, ...).
    */
   middlewareCliOptions?: Record<string, unknown>;
+  /**
+   * Tag-based scope filter (AND condition). When set, the proxy only runs
+   * middleware (lint / authz / ...) and duplicate detection against workflow
+   * saves whose `tags` contain every name listed here; non-matching saves
+   * are forwarded transparently. Empty / undefined means "process every
+   * intercepted save" (legacy behavior).
+   */
+  filterByTags?: string[];
 }
 
 /**

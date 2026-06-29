@@ -840,6 +840,8 @@ n8n-cli proxy [options]
 | `--allow-duplicates` | Skip the upstream duplicate-name check (the check is on by default) |
 | `--duplicate-ttl <ms>` | TTL for the cached upstream workflow-name index (default: 60000) |
 | `--upstream-timeout <ms>` | Per-request upstream timeout in milliseconds (default: 30000, 0 disables) |
+| `--middleware <list>` | Comma-separated middleware chain (default: `lint`; env: `N8N_MIDDLEWARES`). Example: `lint,authz` |
+| `--tags <tags>` | Only run middleware against workflow saves whose tags contain ALL of the listed names (AND condition; env: `PROXY_FILTER_BY_TAGS`). Non-matching saves are forwarded transparently |
 
 **Enforcement levels:**
 
@@ -881,7 +883,19 @@ Clients then point at `http://proxy-host:8080` instead of n8n directly. From the
 
 **Apply-style safety checks:** beyond lint, the proxy mirrors the same default-on duplicate-name safety that `apply` enforces. On every `POST /api/v1/workflows` the proxy fetches the upstream workflow list (cached for `--duplicate-ttl` milliseconds) and rejects creates that collide with an existing remote name. Under `--enforce error` this returns 409; under `--enforce warn` an `X-N8n-Duplicate-Warning` header is attached to the forwarded response. Pass `--allow-duplicates` to disable the check entirely (e.g. during a one-off bulk import). Lookups run under the caller's own `X-N8N-API-KEY` so duplicate detection never escalates privileges.
 
-**Rollout tip:** start with `--enforce warn` to audit the violation distribution in production logs, then flip to `--enforce error` once the team has cleaned up existing violations. The proxy exposes `GET /healthz` (and `HEAD /healthz`) for liveness probes.
+**Rollout tip:** start with `--enforce warn` to audit the violation distribution in production logs, then flip to `--enforce error` once the team has cleaned up existing violations.
+
+**Scoping by tags:** pass `--tags managed,prod` (or set `PROXY_FILTER_BY_TAGS`) to constrain middleware enforcement to workflow saves whose `tags` contain every listed name. Saves outside that scope are forwarded transparently — no lint, no duplicate-name check, no authz. Useful when only a subset of workflows on the upstream is under policy. Filtering is AND across the listed names.
+
+> **Scope is advisory, not an enforcement boundary.** The filter reads tags from the request body the client sent, not from the existing upstream workflow, so a caller can bypass middleware by stripping the tag from the JSON they submit. Use it to opt subsets of workflows into policy (organizational scoping), not to defend against a hostile client; for hard enforcement keep the filter empty so every save is checked, or pair the filter with API-key / network-level access controls.
+
+**Health probes:**
+
+| Path | Method | Behavior |
+|------|--------|----------|
+| `GET`/`HEAD /livez` | Liveness | Always `200 ok` once the server is accepting connections. Use for Kubernetes `livenessProbe`. |
+| `GET`/`HEAD /readyz` | Readiness | `200 ready` once every middleware's `prepare()` resolves; `503 preparing` (or `503 not ready` with details) while resolvers are still warming up or have failed. Use for Kubernetes `readinessProbe` so traffic is held back until authz groups, lint config, etc. are usable. |
+| `GET`/`HEAD /healthz` | Generic | Always `200 ok`. Kept for backward compatibility with existing probes; new deployments should prefer `/livez` + `/readyz`. |
 
 ### `version`
 
@@ -917,6 +931,7 @@ n8n-cli version
 | `N8N_DEFAULT_PROJECT` | Default project ID for apply |
 | `APPLY_FILTER_BY_TAGS` | Comma-separated tags to filter apply targets |
 | `CHECKS_FILTER_BY_TAGS` | Comma-separated tags to filter lint/fmt targets (AND condition) |
+| `PROXY_FILTER_BY_TAGS` | Comma-separated tags to scope proxy middleware enforcement (AND condition) |
 
 ### CLAUDE.md Integration
 

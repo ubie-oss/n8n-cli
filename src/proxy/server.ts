@@ -1,4 +1,5 @@
 import type { Workflow } from "@/api/types.ts";
+import { hasAllTags } from "@/common/tags.ts";
 import { runPipeline } from "@/middleware/pipeline.ts";
 import { buildMiddlewares, resolveEnabledList } from "@/middleware/registry.ts";
 import type { PreWriteMiddleware } from "@/middleware/types.ts";
@@ -17,6 +18,15 @@ import { forwardRequest } from "./upstream.ts";
 
 const MIDDLEWARES_ENV_VAR = "N8N_MIDDLEWARES";
 
+/**
+ * Tracks whether middleware `prepare()` has finished so `/readyz` can flip
+ * from 503 (not ready) to 200 (ready) once long-running resolvers finish.
+ */
+interface ReadinessState {
+  status: "preparing" | "ready" | "failed";
+  errors: Array<{ middleware: string; message: string }>;
+}
+
 export interface ProxyHandle {
   port: number;
   stop: () => Promise<void>;
@@ -28,6 +38,7 @@ interface HandlerDeps {
   logger: Logger;
   duplicates: DuplicateChecker | null;
   middlewares: PreWriteMiddleware[];
+  readiness: ReadinessState;
 }
 
 /** Starts the proxy server. Returns a handle so tests can stop it cleanly. */
@@ -68,17 +79,41 @@ export function startProxy(config: ProxyConfig): ProxyHandle {
   });
 
   // Run prepare() up front so identity-resolution / config-load failures
-  // surface at startup rather than on the first request.
-  for (const mw of middlewares) {
-    void mw.prepare?.();
-  }
+  // surface at startup rather than on the first request. We also track the
+  // result so `/readyz` can report 503 until every middleware finishes
+  // (authz, for instance, prefetches groups from a remote endpoint).
+  //
+  // Failures are also written to stderr as they happen so deployments that
+  // don't probe `/readyz` (bare docker, local dev) still see the breakage
+  // — without this the proxy would run silently in a broken state.
+  const readiness: ReadinessState = { status: "preparing", errors: [] };
+  Promise.all(
+    middlewares.map(async (mw) => {
+      try {
+        await mw.prepare?.();
+        return null;
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.error(`n8n-cli proxy: middleware "${mw.name}" prepare() failed: ${message}`);
+        return { middleware: mw.name, message };
+      }
+    }),
+  ).then((results) => {
+    const failures = results.filter((r): r is { middleware: string; message: string } => !!r);
+    if (failures.length === 0) {
+      readiness.status = "ready";
+    } else {
+      readiness.status = "failed";
+      readiness.errors = failures;
+    }
+  });
 
   // Duplicate-name detection is on by default; opt out with allowDuplicates.
   const duplicates = config.allowDuplicates
     ? null
     : new DuplicateChecker(upstream, config.duplicateTtlMs);
 
-  const deps: HandlerDeps = { upstream, config, logger, duplicates, middlewares };
+  const deps: HandlerDeps = { upstream, config, logger, duplicates, middlewares, readiness };
 
   const server = Bun.serve({
     hostname: host,
@@ -101,11 +136,16 @@ async function handle(req: Request, deps: HandlerDeps): Promise<Response> {
 
   // Internal endpoints — never forwarded. Allow GET and HEAD so load
   // balancers using HEAD probes don't accidentally hit the upstream.
-  if (pathname === "/healthz" && (req.method === "GET" || req.method === "HEAD")) {
-    return new Response(req.method === "HEAD" ? null : "ok\n", {
-      status: 200,
-      headers: { "content-type": "text/plain" },
-    });
+  //
+  // - /livez:   process is alive (always 200 once we're serving)
+  // - /readyz:  middleware prepare() finished; 503 while preparing or on
+  //             failure so Kubernetes / LB removes us from the pool until
+  //             dependencies (authz groups fetch, lint config load, ...)
+  //             are usable.
+  // - /healthz: legacy generic check, kept as 200 for backward compat with
+  //             existing probes. Use /livez or /readyz for new deployments.
+  if (isProbeRequest(req.method, pathname)) {
+    return handleProbe(req.method, pathname, deps);
   }
 
   const mutation = matchWorkflowMutation(req.method, pathname);
@@ -114,6 +154,36 @@ async function handle(req: Request, deps: HandlerDeps): Promise<Response> {
   }
 
   return handleTransparentForward(req, pathname, deps);
+}
+
+function isProbeRequest(method: string, pathname: string): boolean {
+  if (method !== "GET" && method !== "HEAD") return false;
+  return pathname === "/healthz" || pathname === "/livez" || pathname === "/readyz";
+}
+
+function handleProbe(method: string, pathname: string, deps: HandlerDeps): Response {
+  // /readyz reflects the prepare() state; everything else just says alive.
+  if (pathname === "/readyz") {
+    const { status, errors } = deps.readiness;
+    if (status === "ready") {
+      return new Response(method === "HEAD" ? null : "ready\n", {
+        status: 200,
+        headers: { "content-type": "text/plain" },
+      });
+    }
+    const body =
+      status === "preparing"
+        ? "preparing\n"
+        : `not ready\n${errors.map((e) => `  ${e.middleware}: ${e.message}`).join("\n")}\n`;
+    return new Response(method === "HEAD" ? null : body, {
+      status: 503,
+      headers: { "content-type": "text/plain" },
+    });
+  }
+  return new Response(method === "HEAD" ? null : "ok\n", {
+    status: 200,
+    headers: { "content-type": "text/plain" },
+  });
 }
 
 async function handleTransparentForward(
@@ -162,6 +232,15 @@ async function handleWorkflowMutation(
       message: `invalid JSON: ${message}`,
     });
     return buildBadJSONResponse(message);
+  }
+
+  // Scope filter: when --tags / PROXY_FILTER_BY_TAGS is set, only workflows
+  // carrying every named tag get middleware + duplicate processing. Other
+  // saves are forwarded transparently so the proxy can be deployed in front
+  // of an instance whose workflows are only partially under policy.
+  const filterTags = deps.config.filterByTags ?? [];
+  if (filterTags.length > 0 && !hasAllTags(workflow?.tags, filterTags)) {
+    return handleSkippedMutation(req, rawJSON, pathname, workflow, filterTags, deps);
   }
 
   // Middleware pipeline (lint + authz + future policies).
@@ -260,4 +339,36 @@ function reportError(err: unknown, req: Request, pathname: string, deps: Handler
   const message = err instanceof Error ? err.message : String(err);
   deps.logger.log({ action: "error", method: req.method, path: pathname, status: 502, message });
   return buildErrorResponse(message);
+}
+
+/**
+ * Forwards a workflow mutation that fell outside the configured tag filter.
+ * No middleware runs, no duplicate check fires — the proxy logs the skip and
+ * passes the body to upstream verbatim.
+ */
+async function handleSkippedMutation(
+  req: Request,
+  rawJSON: string,
+  pathname: string,
+  workflow: Workflow | null,
+  filterTags: string[],
+  deps: HandlerDeps,
+): Promise<Response> {
+  try {
+    const { response, elapsedMs } = await forwardRequest(req, deps.upstream, rawJSON, {
+      timeoutMs: deps.config.upstreamTimeoutMs,
+    });
+    deps.logger.log({
+      action: "forward",
+      method: req.method,
+      path: pathname,
+      status: response.status,
+      upstreamMs: elapsedMs,
+      workflowName: workflow?.name,
+      message: `skipped by tag filter (requires: ${filterTags.join(", ")})`,
+    });
+    return response;
+  } catch (err) {
+    return reportError(err, req, pathname, deps);
+  }
 }
