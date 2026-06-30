@@ -110,7 +110,12 @@ describe("MetadataServerTokenSource impersonation", () => {
       const u = String(url);
       const h = new Headers(init?.headers);
       const body = typeof init?.body === "string" ? init.body : undefined;
-      calls.push({ url: u, method: init?.method ?? "GET", auth: h.get("authorization") ?? undefined, body });
+      calls.push({
+        url: u,
+        method: init?.method ?? "GET",
+        auth: h.get("authorization") ?? undefined,
+        body,
+      });
       if (u.endsWith("/token")) {
         return jsonResponse({ access_token: "caller-at", expires_in: 3600 });
       }

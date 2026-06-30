@@ -252,9 +252,7 @@ export class EnvTokenSource implements TokenSource {
   getToken(_audience: string): Promise<string> {
     const value = this.env[this.varName];
     if (!value) {
-      return Promise.reject(
-        new Error(`iap-auth: env var ${this.varName} is not set or empty`),
-      );
+      return Promise.reject(new Error(`iap-auth: env var ${this.varName} is not set or empty`));
     }
     return Promise.resolve(value);
   }

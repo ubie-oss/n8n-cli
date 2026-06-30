@@ -100,10 +100,7 @@ export function registerProxyCommand(program: Command): void {
       "--iap-auth-timeout-ms <ms>",
       "HTTP timeout per metadata-server call in milliseconds (default: 5000)",
     )
-    .option(
-      "--iap-auth-metadata-base-url <url>",
-      "Override the metadata server base URL (testing)",
-    )
+    .option("--iap-auth-metadata-base-url <url>", "Override the metadata server base URL (testing)")
     .option(
       "--iap-auth-impersonate-service-account <email>",
       "Target service-account email to impersonate. When set, the proxy mints id_tokens for THIS SA via iamcredentials.googleapis.com:generateIdToken. The workload SA needs roles/iam.serviceAccountTokenCreator on it.",

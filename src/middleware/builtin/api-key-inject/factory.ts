@@ -31,7 +31,8 @@ function fromEnv(env: NodeJS.ProcessEnv): Partial<ApiKeyInjectRawOptions> {
   }
   if (env.N8N_API_KEY_INJECT_HEADER) out.header = env.N8N_API_KEY_INJECT_HEADER;
   if (env.N8N_API_KEY_INJECT_CONFLICT_POLICY) {
-    out.conflictPolicy = env.N8N_API_KEY_INJECT_CONFLICT_POLICY as ApiKeyInjectRawOptions["conflictPolicy"];
+    out.conflictPolicy =
+      env.N8N_API_KEY_INJECT_CONFLICT_POLICY as ApiKeyInjectRawOptions["conflictPolicy"];
   }
   return out;
 }
@@ -49,7 +50,9 @@ function fromCLI(opts: Record<string, unknown>): Partial<ApiKeyInjectRawOptions>
   }
   if (s("apiKeyInjectHeader")) out.header = s("apiKeyInjectHeader");
   if (s("apiKeyInjectConflictPolicy")) {
-    out.conflictPolicy = s("apiKeyInjectConflictPolicy") as ApiKeyInjectRawOptions["conflictPolicy"];
+    out.conflictPolicy = s(
+      "apiKeyInjectConflictPolicy",
+    ) as ApiKeyInjectRawOptions["conflictPolicy"];
   }
   return out;
 }

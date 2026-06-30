@@ -65,9 +65,9 @@ describe("runClientPipeline", () => {
         bRan = true;
       },
     };
-    await expect(runClientPipeline([thrower("bad", "boom"), after], headers, baseCtx)).rejects.toThrow(
-      "boom",
-    );
+    await expect(
+      runClientPipeline([thrower("bad", "boom"), after], headers, baseCtx),
+    ).rejects.toThrow("boom");
     expect(bRan).toBe(false);
   });
 

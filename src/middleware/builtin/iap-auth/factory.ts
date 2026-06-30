@@ -30,7 +30,11 @@ const optionsSchema = z.object({
   /** Inline token value when tokenSourceKind=static (tests only). */
   staticToken: z.string().optional(),
   /** Cache TTL in ms (metadata source). Default 50 min — id_tokens live ~1h. */
-  cacheTtlMs: z.number().int().min(0).default(50 * 60 * 1000),
+  cacheTtlMs: z
+    .number()
+    .int()
+    .min(0)
+    .default(50 * 60 * 1000),
   /** HTTP timeout per metadata call in ms. */
   timeoutMs: z.number().int().min(1).default(5_000),
   /** Override metadata host (testing). */

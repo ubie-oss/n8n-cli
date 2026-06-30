@@ -83,15 +83,15 @@ describe("iapAuthFactory", () => {
   });
 
   test("env source requires tokenEnvVar", () => {
-    expect(() =>
-      iapAuthFactory.build({ audience: "a", tokenSourceKind: "env" }),
-    ).toThrow(/tokenEnvVar/);
+    expect(() => iapAuthFactory.build({ audience: "a", tokenSourceKind: "env" })).toThrow(
+      /tokenEnvVar/,
+    );
   });
 
   test("static source requires staticToken", () => {
-    expect(() =>
-      iapAuthFactory.build({ audience: "a", tokenSourceKind: "static" }),
-    ).toThrow(/staticToken/);
+    expect(() => iapAuthFactory.build({ audience: "a", tokenSourceKind: "static" })).toThrow(
+      /staticToken/,
+    );
   });
 
   test("static source builds a middleware that sets the configured token", async () => {

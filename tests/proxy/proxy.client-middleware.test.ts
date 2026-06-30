@@ -1,8 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import {
-  registerClientFactory,
-  resetClientRegistry,
-} from "@/middleware/client-registry.ts";
+import { registerClientFactory, resetClientRegistry } from "@/middleware/client-registry.ts";
 import type { ClientMiddlewareFactory } from "@/middleware/types.ts";
 import { type ProxyHandle, startProxy } from "@/proxy/server.ts";
 
