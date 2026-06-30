@@ -14,7 +14,8 @@ interface ProxyOptions {
   allowDuplicates?: boolean;
   duplicateTtl?: string;
   upstreamTimeout?: string;
-  middleware?: string;
+  serverMiddleware?: string;
+  clientMiddleware?: string;
   tags?: string;
   // Authz middleware options (flat namespace so commander stays happy).
   authzEnforce?: string;
@@ -57,14 +58,18 @@ export function registerProxyCommand(program: Command): void {
       "30000",
     )
     .option(
-      "--middleware <list>",
-      "Comma-separated middleware chain (default: lint; env: N8N_MIDDLEWARES). Example: lint,authz",
+      "--server-middleware <list>",
+      "Comma-separated server-middleware chain (default: lint; env: N8N_SERVER_MIDDLEWARES). Example: lint,authz",
+    )
+    .option(
+      "--client-middleware <list>",
+      "Comma-separated client-middleware chain run on outgoing upstream requests (default: empty; env: N8N_CLIENT_MIDDLEWARES). Example: iap-auth,api-key-inject",
     )
     .option(
       "--tags <tags>",
       "Only run middleware against workflow saves whose tags contain ALL of the listed names (AND condition; env: PROXY_FILTER_BY_TAGS). Non-matching saves are forwarded transparently.",
     )
-    // Authz options — only meaningful when "authz" is in the middleware chain.
+    // Authz options — only meaningful when "authz" is in the server-middleware chain.
     .option("--authz-enforce <level>", "Authz enforcement level: off, warn, error")
     .option("--authz-on-error <mode>", "Behavior when groups API fails: deny, allow")
     .option("--authz-identity-source <kind>", "Where to read identity from: header, env, none")
@@ -103,7 +108,8 @@ export function registerProxyCommand(program: Command): void {
       const duplicateTtlMs = parsePositiveInt(opts.duplicateTtl, "--duplicate-ttl");
       const upstreamTimeoutMs = parsePositiveInt(opts.upstreamTimeout, "--upstream-timeout");
 
-      const middlewares = parseMiddlewareList(opts.middleware);
+      const middlewares = parseMiddlewareList(opts.serverMiddleware);
+      const clientMiddlewares = parseMiddlewareList(opts.clientMiddleware);
       const filterByTags = parseTagFilter(opts.tags ?? process.env.PROXY_FILTER_BY_TAGS);
 
       const handle = startProxy({
@@ -118,20 +124,25 @@ export function registerProxyCommand(program: Command): void {
         upstreamTimeoutMs,
         middlewares,
         middlewareCliOptions: extractMiddlewareCliOpts(opts),
+        clientMiddlewares: clientMiddlewares.length > 0 ? clientMiddlewares : undefined,
+        clientMiddlewareCliOptions: extractClientMiddlewareCliOpts(opts),
         filterByTags: filterByTags.length > 0 ? filterByTags : undefined,
       });
 
       // Friendly startup line on stderr so it never pollutes JSON log streams.
-      // The displayed middleware list reflects what was passed via --middleware;
-      // when empty, the env-var (N8N_MIDDLEWARES) or default chain wins inside
-      // startProxy, so this line just says "(env/default)" to avoid lying about
-      // an empty chain.
+      // The displayed middleware list reflects what was passed via
+      // --server-middleware; when empty, the env-var (N8N_SERVER_MIDDLEWARES)
+      // or default chain wins inside startProxy, so this line just says
+      // "(env/default)" to avoid lying about an empty chain.
       const mwDisplay = middlewares.length
         ? middlewares.join(",")
-        : (process.env.N8N_MIDDLEWARES ?? "lint (default)");
+        : (process.env.N8N_SERVER_MIDDLEWARES ?? "lint (default)");
+      const clientMwDisplay = clientMiddlewares.length
+        ? clientMiddlewares.join(",")
+        : (process.env.N8N_CLIENT_MIDDLEWARES ?? "(none)");
       const tagsDisplay = filterByTags.length > 0 ? `, tags=${filterByTags.join(",")}` : "";
       console.error(
-        `n8n-cli proxy listening on ${opts.listen} → ${upstream} (enforce=${enforce}, middlewares=${mwDisplay}${tagsDisplay})`,
+        `n8n-cli proxy listening on ${opts.listen} → ${upstream} (enforce=${enforce}, server-middlewares=${mwDisplay}, client-middlewares=${clientMwDisplay}${tagsDisplay})`,
       );
 
       const shutdown = async (signal: string) => {
@@ -170,6 +181,16 @@ function extractMiddlewareCliOpts(opts: ProxyOptions): Record<string, unknown> {
   copy("authzWorkflowExtract");
   copy("authzWorkflowStripPrefix");
   return out;
+}
+
+/**
+ * Strips the `opts` bag down to keys that client-middleware factories
+ * read. Empty for now — builtin-specific keys land alongside their
+ * builtins in follow-up commits. The placeholder keeps the wiring
+ * uniform with the server-side surface.
+ */
+function extractClientMiddlewareCliOpts(_opts: ProxyOptions): Record<string, unknown> {
+  return {};
 }
 
 function parsePositiveInt(value: string | undefined, flag: string): number | undefined {

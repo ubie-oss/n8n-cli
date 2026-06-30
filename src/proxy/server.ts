@@ -1,9 +1,14 @@
 import type { Workflow } from "@/api/types.ts";
 import { hasAllTags } from "@/common/tags.ts";
+import { buildClientMiddlewares } from "@/middleware/client-registry.ts";
+import {
+  DEFAULT_CLIENT_MIDDLEWARE_CHAIN,
+  registerClientBuiltins,
+} from "@/middleware/client-wiring.ts";
 import { runPipeline } from "@/middleware/pipeline.ts";
 import { buildMiddlewares, resolveEnabledList } from "@/middleware/registry.ts";
-import type { PreWriteMiddleware } from "@/middleware/types.ts";
-import { DEFAULT_MIDDLEWARE_CHAIN, registerBuiltins } from "@/middleware/wiring.ts";
+import type { ClientMiddleware, ServerMiddleware } from "@/middleware/types.ts";
+import { DEFAULT_SERVER_MIDDLEWARE_CHAIN, registerBuiltins } from "@/middleware/wiring.ts";
 import { normalizeUpstream, type ProxyConfig, parseListenAddr } from "./config.ts";
 import { DuplicateChecker } from "./duplicate.ts";
 import { Logger } from "./logging.ts";
@@ -16,7 +21,8 @@ import {
 import { matchWorkflowMutation, type WorkflowMutation } from "./rest/router.ts";
 import { forwardRequest } from "./upstream.ts";
 
-const MIDDLEWARES_ENV_VAR = "N8N_MIDDLEWARES";
+const SERVER_MIDDLEWARES_ENV_VAR = "N8N_SERVER_MIDDLEWARES";
+const CLIENT_MIDDLEWARES_ENV_VAR = "N8N_CLIENT_MIDDLEWARES";
 
 /**
  * Tracks whether middleware `prepare()` has finished so `/readyz` can flip
@@ -37,7 +43,8 @@ interface HandlerDeps {
   config: ProxyConfig;
   logger: Logger;
   duplicates: DuplicateChecker | null;
-  middlewares: PreWriteMiddleware[];
+  middlewares: ServerMiddleware[];
+  clientMiddlewares: ClientMiddleware[];
   readiness: ReadinessState;
 }
 
@@ -46,20 +53,22 @@ export function startProxy(config: ProxyConfig): ProxyHandle {
   // Register builtin middleware factories. Idempotent — safe to call once
   // per `startProxy` invocation (tests call this repeatedly).
   registerBuiltins();
+  registerClientBuiltins();
 
   const { host, port } = parseListenAddr(config.listen);
   const upstream = normalizeUpstream(config.upstream);
   const logger = new Logger(config.logFormat);
 
-  // Decide which middlewares to run. Precedence: explicit config (set by
-  // the CLI from --middleware) > N8N_MIDDLEWARES env var > legacy default
-  // ["lint"]. Matches apply's behavior so the env-var contract documented
-  // on --middleware ("env: N8N_MIDDLEWARES") holds for the proxy too.
+  // Decide which server middlewares to run. Precedence: explicit config (set
+  // by the CLI from --server-middleware) > N8N_SERVER_MIDDLEWARES env var >
+  // legacy default ["lint"]. Matches apply's behavior so the env-var contract
+  // documented on --server-middleware ("env: N8N_SERVER_MIDDLEWARES") holds
+  // for the proxy too.
   const enabled = resolveEnabledList({
     cliValue: config.middlewares?.join(","),
     env: process.env,
-    envVar: MIDDLEWARES_ENV_VAR,
-    fallback: DEFAULT_MIDDLEWARE_CHAIN,
+    envVar: SERVER_MIDDLEWARES_ENV_VAR,
+    fallback: DEFAULT_SERVER_MIDDLEWARE_CHAIN,
   });
 
   // Stitch the legacy --enforce / --lint-config / --disable-rule flags into
@@ -78,6 +87,20 @@ export function startProxy(config: ProxyConfig): ProxyHandle {
     cliOpts: legacyCliOpts,
   });
 
+  // Resolve and build the client-side (outgoing) middleware chain. Empty by
+  // default — deployments without IAP / shared API key skip this entirely.
+  const enabledClient = resolveEnabledList({
+    cliValue: config.clientMiddlewares?.join(","),
+    env: process.env,
+    envVar: CLIENT_MIDDLEWARES_ENV_VAR,
+    fallback: DEFAULT_CLIENT_MIDDLEWARE_CHAIN,
+  });
+  const clientMiddlewares = buildClientMiddlewares({
+    enabled: enabledClient,
+    env: process.env,
+    cliOpts: config.clientMiddlewareCliOptions ?? {},
+  });
+
   // Run prepare() up front so identity-resolution / config-load failures
   // surface at startup rather than on the first request. We also track the
   // result so `/readyz` can report 503 until every middleware finishes
@@ -87,8 +110,12 @@ export function startProxy(config: ProxyConfig): ProxyHandle {
   // don't probe `/readyz` (bare docker, local dev) still see the breakage
   // — without this the proxy would run silently in a broken state.
   const readiness: ReadinessState = { status: "preparing", errors: [] };
+  const allForPrepare: Array<{ name: string; prepare?: () => unknown }> = [
+    ...middlewares,
+    ...clientMiddlewares,
+  ];
   Promise.all(
-    middlewares.map(async (mw) => {
+    allForPrepare.map(async (mw) => {
       try {
         await mw.prepare?.();
         return null;
@@ -113,7 +140,15 @@ export function startProxy(config: ProxyConfig): ProxyHandle {
     ? null
     : new DuplicateChecker(upstream, config.duplicateTtlMs);
 
-  const deps: HandlerDeps = { upstream, config, logger, duplicates, middlewares, readiness };
+  const deps: HandlerDeps = {
+    upstream,
+    config,
+    logger,
+    duplicates,
+    middlewares,
+    clientMiddlewares,
+    readiness,
+  };
 
   const server = Bun.serve({
     hostname: host,
@@ -125,7 +160,10 @@ export function startProxy(config: ProxyConfig): ProxyHandle {
     port: server.port ?? port,
     stop: async () => {
       await server.stop(true);
-      await Promise.all(middlewares.map((m) => m.dispose?.()));
+      await Promise.all([
+        ...middlewares.map((m) => m.dispose?.()),
+        ...clientMiddlewares.map((m) => m.dispose?.()),
+      ]);
     },
   };
 }
@@ -194,6 +232,7 @@ async function handleTransparentForward(
   try {
     const { response, elapsedMs } = await forwardRequest(req, deps.upstream, undefined, {
       timeoutMs: deps.config.upstreamTimeoutMs,
+      clientMiddlewares: deps.clientMiddlewares,
     });
     deps.logger.log({
       action: "forward",
@@ -298,6 +337,7 @@ async function handleWorkflowMutation(
   try {
     const { response, elapsedMs } = await forwardRequest(req, deps.upstream, rawJSON, {
       timeoutMs: deps.config.upstreamTimeoutMs,
+      clientMiddlewares: deps.clientMiddlewares,
     });
     if (verdict.violations.length > 0) {
       const errCount = verdict.violations.filter(
@@ -357,6 +397,7 @@ async function handleSkippedMutation(
   try {
     const { response, elapsedMs } = await forwardRequest(req, deps.upstream, rawJSON, {
       timeoutMs: deps.config.upstreamTimeoutMs,
+      clientMiddlewares: deps.clientMiddlewares,
     });
     deps.logger.log({
       action: "forward",

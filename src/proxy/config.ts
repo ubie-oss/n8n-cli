@@ -50,6 +50,21 @@ export interface ProxyConfig {
    * intercepted save" (legacy behavior).
    */
   filterByTags?: string[];
+  /**
+   * Ordered list of client middleware names to apply to every outgoing
+   * upstream request (mutation and transparent-forward paths alike).
+   *
+   * Defaults to [] when omitted. Use for outgoing-side concerns: IAP token
+   * minting (`iap-auth`), shared API-key injection (`api-key-inject`),
+   * trace-header propagation, etc.
+   */
+  clientMiddlewares?: string[];
+  /**
+   * Flat commander-style options bag forwarded to each client-middleware
+   * factory. Populated by `cli/commands/proxy.ts` so each middleware can
+   * pick out its own keys.
+   */
+  clientMiddlewareCliOptions?: Record<string, unknown>;
 }
 
 /**
