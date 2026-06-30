@@ -5,7 +5,11 @@ import {
   prepareWriteLintContext,
   type WriteLintContext,
 } from "@/lint/write-check.ts";
-import type { MiddlewareVerdict, PreWriteContext, PreWriteMiddleware } from "@/middleware/types.ts";
+import type {
+  MiddlewareVerdict,
+  ServerMiddleware,
+  ServerMiddlewareContext,
+} from "@/middleware/types.ts";
 
 /**
  * Enforcement level for the lint middleware.
@@ -35,11 +39,11 @@ const DENIAL_DOCS = "https://github.com/ubie-oss/n8n-cli#lint";
 
 /**
  * The lint middleware reuses the existing engine and write-check helpers;
- * it adds nothing on top except wiring them into the PreWriteMiddleware
+ * it adds nothing on top except wiring them into the ServerMiddleware
  * contract. The historical 422 response shape (`workflow_lint_failed`) is
  * preserved through the `denial` hint so proxy clients see no change.
  */
-export class LintMiddleware implements PreWriteMiddleware {
+export class LintMiddleware implements ServerMiddleware {
   readonly name = "lint";
   private ctx?: WriteLintContext;
 
@@ -56,7 +60,7 @@ export class LintMiddleware implements PreWriteMiddleware {
     );
   }
 
-  evaluate(ctx: PreWriteContext): MiddlewareVerdict {
+  evaluate(ctx: ServerMiddlewareContext): MiddlewareVerdict {
     if (this.options.enforce === "off") {
       return { block: false, violations: [] };
     }

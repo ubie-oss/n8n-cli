@@ -2,8 +2,8 @@ import type { Violation } from "@/lint/rules/violation.ts";
 import type {
   MiddlewareVerdict,
   PipelineVerdict,
-  PreWriteContext,
-  PreWriteMiddleware,
+  ServerMiddleware,
+  ServerMiddlewareContext,
 } from "./types.ts";
 
 /**
@@ -23,8 +23,8 @@ import type {
  *   a malformed authz config never crashes the proxy.
  */
 export async function runPipeline(
-  chain: PreWriteMiddleware[],
-  ctx: PreWriteContext,
+  chain: ServerMiddleware[],
+  ctx: ServerMiddlewareContext,
 ): Promise<PipelineVerdict> {
   const violations: Violation[] = [];
 
@@ -65,11 +65,11 @@ export async function runPipeline(
 }
 
 /** Convenience: runs prepare() on every middleware that has one. */
-export async function preparePipeline(chain: PreWriteMiddleware[]): Promise<void> {
+export async function preparePipeline(chain: ServerMiddleware[]): Promise<void> {
   await Promise.all(chain.map((m) => m.prepare?.()));
 }
 
 /** Convenience: runs dispose() on every middleware that has one. */
-export async function disposePipeline(chain: PreWriteMiddleware[]): Promise<void> {
+export async function disposePipeline(chain: ServerMiddleware[]): Promise<void> {
   await Promise.all(chain.map((m) => m.dispose?.()));
 }

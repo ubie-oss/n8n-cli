@@ -280,10 +280,10 @@ describe("proxy + authz: chained with lint", () => {
   });
 });
 
-describe("proxy + authz: N8N_MIDDLEWARES env var", () => {
-  test("env var enables authz when --middleware is not passed", async () => {
-    const prev = process.env.N8N_MIDDLEWARES;
-    process.env.N8N_MIDDLEWARES = "authz";
+describe("proxy + authz: N8N_SERVER_MIDDLEWARES env var", () => {
+  test("env var enables authz when --server-middleware is not passed", async () => {
+    const prev = process.env.N8N_SERVER_MIDDLEWARES;
+    process.env.N8N_SERVER_MIDDLEWARES = "authz";
     try {
       groups.table.set("ryo@example.com", []);
       // No middlewares: [] config — would default to ["lint"] before the fix.
@@ -317,8 +317,8 @@ describe("proxy + authz: N8N_MIDDLEWARES env var", () => {
       expect(upstream.captured).toHaveLength(0);
       expect(groups.hits.length).toBeGreaterThan(0);
     } finally {
-      if (prev === undefined) delete process.env.N8N_MIDDLEWARES;
-      else process.env.N8N_MIDDLEWARES = prev;
+      if (prev === undefined) delete process.env.N8N_SERVER_MIDDLEWARES;
+      else process.env.N8N_SERVER_MIDDLEWARES = prev;
     }
   });
 });
