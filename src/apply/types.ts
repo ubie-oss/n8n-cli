@@ -49,15 +49,15 @@ export interface ApplyOptions {
   lintDisableRules: string[];
   filterByTags: string[];
   /**
-   * Ordered list of middleware names to run before writing each workflow
-   * upstream. Defaults to ["lint"] when empty for legacy compatibility.
-   * Set via --middleware or N8N_MIDDLEWARES.
+   * Ordered list of server-middleware names to run before writing each
+   * workflow upstream. Defaults to ["lint"] when empty for legacy
+   * compatibility. Set via --server-middleware or N8N_SERVER_MIDDLEWARES.
    */
   middlewares: string[];
   /**
-   * Flat commander-style options bag forwarded to each middleware factory.
-   * Populated by `cli/commands/apply.ts` so each middleware can pick out
-   * its own keys (e.g. authzGroupsUrl).
+   * Flat commander-style options bag forwarded to each server-middleware
+   * factory. Populated by `cli/commands/apply.ts` so each middleware can
+   * pick out its own keys (e.g. authzGroupsUrl).
    */
   middlewareCliOptions: Record<string, unknown>;
 }

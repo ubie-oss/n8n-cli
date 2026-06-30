@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { MiddlewareFactory } from "@/middleware/types.ts";
+import type { ServerMiddlewareFactory } from "@/middleware/types.ts";
 import { type LintEnforce, LintMiddleware, type LintMiddlewareOptions } from "./middleware.ts";
 
 const enforceSchema: z.ZodType<LintEnforce> = z.union([
@@ -16,7 +16,7 @@ const optionsSchema = z.object({
 });
 
 /** Factory for the `lint` builtin middleware. */
-export const lintFactory: MiddlewareFactory<LintMiddlewareOptions> = {
+export const lintFactory: ServerMiddlewareFactory<LintMiddlewareOptions> = {
   name: "lint",
 
   loadFromEnv(env) {

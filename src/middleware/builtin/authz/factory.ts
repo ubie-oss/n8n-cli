@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { MiddlewareFactory } from "@/middleware/types.ts";
+import type { ServerMiddlewareFactory } from "@/middleware/types.ts";
 import { AuthzMiddleware } from "./middleware.ts";
 import type {
   AuthzEnforce,
@@ -52,8 +52,9 @@ const optionsSchema = z.object({
   enforce: enforceSchema.default("error"),
   onError: onErrorSchema.default("deny"),
   // Default identity to "none" so users that pass the per-request identity
-  // on PreWriteContext directly (e.g. tests, custom callers) don't have to
-  // declare extraction. Real proxy/apply runs always set this explicitly.
+  // on ServerMiddlewareContext directly (e.g. tests, custom callers) don't
+  // have to declare extraction. Real proxy/apply runs always set this
+  // explicitly.
   identity: identitySchema.default({ source: "none", decode: "raw" }),
   groups: groupsSchema,
   workflow: workflowSchema,
@@ -162,7 +163,7 @@ function fromCLI(opts: Record<string, unknown>): Partial<AuthzOptions> {
   return out;
 }
 
-export const authzFactory: MiddlewareFactory<AuthzOptions> = {
+export const authzFactory: ServerMiddlewareFactory<AuthzOptions> = {
   name: "authz",
   loadFromEnv: fromEnv,
   loadFromCLI: fromCLI,

@@ -1,22 +1,22 @@
-import type { MiddlewareFactory, PreWriteMiddleware } from "./types.ts";
+import type { ServerMiddleware, ServerMiddlewareFactory } from "./types.ts";
 
 /**
- * In-process registry of middleware factories. Builtins register themselves
- * via `registerBuiltins` (called from cli/middleware-wiring); tests can
- * register fakes directly for isolation.
+ * In-process registry of server-middleware factories. Builtins register
+ * themselves via `registerBuiltins` (called from cli/middleware-wiring);
+ * tests can register fakes directly for isolation.
  *
  * The registry is intentionally a singleton: there is one CLI process per
  * invocation, and middleware identities ("lint", "authz") are inherently
  * global names. Per-test pollution is avoided via `resetRegistry` in
  * test helpers.
  */
-const factories = new Map<string, MiddlewareFactory<unknown>>();
+const factories = new Map<string, ServerMiddlewareFactory<unknown>>();
 
-export function registerFactory<O>(factory: MiddlewareFactory<O>): void {
-  factories.set(factory.name, factory as MiddlewareFactory<unknown>);
+export function registerFactory<O>(factory: ServerMiddlewareFactory<O>): void {
+  factories.set(factory.name, factory as ServerMiddlewareFactory<unknown>);
 }
 
-export function getFactory(name: string): MiddlewareFactory<unknown> | undefined {
+export function getFactory(name: string): ServerMiddlewareFactory<unknown> | undefined {
   return factories.get(name);
 }
 
@@ -48,17 +48,17 @@ export interface BuildMiddlewaresInput {
  * Unknown middleware names throw with a friendly list so users can't
  * silently disable the pipeline by typoing a name in env.
  */
-export function buildMiddlewares(input: BuildMiddlewaresInput): PreWriteMiddleware[] {
+export function buildMiddlewares(input: BuildMiddlewaresInput): ServerMiddleware[] {
   const env = input.env ?? process.env;
   const cliOpts = input.cliOpts ?? {};
-  const built: PreWriteMiddleware[] = [];
+  const built: ServerMiddleware[] = [];
   for (const name of input.enabled) {
     const factory = factories.get(name);
     if (!factory) {
       const known = Array.from(factories.keys()).sort().join(", ") || "(none registered)";
       throw new Error(
-        `Unknown middleware "${name}". Known middlewares: ${known}. ` +
-          "Did you typo --middleware or N8N_MIDDLEWARES?",
+        `Unknown server middleware "${name}". Known: ${known}. ` +
+          "Did you typo --server-middleware or N8N_SERVER_MIDDLEWARES?",
       );
     }
     const fromEnv = factory.loadFromEnv(env);
@@ -115,7 +115,7 @@ export function parseMiddlewareList(value: string | undefined): string[] {
  * Resolves the active middleware list from CLI/env with a fallback default.
  *
  * Precedence:
- *   1. `cliValue` (e.g. commander's --middleware) when non-empty
+ *   1. `cliValue` (e.g. commander's --server-middleware) when non-empty
  *   2. `env[envVar]` when non-empty
  *   3. `fallback` (typically ["lint"] for backwards compatibility)
  */

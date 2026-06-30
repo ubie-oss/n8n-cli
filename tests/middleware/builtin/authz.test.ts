@@ -5,7 +5,7 @@ import type { FetchLike } from "@/middleware/builtin/authz/groups-resolver.ts";
 import { AuthzMiddleware } from "@/middleware/builtin/authz/middleware.ts";
 import type { AuthzOptions } from "@/middleware/builtin/authz/types.ts";
 import { WorkflowACLExtractor } from "@/middleware/builtin/authz/workflow-acl.ts";
-import type { PreWriteContext } from "@/middleware/types.ts";
+import type { ServerMiddlewareContext } from "@/middleware/types.ts";
 
 const baseOptions: AuthzOptions = {
   enforce: "error",
@@ -43,7 +43,7 @@ function fetchReturning(json: unknown, status = 200): FetchLike {
     );
 }
 
-function ctxFor(workflow: Workflow, identity?: string): PreWriteContext {
+function ctxFor(workflow: Workflow, identity?: string): ServerMiddlewareContext {
   return { workflow, identity, mode: "proxy" };
 }
 

@@ -10,7 +10,7 @@
  *            environment of the CLI invocation.
  *
  * To keep middleware code from caring about which is which, identity is
- * resolved once at the pipeline entry and stuffed into `PreWriteContext`.
+ * resolved once at the pipeline entry and stuffed into `ServerMiddlewareContext`.
  *
  * JWT support is minimal: base64url-decode the payload and pull a single
  * claim. We do NOT verify the signature — this is "guardrail" identity, not

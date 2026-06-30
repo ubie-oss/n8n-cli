@@ -6,7 +6,7 @@ import {
   resetRegistry,
   resolveEnabledList,
 } from "@/middleware/registry.ts";
-import type { MiddlewareFactory } from "@/middleware/types.ts";
+import type { ServerMiddlewareFactory } from "@/middleware/types.ts";
 
 interface FakeOptions {
   fromEnv?: string;
@@ -14,7 +14,7 @@ interface FakeOptions {
   required?: string;
 }
 
-function fakeFactory(name: string): MiddlewareFactory<FakeOptions> {
+function fakeFactory(name: string): ServerMiddlewareFactory<FakeOptions> {
   return {
     name,
     loadFromEnv: (env) => ({ fromEnv: env[`${name.toUpperCase()}_FROM_ENV`] }),
@@ -56,8 +56,8 @@ describe("resolveEnabledList precedence", () => {
     expect(
       resolveEnabledList({
         cliValue: "lint,authz",
-        env: { N8N_MIDDLEWARES: "lint" },
-        envVar: "N8N_MIDDLEWARES",
+        env: { N8N_SERVER_MIDDLEWARES: "lint" },
+        envVar: "N8N_SERVER_MIDDLEWARES",
         fallback: ["lint"],
       }),
     ).toEqual(["lint", "authz"]);
@@ -66,16 +66,16 @@ describe("resolveEnabledList precedence", () => {
     expect(
       resolveEnabledList({
         cliValue: undefined,
-        env: { N8N_MIDDLEWARES: "authz" },
-        envVar: "N8N_MIDDLEWARES",
+        env: { N8N_SERVER_MIDDLEWARES: "authz" },
+        envVar: "N8N_SERVER_MIDDLEWARES",
         fallback: ["lint"],
       }),
     ).toEqual(["authz"]);
   });
   test("fallback when neither is set", () => {
-    expect(resolveEnabledList({ env: {}, envVar: "N8N_MIDDLEWARES", fallback: ["lint"] })).toEqual([
-      "lint",
-    ]);
+    expect(
+      resolveEnabledList({ env: {}, envVar: "N8N_SERVER_MIDDLEWARES", fallback: ["lint"] }),
+    ).toEqual(["lint"]);
   });
 });
 
@@ -93,7 +93,7 @@ describe("buildMiddlewares", () => {
 
   test("CLI options override env options", () => {
     let observed: unknown;
-    const f: MiddlewareFactory<FakeOptions> = {
+    const f: ServerMiddlewareFactory<FakeOptions> = {
       name: "obs",
       loadFromEnv: () => ({ fromEnv: "env" }),
       loadFromCLI: () => ({ fromEnv: "cli" }),
@@ -109,7 +109,9 @@ describe("buildMiddlewares", () => {
 
   test("unknown middleware name throws with a friendly hint", () => {
     registerFactory(fakeFactory("known"));
-    expect(() => buildMiddlewares({ enabled: ["nope"] })).toThrow(/Unknown middleware "nope"/);
+    expect(() => buildMiddlewares({ enabled: ["nope"] })).toThrow(
+      /Unknown server middleware "nope"/,
+    );
   });
 
   test("build() error propagates with middleware name in message", () => {
@@ -121,7 +123,7 @@ describe("buildMiddlewares", () => {
 
   test("nested options bucket: CLI partial override merges with env fields", () => {
     let observed: unknown;
-    const f: MiddlewareFactory<{ nested?: { a?: string; b?: string }; required?: string }> = {
+    const f: ServerMiddlewareFactory<{ nested?: { a?: string; b?: string }; required?: string }> = {
       name: "nested",
       loadFromEnv: () => ({ nested: { a: "env-a", b: "env-b" } }),
       loadFromCLI: () => ({ nested: { a: "cli-a" } }),

@@ -9,8 +9,8 @@ import type { Violation } from "../lint/rules/violation.ts";
 import { formatViolationLine } from "../lint/write-check.ts";
 import { disposePipeline, preparePipeline, runPipeline } from "../middleware/pipeline.ts";
 import { buildMiddlewares, resolveEnabledList } from "../middleware/registry.ts";
-import type { PreWriteMiddleware } from "../middleware/types.ts";
-import { DEFAULT_MIDDLEWARE_CHAIN, registerBuiltins } from "../middleware/wiring.ts";
+import type { ServerMiddleware } from "../middleware/types.ts";
+import { DEFAULT_SERVER_MIDDLEWARE_CHAIN, registerBuiltins } from "../middleware/wiring.ts";
 import { compare } from "./differ.ts";
 import { DuplicateChecker } from "./duplicate.ts";
 import { Scanner } from "./scanner.ts";
@@ -43,7 +43,7 @@ export class Executor {
   private threeWayDetector?: ThreeWayDetector;
   private gitContent?: ContentRetriever;
   private diffSpec?: DiffSpec;
-  private middlewares: PreWriteMiddleware[] = [];
+  private middlewares: ServerMiddleware[] = [];
   private preparedNames = new Set<string>();
 
   constructor(
@@ -61,9 +61,9 @@ export class Executor {
       }
     }
 
-    // Build the middleware pipeline. Default chain is ["lint"] for legacy
-    // compatibility; users opt-in to authz (or future policies) via
-    // --middleware or N8N_MIDDLEWARES.
+    // Build the server-middleware pipeline. Default chain is ["lint"] for
+    // legacy compatibility; users opt-in to authz (or future policies) via
+    // --server-middleware or N8N_SERVER_MIDDLEWARES.
     //
     // `--no-lint` is honored by *removing* lint from the chain rather than
     // by passing enforce=off, so users keep getting backwards-compatible
@@ -77,8 +77,8 @@ export class Executor {
     const enabled = resolveEnabledList({
       cliValue: opts.middlewares.join(","),
       env: process.env,
-      envVar: "N8N_MIDDLEWARES",
-      fallback: DEFAULT_MIDDLEWARE_CHAIN,
+      envVar: "N8N_SERVER_MIDDLEWARES",
+      fallback: DEFAULT_SERVER_MIDDLEWARE_CHAIN,
     });
     const filtered = opts.noLint ? enabled.filter((n) => n !== "lint") : enabled;
 
@@ -574,8 +574,8 @@ export class Executor {
  * running lint standalone.
  *
  * The summary line names the blocking middleware so users know whether to
- * pass `--no-lint`, drop the authz middleware from `--middleware`, or fix
- * the workflow.
+ * pass `--no-lint`, drop the authz middleware from `--server-middleware`,
+ * or fix the workflow.
  */
 function buildMiddlewareErrorMessage(
   filePath: string,
@@ -586,10 +586,10 @@ function buildMiddlewareErrorMessage(
   const lines = errorOnly.map((v) => formatViolationLine(filePath, v));
   const mwLabel = blockedBy ?? "middleware";
   // Append the bypass hint for the known middleware. Authz has no
-  // equivalent bypass flag (dropping it from --middleware is an explicit
-  // declarative action, not a per-run override), so we only add the lint
-  // hint here. The legacy `buildLintErrorMessage` always emitted this
-  // tail; keeping it preserves the existing CLI UX and any consumers
+  // equivalent bypass flag (dropping it from --server-middleware is an
+  // explicit declarative action, not a per-run override), so we only add
+  // the lint hint here. The legacy `buildLintErrorMessage` always emitted
+  // this tail; keeping it preserves the existing CLI UX and any consumers
   // grepping for "--no-lint to bypass" in apply output.
   const hint = blockedBy === "lint" ? "; pass --no-lint to bypass" : "";
   const summary = `${mwLabel} check failed (${errorOnly.length} error${

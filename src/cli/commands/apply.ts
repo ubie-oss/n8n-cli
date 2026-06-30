@@ -49,8 +49,8 @@ export function registerApplyCommand(program: Command): void {
       "Comma-separated rule names to disable during the pre-write lint check",
     )
     .option(
-      "--middleware <list>",
-      "Comma-separated middleware chain (default: lint; env: N8N_MIDDLEWARES). Example: lint,authz",
+      "--server-middleware <list>",
+      "Comma-separated server-middleware chain (default: lint; env: N8N_SERVER_MIDDLEWARES). Example: lint,authz",
     )
     // Authz options (relevant when "authz" is in the middleware chain).
     .option("--authz-enforce <level>", "Authz enforcement level: off, warn, error")
@@ -97,10 +97,10 @@ export function registerApplyCommand(program: Command): void {
           .filter((r) => r.length > 0);
       }
 
-      // Middleware chain. Parsed lazily — the executor falls back to
+      // Server-middleware chain. Parsed lazily — the executor falls back to
       // env / default when this is empty.
-      if (typeof options.middleware === "string") {
-        opts.middlewares = (options.middleware as string)
+      if (typeof options.serverMiddleware === "string") {
+        opts.middlewares = (options.serverMiddleware as string)
           .split(",")
           .map((s) => s.trim())
           .filter((s) => s.length > 0);

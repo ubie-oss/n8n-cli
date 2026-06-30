@@ -1,7 +1,7 @@
 import type { Command } from "commander";
 import type { Workflow, WorkflowInput } from "../../api/types.ts";
 import { readWorkflowInput } from "../../input/reader.ts";
-import { runPreWriteGate } from "../../middleware/cli-gate.ts";
+import { runServerMiddlewareGate } from "../../middleware/cli-gate.ts";
 import { formatJSON } from "../output/json.ts";
 import { formatKeyValue } from "../output/table.ts";
 import { resolveContext } from "../root.ts";
@@ -40,7 +40,7 @@ export function registerCreateCommand(parent: Command): void {
         process.exit(1);
       }
 
-      await runPreWriteGate({
+      await runServerMiddlewareGate({
         source: options.file as string,
         workflow: input,
         noLint: options.lint === false,

@@ -8,10 +8,13 @@
  * the upstream call). `Content-Length` is also stripped because fetch
  * recomputes it from the actual body.
  *
- * Preserves auth headers including `X-N8N-API-KEY` and `Authorization` since
- * the client is expected to supply them and the upstream needs them to
- * authenticate.
+ * Preserves auth headers (`X-N8N-API-KEY`, `Authorization`) by default — the
+ * client is expected to supply them and the upstream needs them to
+ * authenticate. Client middlewares (see `ClientMiddleware`) can rewrite or
+ * replace these after the strip step but before fetch.
  */
+import { runClientPipeline } from "@/middleware/client-pipeline.ts";
+import type { ClientMiddleware } from "@/middleware/types.ts";
 
 const HOP_BY_HOP_HEADERS = new Set([
   "connection",
@@ -47,6 +50,16 @@ function buildUpstreamHeaders(req: Request): Headers {
 export interface ForwardOptions {
   /** Total request timeout in milliseconds; 0 disables timeout. */
   timeoutMs?: number;
+  /**
+   * Ordered list of client middlewares to apply to the outgoing request,
+   * after hop-by-hop stripping and before fetch. Each middleware can mutate
+   * the outgoing Headers (e.g. mint an IAP id_token, inject a shared n8n
+   * API key, propagate a trace header).
+   *
+   * A middleware that throws aborts the upstream fetch — the caller sees
+   * the error and translates it into a 502.
+   */
+  clientMiddlewares?: ClientMiddleware[];
 }
 
 export async function forwardRequest(
@@ -59,6 +72,16 @@ export async function forwardRequest(
   const upstreamUrl = `${upstreamBase}${incomingUrl.pathname}${incomingUrl.search}`;
 
   const headers = buildUpstreamHeaders(req);
+
+  const clientMiddlewares = options?.clientMiddlewares ?? [];
+  if (clientMiddlewares.length > 0) {
+    await runClientPipeline(clientMiddlewares, headers, {
+      request: req,
+      method: req.method,
+      pathname: incomingUrl.pathname,
+      upstreamUrl,
+    });
+  }
 
   const init: RequestInit = {
     method: req.method,

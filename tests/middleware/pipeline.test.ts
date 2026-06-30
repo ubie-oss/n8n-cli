@@ -1,18 +1,22 @@
 import { describe, expect, test } from "bun:test";
 import { runPipeline } from "@/middleware/pipeline.ts";
-import type { MiddlewareVerdict, PreWriteContext, PreWriteMiddleware } from "@/middleware/types.ts";
+import type {
+  MiddlewareVerdict,
+  ServerMiddleware,
+  ServerMiddlewareContext,
+} from "@/middleware/types.ts";
 
-const baseCtx: PreWriteContext = { workflow: null, mode: "proxy" };
+const baseCtx: ServerMiddlewareContext = { workflow: null, mode: "proxy" };
 
-function mw(name: string, verdict: MiddlewareVerdict): PreWriteMiddleware {
+function mw(name: string, verdict: MiddlewareVerdict): ServerMiddleware {
   return { name, evaluate: () => verdict };
 }
 
-function asyncMw(name: string, verdict: MiddlewareVerdict): PreWriteMiddleware {
+function asyncMw(name: string, verdict: MiddlewareVerdict): ServerMiddleware {
   return { name, evaluate: () => Promise.resolve(verdict) };
 }
 
-function throwingMw(name: string, message: string): PreWriteMiddleware {
+function throwingMw(name: string, message: string): ServerMiddleware {
   return {
     name,
     evaluate: () => {
@@ -47,7 +51,7 @@ describe("runPipeline", () => {
       violations: [{ rule: "x", severity: "error", message: "boom" }],
       denial: { status: 422, error: "workflow_lint_failed", message: "boom" },
     });
-    const after: PreWriteMiddleware = {
+    const after: ServerMiddleware = {
       name: "authz",
       evaluate: () => {
         bCalled = true;

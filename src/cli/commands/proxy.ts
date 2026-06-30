@@ -14,8 +14,23 @@ interface ProxyOptions {
   allowDuplicates?: boolean;
   duplicateTtl?: string;
   upstreamTimeout?: string;
-  middleware?: string;
+  serverMiddleware?: string;
+  clientMiddleware?: string;
   tags?: string;
+  // iap-auth client-middleware options.
+  iapAuthAudience?: string;
+  iapAuthTokenSource?: string;
+  iapAuthTokenEnvVar?: string;
+  iapAuthCacheTtlMs?: string;
+  iapAuthTimeoutMs?: string;
+  iapAuthMetadataBaseUrl?: string;
+  iapAuthImpersonateServiceAccount?: string;
+  iapAuthIamCredentialsBaseUrl?: string;
+  // api-key-inject client-middleware options. The key value is NEVER taken
+  // directly on the CLI — only the name of an env var that holds it.
+  apiKeyInjectKeyEnvVar?: string;
+  apiKeyInjectHeader?: string;
+  apiKeyInjectConflictPolicy?: string;
   // Authz middleware options (flat namespace so commander stays happy).
   authzEnforce?: string;
   authzOnError?: string;
@@ -57,14 +72,61 @@ export function registerProxyCommand(program: Command): void {
       "30000",
     )
     .option(
-      "--middleware <list>",
-      "Comma-separated middleware chain (default: lint; env: N8N_MIDDLEWARES). Example: lint,authz",
+      "--server-middleware <list>",
+      "Comma-separated server-middleware chain (default: lint; env: N8N_SERVER_MIDDLEWARES). Example: lint,authz",
+    )
+    .option(
+      "--client-middleware <list>",
+      "Comma-separated client-middleware chain run on outgoing upstream requests (default: empty; env: N8N_CLIENT_MIDDLEWARES). Example: iap-auth,api-key-inject",
+    )
+    // iap-auth options — only meaningful when "iap-auth" is in the client-middleware chain.
+    .option(
+      "--iap-auth-audience <id>",
+      "OAuth2 client_id of the IAP-protected upstream backend (sets the id_token aud claim)",
+    )
+    .option(
+      "--iap-auth-token-source <kind>",
+      "Where to obtain the id_token: metadata (GCE metadata server, default), env, static",
+    )
+    .option(
+      "--iap-auth-token-env-var <name>",
+      "Env var holding a pre-minted id_token (token-source=env)",
+    )
+    .option(
+      "--iap-auth-cache-ttl-ms <ms>",
+      "Id-token cache lifetime in milliseconds (default: 3000000, i.e. 50 min)",
+    )
+    .option(
+      "--iap-auth-timeout-ms <ms>",
+      "HTTP timeout per metadata-server call in milliseconds (default: 5000)",
+    )
+    .option("--iap-auth-metadata-base-url <url>", "Override the metadata server base URL (testing)")
+    .option(
+      "--iap-auth-impersonate-service-account <email>",
+      "Target service-account email to impersonate. When set, the proxy mints id_tokens for THIS SA via iamcredentials.googleapis.com:generateIdToken. The workload SA needs roles/iam.serviceAccountTokenCreator on it.",
+    )
+    .option(
+      "--iap-auth-iam-credentials-base-url <url>",
+      "Override the iamcredentials API base URL (testing)",
+    )
+    // api-key-inject options — only meaningful when "api-key-inject" is in the client-middleware chain.
+    .option(
+      "--api-key-inject-key-env-var <name>",
+      "Name of the env var holding the shared API key value (the raw key is never accepted on the CLI). env: N8N_API_KEY_INJECT_KEY or N8N_API_KEY_INJECT_KEY_ENV_VAR.",
+    )
+    .option(
+      "--api-key-inject-header <name>",
+      "Header to inject the shared API key into (default: X-N8N-API-KEY)",
+    )
+    .option(
+      "--api-key-inject-conflict-policy <policy>",
+      "Behavior when the incoming request already carries the header: replace (default) or set-if-absent",
     )
     .option(
       "--tags <tags>",
       "Only run middleware against workflow saves whose tags contain ALL of the listed names (AND condition; env: PROXY_FILTER_BY_TAGS). Non-matching saves are forwarded transparently.",
     )
-    // Authz options — only meaningful when "authz" is in the middleware chain.
+    // Authz options — only meaningful when "authz" is in the server-middleware chain.
     .option("--authz-enforce <level>", "Authz enforcement level: off, warn, error")
     .option("--authz-on-error <mode>", "Behavior when groups API fails: deny, allow")
     .option("--authz-identity-source <kind>", "Where to read identity from: header, env, none")
@@ -103,7 +165,8 @@ export function registerProxyCommand(program: Command): void {
       const duplicateTtlMs = parsePositiveInt(opts.duplicateTtl, "--duplicate-ttl");
       const upstreamTimeoutMs = parsePositiveInt(opts.upstreamTimeout, "--upstream-timeout");
 
-      const middlewares = parseMiddlewareList(opts.middleware);
+      const middlewares = parseMiddlewareList(opts.serverMiddleware);
+      const clientMiddlewares = parseMiddlewareList(opts.clientMiddleware);
       const filterByTags = parseTagFilter(opts.tags ?? process.env.PROXY_FILTER_BY_TAGS);
 
       const handle = startProxy({
@@ -118,20 +181,25 @@ export function registerProxyCommand(program: Command): void {
         upstreamTimeoutMs,
         middlewares,
         middlewareCliOptions: extractMiddlewareCliOpts(opts),
+        clientMiddlewares: clientMiddlewares.length > 0 ? clientMiddlewares : undefined,
+        clientMiddlewareCliOptions: extractClientMiddlewareCliOpts(opts),
         filterByTags: filterByTags.length > 0 ? filterByTags : undefined,
       });
 
       // Friendly startup line on stderr so it never pollutes JSON log streams.
-      // The displayed middleware list reflects what was passed via --middleware;
-      // when empty, the env-var (N8N_MIDDLEWARES) or default chain wins inside
-      // startProxy, so this line just says "(env/default)" to avoid lying about
-      // an empty chain.
+      // The displayed middleware list reflects what was passed via
+      // --server-middleware; when empty, the env-var (N8N_SERVER_MIDDLEWARES)
+      // or default chain wins inside startProxy, so this line just says
+      // "(env/default)" to avoid lying about an empty chain.
       const mwDisplay = middlewares.length
         ? middlewares.join(",")
-        : (process.env.N8N_MIDDLEWARES ?? "lint (default)");
+        : (process.env.N8N_SERVER_MIDDLEWARES ?? "lint (default)");
+      const clientMwDisplay = clientMiddlewares.length
+        ? clientMiddlewares.join(",")
+        : (process.env.N8N_CLIENT_MIDDLEWARES ?? "(none)");
       const tagsDisplay = filterByTags.length > 0 ? `, tags=${filterByTags.join(",")}` : "";
       console.error(
-        `n8n-cli proxy listening on ${opts.listen} → ${upstream} (enforce=${enforce}, middlewares=${mwDisplay}${tagsDisplay})`,
+        `n8n-cli proxy listening on ${opts.listen} → ${upstream} (enforce=${enforce}, server-middlewares=${mwDisplay}, client-middlewares=${clientMwDisplay}${tagsDisplay})`,
       );
 
       const shutdown = async (signal: string) => {
@@ -169,6 +237,30 @@ function extractMiddlewareCliOpts(opts: ProxyOptions): Record<string, unknown> {
   copy("authzGroupsTimeoutMs");
   copy("authzWorkflowExtract");
   copy("authzWorkflowStripPrefix");
+  return out;
+}
+
+/**
+ * Strips the `opts` bag down to keys that client-middleware factories
+ * read. Keeping the projection explicit prevents commander artifacts
+ * (`_optionValues`, etc.) from leaking into factory inputs.
+ */
+function extractClientMiddlewareCliOpts(opts: ProxyOptions): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  const copy = (k: keyof ProxyOptions) => {
+    if (opts[k] !== undefined) out[k] = opts[k];
+  };
+  copy("iapAuthAudience");
+  copy("iapAuthTokenSource");
+  copy("iapAuthTokenEnvVar");
+  copy("iapAuthCacheTtlMs");
+  copy("iapAuthTimeoutMs");
+  copy("iapAuthMetadataBaseUrl");
+  copy("iapAuthImpersonateServiceAccount");
+  copy("iapAuthIamCredentialsBaseUrl");
+  copy("apiKeyInjectKeyEnvVar");
+  copy("apiKeyInjectHeader");
+  copy("apiKeyInjectConflictPolicy");
   return out;
 }
 

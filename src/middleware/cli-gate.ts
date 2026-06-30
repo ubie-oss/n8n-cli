@@ -2,10 +2,10 @@ import type { Workflow, WorkflowInput } from "@/api/types.ts";
 import { formatViolationLine } from "@/lint/write-check.ts";
 import { disposePipeline, preparePipeline, runPipeline } from "./pipeline.ts";
 import { buildMiddlewares, resolveEnabledList } from "./registry.ts";
-import type { PreWriteMiddleware } from "./types.ts";
-import { DEFAULT_MIDDLEWARE_CHAIN, registerBuiltins } from "./wiring.ts";
+import type { ServerMiddleware } from "./types.ts";
+import { DEFAULT_SERVER_MIDDLEWARE_CHAIN, registerBuiltins } from "./wiring.ts";
 
-export interface PreWriteGateOptions {
+export interface ServerMiddlewareGateOptions {
   /** Display label for the workflow source (file path or `-` for stdin). */
   source: string;
   /** Parsed workflow payload about to be written. */
@@ -38,14 +38,14 @@ export interface PreWriteGateOptions {
  * not batch runs, so there is no point continuing past a policy failure
  * to compute a partial outcome — the caller would just re-run.
  */
-export async function runPreWriteGate(options: PreWriteGateOptions): Promise<void> {
+export async function runServerMiddlewareGate(options: ServerMiddlewareGateOptions): Promise<void> {
   registerBuiltins();
   const env = options.env ?? process.env;
   const enabled = resolveEnabledList({
     cliValue: options.middlewares?.join(","),
     env,
-    envVar: "N8N_MIDDLEWARES",
-    fallback: DEFAULT_MIDDLEWARE_CHAIN,
+    envVar: "N8N_SERVER_MIDDLEWARES",
+    fallback: DEFAULT_SERVER_MIDDLEWARE_CHAIN,
   });
   const filtered = options.noLint ? enabled.filter((n) => n !== "lint") : enabled;
   if (filtered.length === 0) return;
@@ -56,7 +56,7 @@ export async function runPreWriteGate(options: PreWriteGateOptions): Promise<voi
     ...(options.middlewareCliOptions ?? {}),
   };
 
-  let chain: PreWriteMiddleware[];
+  let chain: ServerMiddleware[];
   try {
     chain = buildMiddlewares({ enabled: filtered, env, cliOpts: legacyCliOpts });
   } catch (err) {
