@@ -162,6 +162,46 @@ describe("proxy: client middleware injection", () => {
     expect(upstream.captured).toHaveLength(0);
   });
 
+  test("builtins: iap-auth + api-key-inject set both headers from a single config", async () => {
+    process.env.IAP_TEST_FAKE_TOKEN = "id-token-abc";
+    process.env.SHARED_N8N_KEY_FOR_E2E = "shared-key-xyz";
+    try {
+      // Register actual builtins for this test (not fakes).
+      const { registerClientBuiltins } = await import("@/middleware/client-wiring.ts");
+      registerClientBuiltins();
+      proxy = startProxy({
+        listen: "127.0.0.1:0",
+        upstream: `http://127.0.0.1:${upstream.port}`,
+        enforce: "off",
+        disableRules: [],
+        logFormat: "json",
+        allowDuplicates: true,
+        clientMiddlewares: ["iap-auth", "api-key-inject"],
+        clientMiddlewareCliOptions: {
+          iapAuthAudience: "https://example.com/iap",
+          iapAuthTokenSource: "env",
+          iapAuthTokenEnvVar: "IAP_TEST_FAKE_TOKEN",
+          apiKeyInjectKeyEnvVar: "SHARED_N8N_KEY_FOR_E2E",
+        },
+      });
+
+      // Client supplies its own Authorization (for IAP#1) — it must be
+      // replaced with the freshly minted IAP#2 token before forwarding.
+      const res = await fetch(`http://127.0.0.1:${proxy.port}/api/v1/workflows`, {
+        method: "GET",
+        headers: { authorization: "Bearer client-token-for-iap-1" },
+      });
+      expect(res.status).toBe(200);
+      expect(upstream.captured).toHaveLength(1);
+      const cap = upstream.captured[0]!;
+      expect(cap.headers["authorization"]).toBe("Bearer id-token-abc");
+      expect(cap.headers["x-n8n-api-key"]).toBe("shared-key-xyz");
+    } finally {
+      delete process.env.IAP_TEST_FAKE_TOKEN;
+      delete process.env.SHARED_N8N_KEY_FOR_E2E;
+    }
+  });
+
   test("multiple middlewares run in order; later wins on header conflicts", async () => {
     const first: ClientMiddlewareFactory<unknown> = {
       name: "first",

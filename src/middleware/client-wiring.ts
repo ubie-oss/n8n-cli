@@ -1,16 +1,16 @@
-import { knownClientMiddlewareNames } from "./client-registry.ts";
+import { apiKeyInjectFactory } from "./builtin/api-key-inject/factory.ts";
+import { iapAuthFactory } from "./builtin/iap-auth/factory.ts";
+import { knownClientMiddlewareNames, registerClientFactory } from "./client-registry.ts";
 
 /**
  * Registers every built-in client-middleware factory. Called once at process
  * startup from the CLI entry point. Idempotent: re-registration replaces
  * the previous factory under the same name, so tests can override builtins
  * by re-registering after `resetClientRegistry()` if needed.
- *
- * Currently a no-op — builtins (iap-auth, api-key-inject, ...) land in
- * follow-up commits and self-register here.
  */
 export function registerClientBuiltins(): void {
-  // Intentionally empty. See module doc above.
+  registerClientFactory(iapAuthFactory);
+  registerClientFactory(apiKeyInjectFactory);
 }
 
 /**

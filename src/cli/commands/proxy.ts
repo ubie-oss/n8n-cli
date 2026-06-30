@@ -17,6 +17,20 @@ interface ProxyOptions {
   serverMiddleware?: string;
   clientMiddleware?: string;
   tags?: string;
+  // iap-auth client-middleware options.
+  iapAuthAudience?: string;
+  iapAuthTokenSource?: string;
+  iapAuthTokenEnvVar?: string;
+  iapAuthCacheTtlMs?: string;
+  iapAuthTimeoutMs?: string;
+  iapAuthMetadataBaseUrl?: string;
+  iapAuthImpersonateServiceAccount?: string;
+  iapAuthIamCredentialsBaseUrl?: string;
+  // api-key-inject client-middleware options. The key value is NEVER taken
+  // directly on the CLI — only the name of an env var that holds it.
+  apiKeyInjectKeyEnvVar?: string;
+  apiKeyInjectHeader?: string;
+  apiKeyInjectConflictPolicy?: string;
   // Authz middleware options (flat namespace so commander stays happy).
   authzEnforce?: string;
   authzOnError?: string;
@@ -64,6 +78,52 @@ export function registerProxyCommand(program: Command): void {
     .option(
       "--client-middleware <list>",
       "Comma-separated client-middleware chain run on outgoing upstream requests (default: empty; env: N8N_CLIENT_MIDDLEWARES). Example: iap-auth,api-key-inject",
+    )
+    // iap-auth options — only meaningful when "iap-auth" is in the client-middleware chain.
+    .option(
+      "--iap-auth-audience <id>",
+      "OAuth2 client_id of the IAP-protected upstream backend (sets the id_token aud claim)",
+    )
+    .option(
+      "--iap-auth-token-source <kind>",
+      "Where to obtain the id_token: metadata (GCE metadata server, default), env, static",
+    )
+    .option(
+      "--iap-auth-token-env-var <name>",
+      "Env var holding a pre-minted id_token (token-source=env)",
+    )
+    .option(
+      "--iap-auth-cache-ttl-ms <ms>",
+      "Id-token cache lifetime in milliseconds (default: 3000000, i.e. 50 min)",
+    )
+    .option(
+      "--iap-auth-timeout-ms <ms>",
+      "HTTP timeout per metadata-server call in milliseconds (default: 5000)",
+    )
+    .option(
+      "--iap-auth-metadata-base-url <url>",
+      "Override the metadata server base URL (testing)",
+    )
+    .option(
+      "--iap-auth-impersonate-service-account <email>",
+      "Target service-account email to impersonate. When set, the proxy mints id_tokens for THIS SA via iamcredentials.googleapis.com:generateIdToken. The workload SA needs roles/iam.serviceAccountTokenCreator on it.",
+    )
+    .option(
+      "--iap-auth-iam-credentials-base-url <url>",
+      "Override the iamcredentials API base URL (testing)",
+    )
+    // api-key-inject options — only meaningful when "api-key-inject" is in the client-middleware chain.
+    .option(
+      "--api-key-inject-key-env-var <name>",
+      "Name of the env var holding the shared API key value (the raw key is never accepted on the CLI). env: N8N_API_KEY_INJECT_KEY or N8N_API_KEY_INJECT_KEY_ENV_VAR.",
+    )
+    .option(
+      "--api-key-inject-header <name>",
+      "Header to inject the shared API key into (default: X-N8N-API-KEY)",
+    )
+    .option(
+      "--api-key-inject-conflict-policy <policy>",
+      "Behavior when the incoming request already carries the header: replace (default) or set-if-absent",
     )
     .option(
       "--tags <tags>",
@@ -185,12 +245,26 @@ function extractMiddlewareCliOpts(opts: ProxyOptions): Record<string, unknown> {
 
 /**
  * Strips the `opts` bag down to keys that client-middleware factories
- * read. Empty for now — builtin-specific keys land alongside their
- * builtins in follow-up commits. The placeholder keeps the wiring
- * uniform with the server-side surface.
+ * read. Keeping the projection explicit prevents commander artifacts
+ * (`_optionValues`, etc.) from leaking into factory inputs.
  */
-function extractClientMiddlewareCliOpts(_opts: ProxyOptions): Record<string, unknown> {
-  return {};
+function extractClientMiddlewareCliOpts(opts: ProxyOptions): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  const copy = (k: keyof ProxyOptions) => {
+    if (opts[k] !== undefined) out[k] = opts[k];
+  };
+  copy("iapAuthAudience");
+  copy("iapAuthTokenSource");
+  copy("iapAuthTokenEnvVar");
+  copy("iapAuthCacheTtlMs");
+  copy("iapAuthTimeoutMs");
+  copy("iapAuthMetadataBaseUrl");
+  copy("iapAuthImpersonateServiceAccount");
+  copy("iapAuthIamCredentialsBaseUrl");
+  copy("apiKeyInjectKeyEnvVar");
+  copy("apiKeyInjectHeader");
+  copy("apiKeyInjectConflictPolicy");
+  return out;
 }
 
 function parsePositiveInt(value: string | undefined, flag: string): number | undefined {
