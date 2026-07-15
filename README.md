@@ -241,6 +241,36 @@ Detects usage of banned node types. Requires the array config format to specify 
 }
 ```
 
+##### `no-plaintext-secrets`
+
+Detects plaintext secrets (API keys, tokens, passwords) embedded in node parameters. Enabled by default with severity `error`. Detection is best-effort and layered:
+
+1. **Schema-declared password fields** — parameters that n8n itself masks as passwords (`typeOptions.password` in node schemas, e.g. `crypto.secret`, `jwt.token`, `*.password`) containing literal values
+2. **Sensitive name heuristics** — keys like `Authorization`, `X-API-Key`, `api_key`, `token`, `secret`, `password`, `cookie` in HTTP Request / GraphQL header collections, query parameter collections, Set node assignments, embedded JSON strings (`jsonHeaders`, `jsonBody`, ...), URL query strings (`?api_key=...`), and URL userinfo (`https://user:password@host`)
+3. **Known token formats** — string values anywhere (including Code node source and sticky notes) matching well-known secret formats: AWS access keys, GitHub/GitLab/Slack/npm tokens, OpenAI/Anthropic/Google/Stripe/SendGrid/Twilio API keys, JWTs, private key blocks, and `password: "..."`-style assignments
+
+Values written as n8n expressions (e.g. `=Bearer {{ $env.API_TOKEN }}`) are considered safe, and secret values are redacted in lint messages.
+
+| Option | Type | Description |
+|--------|------|-------------|
+| `additionalNames` | `string[]` | Extra key names to treat as sensitive |
+| `additionalPatterns` | `string[]` | Extra value regexes to treat as secrets |
+| `allowValues` | `string[]` | Regexes; matching values are never flagged (e.g. test fixtures) |
+| `minSecretLength` | `number` | Minimum literal length for name-based checks (default: `8`) |
+
+```json
+{
+  "rules": {
+    "no-plaintext-secrets": ["error", {
+      "additionalNames": ["signingSeed"],
+      "additionalPatterns": ["ACME-INTERNAL-[0-9]{10}"],
+      "allowValues": ["^test-fixture-"],
+      "minSecretLength": 8
+    }]
+  }
+}
+```
+
 ##### `schedule-trigger-frequency`
 
 Validates that Schedule Trigger nodes don't fire more frequently than a configured minimum interval.
