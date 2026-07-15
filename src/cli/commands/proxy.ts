@@ -31,6 +31,13 @@ interface ProxyOptions {
   apiKeyInjectKeyEnvVar?: string;
   apiKeyInjectHeader?: string;
   apiKeyInjectConflictPolicy?: string;
+  // impersonator-token client-middleware options. Attaches the user's own
+  // Google id_token as a side header so the server can attribute the call
+  // to the human running the CLI (instead of the impersonated SA).
+  impersonatorTokenAudience?: string;
+  impersonatorTokenSource?: string;
+  impersonatorTokenEnvVar?: string;
+  impersonatorTokenOnError?: string;
   // Authz middleware options (flat namespace so commander stays happy).
   authzEnforce?: string;
   authzOnError?: string;
@@ -47,6 +54,16 @@ interface ProxyOptions {
   authzGroupsTimeoutMs?: string;
   authzWorkflowExtract?: string;
   authzWorkflowStripPrefix?: string;
+  // oauth-verify server middleware options. Verifies the incoming
+  // Authorization: Bearer against Google's tokeninfo endpoint.
+  oauthVerifyEnforce?: string;
+  oauthVerifyExpectedAudiences?: string;
+  oauthVerifyTrustedPrincipals?: string;
+  // impersonator-verify server middleware options. Verifies the side
+  // header carrying the human user's id_token attached by the client.
+  impersonatorVerifyEnforce?: string;
+  impersonatorVerifyRequirement?: string;
+  impersonatorVerifyExpectedAudiences?: string;
 }
 
 export function registerProxyCommand(program: Command): void {
@@ -151,6 +168,49 @@ export function registerProxyCommand(program: Command): void {
       "--authz-workflow-strip-prefix <prefix>",
       "Prefix to strip from each extracted ACL value",
     )
+    // oauth-verify — verifies incoming Authorization: Bearer via Google tokeninfo.
+    .option(
+      "--oauth-verify-enforce <level>",
+      "oauth-verify enforcement level: off, warn, deny (default: deny)",
+    )
+    .option(
+      "--oauth-verify-expected-audiences <list>",
+      "Comma-separated accepted `aud` claims (e.g. Cloud Run URL, IAP client_id)",
+    )
+    .option(
+      "--oauth-verify-trusted-principals <list>",
+      "Comma-separated bearer principals (emails / subjects) permitted to attach an X-Impersonator-Id-Token",
+    )
+    // impersonator-verify — verifies X-Impersonator-Id-Token (the human user's id_token).
+    .option(
+      "--impersonator-verify-enforce <level>",
+      "impersonator-verify enforcement level: off, warn, deny (default: deny)",
+    )
+    .option(
+      "--impersonator-verify-requirement <mode>",
+      "Behavior when the impersonator header is absent: optional, require (default: optional)",
+    )
+    .option(
+      "--impersonator-verify-expected-audiences <list>",
+      "Comma-separated accepted `aud` claims for the impersonator token (typically the gcloud ADC OAuth client id)",
+    )
+    // impersonator-token — attaches the user's id_token as a side header.
+    .option(
+      "--impersonator-token-audience <id>",
+      "aud claim for the minted user id_token (default: gcloud ADC OAuth client id)",
+    )
+    .option(
+      "--impersonator-token-source <kind>",
+      "Where the token comes from: adc (default), env, static",
+    )
+    .option(
+      "--impersonator-token-env-var <name>",
+      "Env var holding a pre-minted id_token (source=env)",
+    )
+    .option(
+      "--impersonator-token-on-error <mode>",
+      "Behavior on token-fetch failure: throw (default) or skip",
+    )
     .action((opts: ProxyOptions) => {
       const upstream = opts.upstream ?? process.env.N8N_API_URL;
       if (!upstream) {
@@ -237,6 +297,12 @@ function extractMiddlewareCliOpts(opts: ProxyOptions): Record<string, unknown> {
   copy("authzGroupsTimeoutMs");
   copy("authzWorkflowExtract");
   copy("authzWorkflowStripPrefix");
+  copy("oauthVerifyEnforce");
+  copy("oauthVerifyExpectedAudiences");
+  copy("oauthVerifyTrustedPrincipals");
+  copy("impersonatorVerifyEnforce");
+  copy("impersonatorVerifyRequirement");
+  copy("impersonatorVerifyExpectedAudiences");
   return out;
 }
 
@@ -261,6 +327,10 @@ function extractClientMiddlewareCliOpts(opts: ProxyOptions): Record<string, unkn
   copy("apiKeyInjectKeyEnvVar");
   copy("apiKeyInjectHeader");
   copy("apiKeyInjectConflictPolicy");
+  copy("impersonatorTokenAudience");
+  copy("impersonatorTokenSource");
+  copy("impersonatorTokenEnvVar");
+  copy("impersonatorTokenOnError");
   return out;
 }
 

@@ -1,0 +1,11 @@
+.git
+.github
+tests
+docs
+node_modules
+dist
+n8n-cli
+*.md
+!README.md
+.claude
+.vscode

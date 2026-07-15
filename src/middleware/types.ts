@@ -4,6 +4,51 @@ import type { Violation } from "@/lint/rules/violation.ts";
 /** Where the pipeline is running. Middlewares can adapt to context. */
 export type PipelineMode = "proxy" | "apply" | "single";
 
+/**
+ * Cryptographically verified identity claim from a Bearer token or from an
+ * X-Impersonator-Id-Token side channel. Populated by auth-verifying
+ * middlewares (`oauth-verify`, `impersonator-verify`) and consumed by
+ * gating middlewares (`caller-authz`) or downstream logging.
+ *
+ * Rule: only middlewares that verify a token via Google JWKS / tokeninfo
+ * write these fields. Callers must not populate them from ambient headers,
+ * otherwise the "verified" contract silently breaks.
+ */
+export interface VerifiedTokenClaim {
+  /** Email claim from the id_token (Google `email` payload). */
+  email: string;
+  /** Audience claim (Google `aud` payload) that passed the aud check. */
+  aud: string;
+  /** True when the token itself declared `email_verified=true` and issuer matched. */
+  verified: true;
+}
+
+/**
+ * Structured auth state populated by verifying middlewares. Later middlewares
+ * (external-authz, external forwarding, audit logging) read `effective` to
+ * get the authoritative caller identity without caring which layer produced
+ * it. See `oauth-verify` / `impersonator-verify` for how fields are set.
+ */
+export interface AuthContext {
+  /** Bearer token in Authorization header, verified against expected aud. */
+  bearer?: VerifiedTokenClaim;
+  /**
+   * X-Impersonator-Id-Token (or configured equivalent), verified against
+   * the impersonator aud allowlist. Only trusted service accounts (per
+   * `oauth-verify`'s allowedServiceAccounts) may attach one.
+   */
+  impersonator?: VerifiedTokenClaim;
+  /**
+   * The authoritative identity for downstream authz. When an impersonator
+   * is present and trusted, this points at it; otherwise it mirrors the
+   * bearer. `layer` lets downstream code differentiate for audit purposes.
+   */
+  effective?: {
+    email: string;
+    layer: "bearer" | "impersonator";
+  };
+}
+
 /** Per-request input handed to each server middleware. */
 export interface ServerMiddlewareContext {
   /** Parsed workflow. May be null when JSON parsing failed upstream. */
@@ -16,8 +61,19 @@ export interface ServerMiddlewareContext {
   rawJSON?: string;
   /** Incoming HTTP request (proxy mode only). */
   request?: Request;
-  /** Identifier of the actor performing the write, if resolvable. */
+  /**
+   * Identifier of the actor performing the write, if resolvable. Kept for
+   * backwards compatibility with the existing `authz` middleware. Auth-
+   * verifying middlewares also mirror `auth.effective.email` here so simple
+   * consumers can read a single string.
+   */
   identity?: string;
+  /**
+   * Cryptographically verified identity, populated by auth middlewares.
+   * Consumers that need strong guarantees about *who* the caller is (as
+   * opposed to a hint) read from here.
+   */
+  auth?: AuthContext;
   /** Which call site is running the pipeline. */
   mode: PipelineMode;
 }
