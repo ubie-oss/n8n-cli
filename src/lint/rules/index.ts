@@ -6,6 +6,7 @@ import { expressionModePrefixRule } from "./expression-mode-prefix.ts";
 import { filterOperatorValidRule } from "./filter-operator-valid.ts";
 import { implicitJsonRefRule } from "./implicit-json-ref.ts";
 import { jsonSyntaxRule } from "./json-syntax.ts";
+import { noPlaintextSecretsRule } from "./no-plaintext-secrets.ts";
 import { nodeParamsRule } from "./node-params.ts";
 import { nodeRefCardinalityRule } from "./node-ref-cardinality.ts";
 import { nodeRefFieldCheckRule } from "./node-ref-field-check.ts";
@@ -31,5 +32,6 @@ export function registerDefaultRules(): RuleRegistry {
   registry.register(webhookIdRequiredRule);
   registry.register(bannedNodeRule);
   registry.register(filterOperatorValidRule);
+  registry.register(noPlaintextSecretsRule);
   return registry;
 }

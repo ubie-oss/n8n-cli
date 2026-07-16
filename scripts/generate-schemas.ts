@@ -24,12 +24,18 @@ interface DisplayOptions {
 	hide?: Record<string, Array<string | number | boolean>>;
 }
 
+interface NodePropertyValues {
+	name?: string;
+	values?: NodeProperty[];
+}
+
 interface NodeProperty {
 	name: string;
 	type: string;
 	required?: boolean;
-	options?: NodePropertyOption[];
+	options?: Array<NodePropertyOption & NodePropertyValues>;
 	displayOptions?: DisplayOptions;
+	typeOptions?: { password?: boolean };
 }
 
 interface CredentialEntry {
@@ -68,6 +74,8 @@ interface GeneratedNodeTypeSchema {
 
 interface GeneratedOutput {
 	paramSchemas: Record<string, GeneratedNodeTypeSchema[]>;
+	/** nodeType → parameter names that n8n masks as passwords (typeOptions.password) */
+	sensitiveParams: Record<string, string[]>;
 }
 
 // ---------------------------------------------------------------------------
@@ -178,6 +186,23 @@ function processProperty(
 	return { name: prop.name, schema, condition };
 }
 
+/** Recursively collects names of properties marked with typeOptions.password */
+function collectSensitiveParamNames(props: NodeProperty[], into: Set<string>): void {
+	for (const prop of props) {
+		if (prop.typeOptions?.password === true) {
+			into.add(prop.name);
+		}
+		// Nested properties inside fixedCollection / collection options
+		if (Array.isArray(prop.options)) {
+			for (const opt of prop.options) {
+				if (Array.isArray(opt.values)) {
+					collectSensitiveParamNames(opt.values, into);
+				}
+			}
+		}
+	}
+}
+
 function processNode(
 	desc: NodeTypeDescription,
 	prefix: string,
@@ -274,7 +299,7 @@ async function generate(): Promise<void> {
 		},
 	];
 
-	const output: GeneratedOutput = { paramSchemas: {} };
+	const output: GeneratedOutput = { paramSchemas: {}, sensitiveParams: {} };
 
 	for (const pkg of packages) {
 		const nodes = await loadNodesJson(pkg.path);
@@ -289,6 +314,13 @@ async function generate(): Promise<void> {
 				existing.push(...schemas);
 			} else {
 				output.paramSchemas[nodeType] = schemas;
+			}
+
+			// Union across versions: a param masked in any version is treated as sensitive
+			const sensitive = new Set(output.sensitiveParams[nodeType] ?? []);
+			collectSensitiveParamNames(node.properties, sensitive);
+			if (sensitive.size > 0) {
+				output.sensitiveParams[nodeType] = Array.from(sensitive).sort();
 			}
 		}
 	}
