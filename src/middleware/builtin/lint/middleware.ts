@@ -1,10 +1,6 @@
 import { hasErrorViolations, lintWorkflow } from "@/lint/engine.ts";
 import type { Violation } from "@/lint/rules/violation.ts";
-import {
-  type LintConfigLoadError,
-  prepareWriteLintContext,
-  type WriteLintContext,
-} from "@/lint/write-check.ts";
+import { prepareWriteLintContext, type WriteLintContext } from "@/lint/write-check.ts";
 import type {
   MiddlewareVerdict,
   ServerMiddleware,
@@ -34,8 +30,6 @@ export interface LintMiddlewareOptions {
    */
   startDir?: string;
 }
-
-const DENIAL_DOCS = "https://github.com/ubie-oss/n8n-cli#lint";
 
 /**
  * The lint middleware reuses the existing engine and write-check helpers;
