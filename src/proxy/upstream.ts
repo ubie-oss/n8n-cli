@@ -12,6 +12,9 @@
  * client is expected to supply them and the upstream needs them to
  * authenticate. Client middlewares (see `ClientMiddleware`) can rewrite or
  * replace these after the strip step but before fetch.
+ *
+ * On the way back, `Content-Encoding` (and the now-stale `Content-Length`) are
+ * dropped from the upstream response — see `normalizeResponseEncoding`.
  */
 import { runClientPipeline } from "@/middleware/client-pipeline.ts";
 import type { ClientMiddleware } from "@/middleware/types.ts";
@@ -45,6 +48,41 @@ function buildUpstreamHeaders(req: Request): Headers {
     headers.delete(h);
   }
   return headers;
+}
+
+/**
+ * Rebuilds an upstream response so its headers describe the body we actually
+ * hand downstream.
+ *
+ * `fetch` negotiates and transparently *decodes* the response body (the
+ * outgoing request carries an `Accept-Encoding` the runtime adds on its own),
+ * but the `Response` it returns still advertises the upstream's
+ * `Content-Encoding` and the compressed `Content-Length`. Forwarding those
+ * verbatim hands the client a plain body labelled `content-encoding: br`,
+ * which any client that honours the header fails to decode — n8n-cli's own
+ * API client dies with `BrotliDecompressionError`. curl only escapes this
+ * because it doesn't ask for compression by default.
+ *
+ * So: when the upstream declares a real content coding, strip both headers and
+ * let the runtime recompute the length. Responses without an encoding (or with
+ * `identity`) pass through untouched, keeping the original object — and its
+ * mutable headers, which `handleWorkflowMutation` relies on to attach lint
+ * counters.
+ */
+function normalizeResponseEncoding(response: Response): Response {
+  const encoding = response.headers.get("content-encoding");
+  if (!encoding || encoding.trim().toLowerCase() === "identity") return response;
+
+  const headers = new Headers(response.headers);
+  headers.delete("content-encoding");
+  // Stale: it measures the compressed bytes, not the decoded body we forward.
+  headers.delete("content-length");
+
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
 }
 
 export interface ForwardOptions {
@@ -107,7 +145,7 @@ export async function forwardRequest(
   try {
     const response = await fetch(upstreamUrl, init);
     const elapsedMs = Math.round(performance.now() - start);
-    return { response, elapsedMs };
+    return { response: normalizeResponseEncoding(response), elapsedMs };
   } finally {
     if (timer) clearTimeout(timer);
   }
