@@ -2,6 +2,7 @@ import type { Command } from "commander";
 import { parseTagFilter } from "@/common/tags.ts";
 import { parseMiddlewareList } from "@/middleware/registry.ts";
 import { parseEnforceLevel } from "@/proxy/config.ts";
+import { parseRoutes } from "@/proxy/rest/router.ts";
 import { startProxy } from "@/proxy/server.ts";
 
 interface ProxyOptions {
@@ -17,6 +18,7 @@ interface ProxyOptions {
   serverMiddleware?: string;
   clientMiddleware?: string;
   tags?: string;
+  routes?: string;
   // iap-auth client-middleware options.
   iapAuthAudience?: string;
   iapAuthTokenSource?: string;
@@ -54,6 +56,11 @@ interface ProxyOptions {
   authzGroupsTimeoutMs?: string;
   authzWorkflowExtract?: string;
   authzWorkflowStripPrefix?: string;
+  authzAclSource?: string;
+  authzAclCacheTtlMs?: string;
+  authzOnMissingAcl?: string;
+  authzBootstrapGroups?: string;
+  authzActions?: string;
   // oauth-verify server middleware options. Verifies the incoming
   // Authorization: Bearer against Google's tokeninfo endpoint.
   oauthVerifyEnforce?: string;
@@ -143,6 +150,12 @@ export function registerProxyCommand(program: Command): void {
       "--tags <tags>",
       "Only run middleware against workflow saves whose tags contain ALL of the listed names (AND condition; env: PROXY_FILTER_BY_TAGS). Non-matching saves are forwarded transparently.",
     )
+    .option(
+      "--routes <table>",
+      "Endpoints to treat as policy-relevant, one per line or comma-separated: " +
+        '"METHOD /path/:id -> action [body=workflow]" (env: N8N_PROXY_ROUTES). ' +
+        "Defaults to workflow create/update/tags/delete/activate.",
+    )
     // Authz options — only meaningful when "authz" is in the server-middleware chain.
     .option("--authz-enforce <level>", "Authz enforcement level: off, warn, error")
     .option("--authz-on-error <mode>", "Behavior when groups API fails: deny, allow")
@@ -167,6 +180,26 @@ export function registerProxyCommand(program: Command): void {
     .option(
       "--authz-workflow-strip-prefix <prefix>",
       "Prefix to strip from each extracted ACL value",
+    )
+    .option(
+      "--authz-acl-source <kind>",
+      "Where to read the ACL from: request (body, legacy) or upstream (stored workflow — required for tag-based ACLs and the only non-forgeable option)",
+    )
+    .option(
+      "--authz-acl-cache-ttl-ms <ms>",
+      "Cache lifetime for stored-ACL lookups (default: 10000)",
+    )
+    .option(
+      "--authz-on-missing-acl <mode>",
+      "What to do when the target declares no ACL (every create included): deny (default) or allow",
+    )
+    .option(
+      "--authz-bootstrap-groups <groups>",
+      "Comma-separated groups allowed to act when the target has no ACL; overrides --authz-on-missing-acl",
+    )
+    .option(
+      "--authz-actions <actions>",
+      "Comma-separated route actions this middleware authorizes (default: all it sees)",
     )
     // oauth-verify — verifies incoming Authorization: Bearer via Google tokeninfo.
     .option(
@@ -228,8 +261,10 @@ export function registerProxyCommand(program: Command): void {
       const middlewares = parseMiddlewareList(opts.serverMiddleware);
       const clientMiddlewares = parseMiddlewareList(opts.clientMiddleware);
       const filterByTags = parseTagFilter(opts.tags ?? process.env.PROXY_FILTER_BY_TAGS);
+      const routes = parseRoutes(opts.routes ?? process.env.N8N_PROXY_ROUTES);
 
       const handle = startProxy({
+        routes,
         listen: opts.listen,
         upstream,
         lintConfigPath: opts.lintConfig,

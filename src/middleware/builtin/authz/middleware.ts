@@ -26,6 +26,12 @@ export class AuthzMiddleware implements ServerMiddleware {
   readonly name = "authz";
   private readonly resolver: GroupsResolver;
   private readonly acl: WorkflowACLExtractor;
+  /**
+   * Stored-ACL cache. Deliberately short-lived (`aclCacheTtlMs`): a cached ACL
+   * is a cached permission, so this only exists to keep a multi-workflow apply
+   * from re-reading the same workflow once per request.
+   */
+  private readonly aclCache = new Map<string, { acl: string[]; expiresAt: number }>();
 
   constructor(
     private readonly options: AuthzOptions,
@@ -40,11 +46,16 @@ export class AuthzMiddleware implements ServerMiddleware {
       return { block: false, violations: [] };
     }
 
+    // Action scoping: when the operator named actions, stay out of the way on
+    // every other route so something else (or nothing) governs those.
+    const scoped = this.options.actions ?? [];
+    if (scoped.length > 0 && ctx.action && !scoped.includes(ctx.action)) {
+      return { block: false, violations: [] };
+    }
+
     const identity =
       ctx.identity ??
       resolveIdentity(this.options.identity, { request: ctx.request, env: process.env });
-
-    const allowed = this.acl.extract(ctx.workflow);
 
     if (!identity) {
       return this.dispatchDenial(
@@ -52,11 +63,42 @@ export class AuthzMiddleware implements ServerMiddleware {
         "Actor identity could not be resolved (header/env not present or claim missing)",
       );
     }
+
+    let allowed: string[];
+    try {
+      allowed = await this.resolveAcl(ctx);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (this.options.onError === "allow") {
+        return {
+          block: false,
+          violations: [
+            {
+              rule: "authz-acl-warning",
+              severity: "warning",
+              message: `ACL lookup failed (fail-open): ${message}`,
+            },
+          ],
+        };
+      }
+      return this.dispatchDenial("authz-acl-error", `ACL lookup failed: ${message}`);
+    }
+
+    // Nothing to check against: every `create` lands here, and so does a
+    // workflow nobody has labelled yet. `bootstrapGroups` decides by membership
+    // when set; otherwise the blanket answer applies.
     if (allowed.length === 0) {
-      return this.dispatchDenial(
-        "authz-no-acl",
-        "Workflow does not declare any allowed groups — refusing to allow edits via the gate",
-      );
+      const bootstrap = this.options.bootstrapGroups ?? [];
+      if (bootstrap.length === 0) {
+        if ((this.options.onMissingAcl ?? "deny") === "allow") {
+          return { block: false, violations: [] };
+        }
+        return this.dispatchDenial(
+          "authz-no-acl",
+          "Workflow does not declare any allowed groups — refusing to allow edits via the gate",
+        );
+      }
+      allowed = bootstrap;
     }
 
     let groups: string[];
@@ -89,6 +131,39 @@ export class AuthzMiddleware implements ServerMiddleware {
       "authz-denied",
       `Identity "${identity}" is not in any of the workflow's allowed groups (${allowed.join(", ")})`,
     );
+  }
+
+  /**
+   * Reads the ACL the decision is made against.
+   *
+   * With `aclSource: "upstream"` this is the *stored* workflow, never the
+   * payload: an ACL the caller can rewrite in the same request grants nothing.
+   * It is also the only source that works for an ACL kept in n8n tags, since
+   * tags are assigned through a separate endpoint and never appear in a
+   * workflow write body.
+   *
+   * A `create` has no stored state; it returns empty and the caller's
+   * missing-ACL policy takes over.
+   */
+  private async resolveAcl(ctx: ServerMiddlewareContext): Promise<string[]> {
+    if ((this.options.aclSource ?? "request") === "request") {
+      return this.acl.extract(ctx.workflow);
+    }
+    const id = ctx.workflowId;
+    if (!id) return [];
+    if (!ctx.fetchStoredWorkflow) {
+      throw new Error(
+        "aclSource=upstream needs a stored-workflow reader, which this host did not provide",
+      );
+    }
+    const ttl = this.options.aclCacheTtlMs ?? 10_000;
+    const cached = this.aclCache.get(id);
+    if (cached && cached.expiresAt > Date.now()) return cached.acl;
+
+    const stored = await ctx.fetchStoredWorkflow(id);
+    const acl = this.acl.extract(stored);
+    if (ttl > 0) this.aclCache.set(id, { acl, expiresAt: Date.now() + ttl });
+    return acl;
   }
 
   private dispatchDenial(rule: string, message: string): MiddlewareVerdict {

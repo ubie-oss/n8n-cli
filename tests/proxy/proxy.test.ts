@@ -113,27 +113,50 @@ function proxyURL(p: string): string {
 
 describe("proxy: route matcher", () => {
   test("POST /api/v1/workflows is recognized as create", () => {
-    expect(matchWorkflowMutation("POST", "/api/v1/workflows")).toEqual({ kind: "create" });
+    expect(matchWorkflowMutation("POST", "/api/v1/workflows")).toEqual({
+      action: "create",
+      id: undefined,
+      bodyIsWorkflow: true,
+    });
   });
 
   test("PUT /api/v1/workflows/:id is recognized as update", () => {
     expect(matchWorkflowMutation("PUT", "/api/v1/workflows/abc123")).toEqual({
-      kind: "update",
+      action: "update",
       id: "abc123",
+      bodyIsWorkflow: true,
     });
   });
 
-  test("Other endpoints are not matched", () => {
+  test("endpoints that change access or state are matched, without a workflow body", () => {
+    expect(matchWorkflowMutation("PUT", "/api/v1/workflows/abc/tags")).toEqual({
+      action: "tags",
+      id: "abc",
+      bodyIsWorkflow: false,
+    });
+    expect(matchWorkflowMutation("DELETE", "/api/v1/workflows/abc")).toEqual({
+      action: "delete",
+      id: "abc",
+      bodyIsWorkflow: false,
+    });
+    expect(matchWorkflowMutation("POST", "/api/v1/workflows/abc/activate")).toEqual({
+      action: "activate",
+      id: "abc",
+      bodyIsWorkflow: false,
+    });
+  });
+
+  test("reads and unrelated endpoints are not matched", () => {
     expect(matchWorkflowMutation("GET", "/api/v1/workflows")).toBeNull();
-    expect(matchWorkflowMutation("DELETE", "/api/v1/workflows/abc")).toBeNull();
+    expect(matchWorkflowMutation("GET", "/api/v1/workflows/abc")).toBeNull();
     expect(matchWorkflowMutation("POST", "/api/v1/credentials")).toBeNull();
-    expect(matchWorkflowMutation("POST", "/api/v1/workflows/abc/activate")).toBeNull();
   });
 
   test("URL-encoded ids are decoded", () => {
     expect(matchWorkflowMutation("PUT", "/api/v1/workflows/wf%20a")).toEqual({
-      kind: "update",
+      action: "update",
       id: "wf a",
+      bodyIsWorkflow: true,
     });
   });
 });

@@ -76,6 +76,21 @@ export interface ServerMiddlewareContext {
   auth?: AuthContext;
   /** Which call site is running the pipeline. */
   mode: PipelineMode;
+  /**
+   * What the caller is trying to do, from the proxy's route table ("create",
+   * "update", "tags", "delete", "activate", or an operator-defined name).
+   * Undefined in apply mode, where the only operation is a definition write.
+   */
+  action?: string;
+  /** Target workflow id, when the operation names one (everything but create). */
+  workflowId?: string;
+  /**
+   * Reads the *stored* state of a workflow from upstream. Middlewares that must
+   * not trust the request body — an ACL the caller could rewrite in the same
+   * call is no ACL — use this instead. Absent when the host cannot reach
+   * upstream on the middleware's behalf.
+   */
+  fetchStoredWorkflow?: (id: string) => Promise<Workflow | null>;
 }
 
 /**

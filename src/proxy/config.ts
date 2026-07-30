@@ -1,3 +1,5 @@
+import type { RouteSpec } from "./rest/router.ts";
+
 /** Enforce levels: off = log only, warn = forward + log violations, error = block on errors */
 export type EnforceLevel = "off" | "warn" | "error";
 
@@ -50,6 +52,12 @@ export interface ProxyConfig {
    * intercepted save" (legacy behavior).
    */
   filterByTags?: string[];
+  /**
+   * Endpoints treated as policy-relevant. Defaults to `DEFAULT_ROUTES`.
+   * Configurable because the surface worth gating is deployment specific —
+   * see `parseRoutes` for the text format.
+   */
+  routes?: RouteSpec[];
   /**
    * Ordered list of client middleware names to apply to every outgoing
    * upstream request (mutation and transparent-forward paths alike).

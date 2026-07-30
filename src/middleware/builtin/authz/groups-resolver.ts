@@ -1,5 +1,6 @@
 import { type CompiledJSONPath, compileJSONPath } from "@/middleware/jsonpath.ts";
 import { expandRecord, expandTemplate } from "@/middleware/template.ts";
+import { buildGroupsAuthenticator, type GroupsAuthenticator } from "./groups-auth.ts";
 import type { GroupsRequestSpec } from "./types.ts";
 
 /**
@@ -12,6 +13,8 @@ export interface GroupsResolverDeps {
   fetch?: FetchLike;
   env?: NodeJS.ProcessEnv;
   now?: () => number;
+  /** Overrides the authenticator built from `spec.auth` (tests). */
+  authenticate?: GroupsAuthenticator;
 }
 
 interface CacheEntry {
@@ -36,6 +39,7 @@ export class GroupsResolver {
   private readonly fetchImpl: FetchLike;
   private readonly env: NodeJS.ProcessEnv;
   private readonly now: () => number;
+  private readonly authenticate?: GroupsAuthenticator;
 
   constructor(
     private readonly spec: GroupsRequestSpec,
@@ -45,6 +49,9 @@ export class GroupsResolver {
     this.fetchImpl = deps.fetch ?? ((input, init) => fetch(input, init));
     this.env = deps.env ?? process.env;
     this.now = deps.now ?? (() => Date.now());
+    // Built once: a misconfigured auth spec should fail at startup, not on the
+    // first authorization decision.
+    this.authenticate = deps.authenticate ?? buildGroupsAuthenticator(spec.auth, this.env);
   }
 
   async resolve(identity: string): Promise<string[]> {
@@ -58,6 +65,8 @@ export class GroupsResolver {
     const headers = expandRecord(this.spec.headers, bindings);
     const body =
       this.spec.body !== undefined ? expandTemplate(this.spec.body, bindings) : undefined;
+
+    if (this.authenticate) await this.authenticate(headers);
 
     const init: RequestInit = { method: this.spec.method, headers };
     if (body !== undefined && this.spec.method !== "GET" && this.spec.method !== "HEAD") {

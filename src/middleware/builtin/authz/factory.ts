@@ -21,8 +21,20 @@ const identitySchema = z.object({
 // them avoids silently assuming a particular tag convention or API schema.
 // Same for `stripPrefix` — it's a string transform that depends on the
 // organization's tag naming scheme.
+const groupsAuthSchema = z.object({
+  kind: z
+    .union([z.literal("none"), z.literal("bearer-env"), z.literal("gcp-id-token")])
+    .default("none"),
+  tokenEnvVar: z.string().optional(),
+  audience: z.string().optional(),
+  tokenSource: z.union([z.literal("metadata"), z.literal("adc-impersonate")]).optional(),
+  impersonateServiceAccount: z.string().optional(),
+});
+
 const groupsSchema = z.object({
   url: z.string({ message: "authz: groups.url is required" }).url(),
+  /** Outgoing auth. Omitted means header-only, i.e. the previous behaviour. */
+  auth: groupsAuthSchema.optional(),
   method: z.string().default("POST"),
   headers: z.record(z.string(), z.string()).default({}),
   body: z.string().optional(),
@@ -58,7 +70,22 @@ const optionsSchema = z.object({
   identity: identitySchema.default({ source: "none", decode: "raw" }),
   groups: groupsSchema,
   workflow: workflowSchema,
+  // Default "request" keeps existing deployments behaving as before; "upstream"
+  // is what makes the ACL non-forgeable (and what an ACL kept in tags needs).
+  aclSource: z.union([z.literal("request"), z.literal("upstream")]).default("request"),
+  aclCacheTtlMs: z.number().int().min(0).default(10_000),
+  onMissingAcl: z.union([z.literal("deny"), z.literal("allow")]).default("deny"),
+  bootstrapGroups: z.array(z.string()).default([]),
+  actions: z.array(z.string()).default([]),
 });
+
+/** Comma-separated list → trimmed, non-empty entries. */
+function splitList(raw: string): string[] {
+  return raw
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
 
 /**
  * Pulls Authz config off the env. Splits the config into namespaced bags
@@ -92,6 +119,18 @@ function fromEnv(env: NodeJS.ProcessEnv): Partial<AuthzOptions> {
       // than swallowing here — users get one clear error at build time.
     }
   }
+  const groupsAuth: Record<string, string> = {};
+  if (env.N8N_AUTHZ_GROUPS_AUTH_KIND) groupsAuth.kind = env.N8N_AUTHZ_GROUPS_AUTH_KIND;
+  if (env.N8N_AUTHZ_GROUPS_AUTH_TOKEN_ENV_VAR)
+    groupsAuth.tokenEnvVar = env.N8N_AUTHZ_GROUPS_AUTH_TOKEN_ENV_VAR;
+  if (env.N8N_AUTHZ_GROUPS_AUTH_AUDIENCE) groupsAuth.audience = env.N8N_AUTHZ_GROUPS_AUTH_AUDIENCE;
+  if (env.N8N_AUTHZ_GROUPS_AUTH_TOKEN_SOURCE)
+    groupsAuth.tokenSource = env.N8N_AUTHZ_GROUPS_AUTH_TOKEN_SOURCE;
+  if (env.N8N_AUTHZ_GROUPS_AUTH_IMPERSONATE_SERVICE_ACCOUNT)
+    groupsAuth.impersonateServiceAccount = env.N8N_AUTHZ_GROUPS_AUTH_IMPERSONATE_SERVICE_ACCOUNT;
+  if (Object.keys(groupsAuth).length > 0) {
+    groups.auth = groupsAuth as unknown as GroupsRequestSpec["auth"];
+  }
   if (env.N8N_AUTHZ_GROUPS_BODY) groups.body = env.N8N_AUTHZ_GROUPS_BODY;
   if (env.N8N_AUTHZ_GROUPS_EXTRACT) groups.extract = env.N8N_AUTHZ_GROUPS_EXTRACT;
   if (env.N8N_AUTHZ_GROUPS_CACHE_TTL_MS)
@@ -99,6 +138,19 @@ function fromEnv(env: NodeJS.ProcessEnv): Partial<AuthzOptions> {
   if (env.N8N_AUTHZ_GROUPS_TIMEOUT_MS)
     groups.timeoutMs = Number.parseInt(env.N8N_AUTHZ_GROUPS_TIMEOUT_MS, 10);
   if (Object.keys(groups).length > 0) opts.groups = groups as GroupsRequestSpec;
+
+  if (env.N8N_AUTHZ_ACL_SOURCE) {
+    opts.aclSource = env.N8N_AUTHZ_ACL_SOURCE as AuthzOptions["aclSource"];
+  }
+  if (env.N8N_AUTHZ_ACL_CACHE_TTL_MS) {
+    opts.aclCacheTtlMs = Number.parseInt(env.N8N_AUTHZ_ACL_CACHE_TTL_MS, 10);
+  }
+  if (env.N8N_AUTHZ_ON_MISSING_ACL) {
+    opts.onMissingAcl = env.N8N_AUTHZ_ON_MISSING_ACL as AuthzOptions["onMissingAcl"];
+  }
+  if (env.N8N_AUTHZ_BOOTSTRAP_GROUPS)
+    opts.bootstrapGroups = splitList(env.N8N_AUTHZ_BOOTSTRAP_GROUPS);
+  if (env.N8N_AUTHZ_ACTIONS) opts.actions = splitList(env.N8N_AUTHZ_ACTIONS);
 
   const workflow: Partial<WorkflowACLSpec> = {};
   if (env.N8N_AUTHZ_WORKFLOW_EXTRACT) workflow.extract = env.N8N_AUTHZ_WORKFLOW_EXTRACT;
@@ -159,6 +211,16 @@ function fromCLI(opts: Record<string, unknown>): Partial<AuthzOptions> {
     workflow.stripPrefix = opts.authzWorkflowStripPrefix as string;
   }
   if (Object.keys(workflow).length > 0) out.workflow = workflow as WorkflowACLSpec;
+
+  if (s("authzAclSource")) out.aclSource = s("authzAclSource") as AuthzOptions["aclSource"];
+  const aclTtl = n("authzAclCacheTtlMs");
+  if (aclTtl !== undefined) out.aclCacheTtlMs = aclTtl;
+  if (s("authzOnMissingAcl")) {
+    out.onMissingAcl = s("authzOnMissingAcl") as AuthzOptions["onMissingAcl"];
+  }
+  if (s("authzBootstrapGroups"))
+    out.bootstrapGroups = splitList(s("authzBootstrapGroups") as string);
+  if (s("authzActions")) out.actions = splitList(s("authzActions") as string);
 
   return out;
 }

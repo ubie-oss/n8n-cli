@@ -186,7 +186,7 @@ async function handle(req: Request, deps: HandlerDeps): Promise<Response> {
     return handleProbe(req.method, pathname, deps);
   }
 
-  const mutation = matchWorkflowMutation(req.method, pathname);
+  const mutation = matchWorkflowMutation(req.method, pathname, deps.config.routes);
   if (mutation) {
     return handleWorkflowMutation(req, mutation, pathname, deps);
   }
@@ -256,29 +256,38 @@ async function handleWorkflowMutation(
   const rawJSON = await req.text();
   const apiKey = req.headers.get("x-n8n-api-key");
 
-  // Malformed JSON: return 400 from the proxy itself rather than layering on
-  // an upstream 400. n8n would also reject it; one clear error beats two.
+  // Only some routes carry a workflow definition. Tag assignment, delete and
+  // activate carry something else (or nothing), so parsing their body as a
+  // workflow — and rejecting it when that fails — would break endpoints this
+  // proxy is only gating, not inspecting.
   let workflow: Workflow | null = null;
-  try {
-    workflow = JSON.parse(rawJSON) as Workflow;
-  } catch (parseErr) {
-    const message = parseErr instanceof Error ? parseErr.message : String(parseErr);
-    deps.logger.log({
-      action: "block",
-      method: req.method,
-      path: pathname,
-      status: 400,
-      message: `invalid JSON: ${message}`,
-    });
-    return buildBadJSONResponse(message);
+  if (mutation.bodyIsWorkflow) {
+    // Malformed JSON: return 400 from the proxy itself rather than layering on
+    // an upstream 400. n8n would also reject it; one clear error beats two.
+    try {
+      workflow = JSON.parse(rawJSON) as Workflow;
+    } catch (parseErr) {
+      const message = parseErr instanceof Error ? parseErr.message : String(parseErr);
+      deps.logger.log({
+        action: "block",
+        method: req.method,
+        path: pathname,
+        status: 400,
+        message: `invalid JSON: ${message}`,
+      });
+      return buildBadJSONResponse(message);
+    }
   }
 
   // Scope filter: when --tags / PROXY_FILTER_BY_TAGS is set, only workflows
   // carrying every named tag get middleware + duplicate processing. Other
   // saves are forwarded transparently so the proxy can be deployed in front
   // of an instance whose workflows are only partially under policy.
+  //
+  // Routes without a workflow body can't be filtered this way — the tags live
+  // upstream, not in the request — so they always go through the pipeline.
   const filterTags = deps.config.filterByTags ?? [];
-  if (filterTags.length > 0 && !hasAllTags(workflow?.tags, filterTags)) {
+  if (mutation.bodyIsWorkflow && filterTags.length > 0 && !hasAllTags(workflow?.tags, filterTags)) {
     return handleSkippedMutation(req, rawJSON, pathname, workflow, filterTags, deps);
   }
 
@@ -288,9 +297,13 @@ async function handleWorkflowMutation(
   // identity or which header it lives on.
   const verdict = await runPipeline(deps.middlewares, {
     workflow,
-    rawJSON,
+    // Middleware that reads a body only makes sense where one exists.
+    rawJSON: mutation.bodyIsWorkflow ? rawJSON : undefined,
     request: req,
     mode: "proxy",
+    action: mutation.action,
+    workflowId: mutation.id,
+    fetchStoredWorkflow: (id) => fetchStoredWorkflow(id, apiKey, deps),
   });
 
   const workflowName = workflow?.name;
@@ -314,7 +327,7 @@ async function handleWorkflowMutation(
 
   // Duplicate detection (creates only — updates target a specific id).
   let duplicateMatches: Awaited<ReturnType<DuplicateChecker["findByName"]>> = [];
-  if (mutation.kind === "create" && deps.duplicates && workflow?.name) {
+  if (mutation.action === "create" && deps.duplicates && workflow?.name) {
     try {
       duplicateMatches = await deps.duplicates.findByName(workflow.name, apiKey);
     } catch {
@@ -373,6 +386,43 @@ async function handleWorkflowMutation(
   } catch (err) {
     return reportError(err, req, pathname, deps);
   }
+}
+
+/**
+ * Reads the stored state of a workflow from upstream, for middleware that must
+ * not trust the request body (an ACL the caller can rewrite in the same call
+ * grants nothing).
+ *
+ * Runs under the caller's own API key when they sent one, so this never
+ * escalates privileges — same reasoning as the duplicate-name lookup. The
+ * client middleware chain applies, so IAP/API-key injection works here too.
+ *
+ * Returns null when upstream says the workflow doesn't exist; throws on
+ * anything else so the caller can apply its own fail-open/closed policy rather
+ * than mistaking an outage for "no ACL".
+ */
+async function fetchStoredWorkflow(
+  id: string,
+  apiKey: string | null,
+  deps: HandlerDeps,
+): Promise<Workflow | null> {
+  const url = `${deps.upstream}/api/v1/workflows/${encodeURIComponent(id)}`;
+  const headers = new Headers({ accept: "application/json" });
+  if (apiKey) headers.set("x-n8n-api-key", apiKey);
+  const { response } = await forwardRequest(
+    new Request(url, { method: "GET", headers }),
+    deps.upstream,
+    undefined,
+    {
+      timeoutMs: deps.config.upstreamTimeoutMs,
+      clientMiddlewares: deps.clientMiddlewares,
+    },
+  );
+  if (response.status === 404) return null;
+  if (!response.ok) {
+    throw new Error(`upstream returned HTTP ${response.status} for workflow ${id}`);
+  }
+  return (await response.json()) as Workflow;
 }
 
 function reportError(err: unknown, req: Request, pathname: string, deps: HandlerDeps): Response {
