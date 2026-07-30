@@ -143,6 +143,12 @@ export interface PipelineVerdict {
  */
 export interface ServerMiddleware {
   readonly name: string;
+  /**
+   * Set when the verdict is about the workflow definition in the body. The
+   * host skips these on routes that carry no definition (tags, delete,
+   * activate), where they would judge an empty document.
+   */
+  readonly readsWorkflowBody?: boolean;
   evaluate(ctx: ServerMiddlewareContext): Promise<MiddlewareVerdict> | MiddlewareVerdict;
   prepare?(): Promise<void> | void;
   dispose?(): Promise<void> | void;
