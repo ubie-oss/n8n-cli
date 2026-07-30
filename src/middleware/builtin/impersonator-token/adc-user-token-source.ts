@@ -96,6 +96,23 @@ export class AdcUserTokenSource implements UserTokenSource {
     this.readCredentialsImpl = deps.readCredentials;
   }
 
+  /**
+   * The ADC file names its own OAuth client, and that client is the only `aud`
+   * Google will mint a token for through this grant (a foreign-project
+   * audience fails with `invalid_audience`). So when the operator leaves the
+   * audience unset, read it off the credentials instead of guessing a
+   * well-known constant.
+   */
+  async defaultAudience(): Promise<string | undefined> {
+    try {
+      const creds = await this.readCredentials();
+      return creds.client_id;
+    } catch {
+      // Let getToken() surface the real credential error with its own message.
+      return undefined;
+    }
+  }
+
   async getToken(audience: string): Promise<string> {
     const cached = this.cache.get(audience);
     if (cached && cached.expiresAt > this.now()) return cached.token;

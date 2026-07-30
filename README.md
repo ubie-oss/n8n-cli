@@ -956,12 +956,44 @@ n8n-cli version
 | Variable | Description |
 |----------|-------------|
 | `N8N_API_URL` | n8n instance API URL (required) |
-| `N8N_API_KEY` | n8n API key (required) |
+| `N8N_API_KEY` | n8n API key (required, unless an egress chain supplies credentials — see below) |
 | `N8N_API_TIMEOUT` | Request timeout in milliseconds |
 | `N8N_DEFAULT_PROJECT` | Default project ID for apply |
+| `N8N_CLIENT_MIDDLEWARES` | Comma-separated egress middlewares applied to every API call (see below) |
 | `APPLY_FILTER_BY_TAGS` | Comma-separated tags to filter apply targets |
 | `CHECKS_FILTER_BY_TAGS` | Comma-separated tags to filter lint/fmt targets (AND condition) |
 | `PROXY_FILTER_BY_TAGS` | Comma-separated tags to scope proxy middleware enforcement (AND condition) |
+
+### Talking to an authenticating gateway
+
+When n8n sits behind a gateway that authenticates callers per request — for example
+the [`proxy`](#proxy) subcommand deployed in front of it, or an identity-aware proxy —
+point `N8N_API_URL` at the gateway and enable the egress middlewares it expects.
+They run on every API call the CLI makes, so ordinary commands (`apply`, `import`,
+`workflow ...`) work unchanged:
+
+```bash
+export N8N_API_URL="https://gateway.example.com"
+export N8N_CLIENT_MIDDLEWARES="iap-auth,impersonator-token"
+
+# Gate credential: mint an id_token as a service account, using local ADC as the
+# caller. `aud` defaults to N8N_API_URL, which is what a Cloud Run gateway expects.
+export N8N_IAP_AUTH_TOKEN_SOURCE="adc-impersonate"
+export N8N_IAP_AUTH_IMPERSONATE_SERVICE_ACCOUNT="gate-caller@example.iam.gserviceaccount.com"
+
+# Human identity side-header, so the gateway can attribute the call to a person.
+# `aud` defaults to the OAuth client that issued the ADC credentials.
+export N8N_IMPERSONATOR_TOKEN_SOURCE="adc"
+```
+
+`N8N_API_KEY` is not required in this setup: a gateway that terminates
+authentication holds the n8n key and injects it upstream (`api-key-inject`), so
+the caller never needs one. Tokens are minted on demand and cached in-process, so
+no external refresh step is involved.
+
+Available egress middlewares: `iap-auth` (Bearer id_token; sources `metadata`,
+`adc-impersonate`, `env`, `static`), `impersonator-token`
+(`X-Impersonator-Id-Token`; sources `adc`, `env`, `static`), `api-key-inject`.
 
 ### CLAUDE.md Integration
 

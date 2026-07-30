@@ -171,8 +171,22 @@ describe("AdcUserTokenSource", () => {
 });
 
 describe("impersonatorTokenFactory", () => {
-  test("audience is required", () => {
-    expect(() => impersonatorTokenFactory.build({})).toThrow(/audience/);
+  test("audience is optional at build time — the token source may name it", () => {
+    // `tokenSourceKind=adc` reads client_id out of the credentials file, and
+    // that is the only aud the refresh-token grant can mint for anyway, so
+    // requiring the operator to restate it just invites a mismatch.
+    expect(() => impersonatorTokenFactory.build({ tokenSourceKind: "adc" })).not.toThrow();
+  });
+
+  test("a source that cannot name an audience fails at apply time with a fixable message", async () => {
+    const mw = impersonatorTokenFactory.build({
+      tokenSourceKind: "static",
+      staticToken: "tok",
+      onError: "throw",
+    });
+    await expect(
+      mw.apply(new Headers(), { method: "GET", pathname: "/", upstreamUrl: "https://x/" }),
+    ).rejects.toThrow(/N8N_IMPERSONATOR_TOKEN_AUDIENCE/);
   });
 
   test("static token source requires staticToken", () => {

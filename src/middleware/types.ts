@@ -176,8 +176,12 @@ export interface ServerMiddlewareFactory<O> {
  * (already hop-by-hop stripped) Headers instance for the upstream fetch.
  */
 export interface ClientMiddlewareContext {
-  /** The original incoming Request from the proxy client. */
-  request: Request;
+  /**
+   * The incoming Request being relayed, in proxy mode. Absent when the caller
+   * originates the request itself (the CLI's own API client) — there is no
+   * inbound request to expose in that case.
+   */
+  request?: Request;
   /** HTTP method that will be sent upstream. */
   method: string;
   /** Pathname (and query) of the upstream URL — useful for scope decisions. */

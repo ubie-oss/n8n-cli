@@ -3,11 +3,14 @@ import type { UserTokenSource } from "./user-token-source.ts";
 
 export interface ImpersonatorTokenOptions {
   /**
-   * `aud` for the minted id_token. Almost always the gcloud ADC OAuth
-   * client_id (`764086051850-...`) because that's what user
-   * `application-default login` credentials produce via the
-   * refresh-token grant. Configurable so operators aren't hard-coded to
-   * one Google-managed constant.
+   * `aud` for the minted id_token — the OAuth client that issued the
+   * credentials, since the refresh-token grant will not mint a token for a
+   * client in another project.
+   *
+   * Leave empty to let the token source name its own audience (see
+   * `UserTokenSource.defaultAudience`). That is the safer default: a
+   * hard-coded constant that doesn't match the credentials actually in use
+   * fails at the far end, where the error says only "verification failed".
    */
   audience: string;
   /**
@@ -51,7 +54,7 @@ export class ImpersonatorTokenMiddleware implements ClientMiddleware {
 
   async apply(headers: Headers, _ctx: ClientMiddlewareContext): Promise<void> {
     try {
-      const token = await this.options.tokenSource.getToken(this.options.audience);
+      const token = await this.options.tokenSource.getToken(await this.resolveAudience());
       if (!token) return;
       headers.set(this.options.headerName, token);
     } catch (err) {
@@ -59,5 +62,16 @@ export class ImpersonatorTokenMiddleware implements ClientMiddleware {
       // skip: leave the header off — server treats the request as
       // SA-only. Callers that require the header should set onError=throw.
     }
+  }
+
+  /** Configured audience, else whatever the token source derives from its credentials. */
+  private async resolveAudience(): Promise<string> {
+    if (this.options.audience) return this.options.audience;
+    const derived = await this.options.tokenSource.defaultAudience?.();
+    if (derived) return derived;
+    throw new Error(
+      "impersonator-token: no audience configured and the token source could not derive one. " +
+        "Set N8N_IMPERSONATOR_TOKEN_AUDIENCE (or --impersonator-token-audience).",
+    );
   }
 }

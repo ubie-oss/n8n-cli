@@ -12,6 +12,13 @@ import {
   loadFromEnv,
   validate,
 } from "../config/config.ts";
+import { buildClientMiddlewares } from "../middleware/client-registry.ts";
+import {
+  DEFAULT_CLIENT_MIDDLEWARE_CHAIN,
+  registerClientBuiltins,
+} from "../middleware/client-wiring.ts";
+import { resolveEnabledList } from "../middleware/registry.ts";
+import type { ClientMiddleware } from "../middleware/types.ts";
 import { runVersion } from "./commands/version.ts";
 
 export interface GlobalContext {
@@ -24,8 +31,38 @@ export interface GlobalContext {
   dataTableService: DataTableService;
 }
 
+/**
+ * Builds the egress middleware chain for the API client from
+ * `N8N_CLIENT_MIDDLEWARES`. Empty by default, which keeps the direct-to-n8n
+ * path byte-identical to before.
+ *
+ * `iap-auth` inherits the API URL as its audience unless the operator set one:
+ * for a Cloud Run gateway the expected `aud` *is* the service URL, and making
+ * people repeat it in a second variable only invites the two to drift.
+ */
+function buildEgressChain(config: Config): ClientMiddleware[] {
+  const enabled = resolveEnabledList({
+    env: process.env,
+    envVar: "N8N_CLIENT_MIDDLEWARES",
+    fallback: DEFAULT_CLIENT_MIDDLEWARE_CHAIN,
+  });
+  if (enabled.length === 0) return [];
+
+  registerClientBuiltins();
+  const cliOpts: Record<string, unknown> = {};
+  if (!process.env.N8N_IAP_AUTH_AUDIENCE) {
+    cliOpts.iapAuthAudience = config.apiURL;
+  }
+  return buildClientMiddlewares({ enabled, env: process.env, cliOpts });
+}
+
 function createContext(config: Config): GlobalContext {
-  const client = new Client(config.apiURL, config.apiKey, config.timeoutMs);
+  const client = new Client(
+    config.apiURL,
+    config.apiKey,
+    config.timeoutMs,
+    buildEgressChain(config),
+  );
   return {
     config,
     client,

@@ -1,3 +1,5 @@
+import { runClientPipeline } from "@/middleware/client-pipeline.ts";
+import type { ClientMiddleware } from "@/middleware/types.ts";
 import { NetworkError, parseAPIError } from "./errors.ts";
 
 /** Client is the n8n API client */
@@ -5,8 +7,26 @@ export class Client {
   private readonly baseURL: string;
   private readonly apiKey: string;
   private readonly timeoutMs: number;
+  private readonly clientMiddlewares: ClientMiddleware[];
 
-  constructor(baseURL: string, apiKey: string, timeoutMs = 30_000) {
+  constructor(
+    baseURL: string,
+    apiKey: string,
+    timeoutMs = 30_000,
+    /**
+     * Outgoing middlewares applied to every API call, in order. Empty by
+     * default, so a client talking straight to n8n behaves exactly as before.
+     *
+     * This is the seam that lets the CLI reach an authenticating gateway in
+     * front of n8n: such a gateway needs a per-request credential (a
+     * short-lived id_token, a user identity side-header), and without a hook
+     * here the CLI can only ever send `X-N8N-API-KEY` — so it is rejected at
+     * the edge before any n8n request happens. The middlewares are the same
+     * ones the proxy subcommand uses on its own egress, so there is one
+     * implementation and one config vocabulary for both directions.
+     */
+    clientMiddlewares: ClientMiddleware[] = [],
+  ) {
     // Ensure baseURL doesn't have trailing slash
     let url = baseURL.replace(/\/+$/, "");
 
@@ -18,6 +38,7 @@ export class Client {
     this.baseURL = url;
     this.apiKey = apiKey;
     this.timeoutMs = timeoutMs;
+    this.clientMiddlewares = clientMiddlewares;
   }
 
   /** doRequest performs an HTTP request with authentication */
@@ -27,13 +48,30 @@ export class Client {
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
 
     try {
+      const headers = new Headers({
+        "X-N8N-API-KEY": this.apiKey,
+        "Content-Type": "application/json",
+        Accept: "application/json",
+        // Ask for an identity encoding on purpose. A proxy in front of n8n
+        // typically re-emits the upstream's Content-Encoding over a body its
+        // own HTTP client already decoded, and the mismatch surfaces here as a
+        // decompression failure we cannot recover from. Uncompressed transfers
+        // cost bandwidth a CLI can afford; a read path that dies on large
+        // responses is not.
+        "Accept-Encoding": "identity",
+      });
+
+      if (this.clientMiddlewares.length > 0) {
+        await runClientPipeline(this.clientMiddlewares, headers, {
+          method,
+          pathname: new URL(url).pathname,
+          upstreamUrl: url,
+        });
+      }
+
       const init: RequestInit = {
         method,
-        headers: {
-          "X-N8N-API-KEY": this.apiKey,
-          "Content-Type": "application/json",
-          Accept: "application/json",
-        },
+        headers,
         signal: controller.signal,
       };
 
