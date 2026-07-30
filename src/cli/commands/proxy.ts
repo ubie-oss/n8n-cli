@@ -253,14 +253,7 @@ export function registerProxyCommand(program: Command): void {
         process.exit(1);
       }
 
-      // Env-selectable because the deployed proxy is started with no flags:
-      // without this, switching to structured logs — the format that carries
-      // which policy fired — would need a new image.
-      const requested =
-        opts.logFormat === "text"
-          ? (process.env.N8N_PROXY_LOG_FORMAT ?? opts.logFormat)
-          : opts.logFormat;
-      const logFormat = requested === "json" ? "json" : "text";
+      const logFormat = opts.logFormat === "json" ? "json" : "text";
       const enforce = parseEnforceLevel(opts.enforce);
       const duplicateTtlMs = parsePositiveInt(opts.duplicateTtl, "--duplicate-ttl");
       const upstreamTimeoutMs = parsePositiveInt(opts.upstreamTimeout, "--upstream-timeout");

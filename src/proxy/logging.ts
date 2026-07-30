@@ -13,12 +13,6 @@ export interface LogEntry {
   violations?: Array<Pick<Violation, "rule" | "severity" | "message">>;
   workflowName?: string;
   message?: string;
-  /**
-   * Who the decision was about. Present once an auth middleware has verified
-   * an identity — a policy log that doesn't say who was judged can't answer
-   * the question anyone actually asks of it.
-   */
-  identity?: string;
 }
 
 const SENSITIVE_HEADERS = new Set(["x-n8n-api-key", "authorization", "cookie"]);
@@ -42,18 +36,12 @@ export class Logger {
     if (this.format === "json") {
       process.stdout.write(`${JSON.stringify(full)}\n`);
     } else {
-      // Name the rules, not just the count. Under `enforce: warn` the whole
-      // point of the log line is to say which policy would have refused, and a
-      // bare number cannot distinguish "denied" from "the lookup failed".
-      const v = full.violations?.length
-        ? ` violations=${full.violations.length}[${[...new Set(full.violations.map((x) => x.rule))].join(",")}]`
-        : "";
+      const v = full.violations?.length ? ` violations=${full.violations.length}` : "";
       const ms = full.upstreamMs !== undefined ? ` upstreamMs=${full.upstreamMs}` : "";
       const wf = full.workflowName ? ` workflow="${full.workflowName}"` : "";
       const msg = full.message ? ` msg="${full.message}"` : "";
-      const who = full.identity ? ` identity="${full.identity}"` : "";
       process.stdout.write(
-        `${full.ts} ${full.action.toUpperCase()} ${full.method} ${full.path} ${full.status}${ms}${wf}${who}${v}${msg}\n`,
+        `${full.ts} ${full.action.toUpperCase()} ${full.method} ${full.path} ${full.status}${ms}${wf}${v}${msg}\n`,
       );
     }
   }

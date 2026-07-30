@@ -2,7 +2,6 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { registerFactory, resetRegistry } from "@/middleware/registry.ts";
 import type { ServerMiddlewareFactory } from "@/middleware/types.ts";
 import { registerBuiltins } from "@/middleware/wiring.ts";
-import { Logger } from "@/proxy/logging.ts";
 import { type ProxyHandle, startProxy } from "@/proxy/server.ts";
 
 /**
@@ -127,37 +126,5 @@ describe("proxy: gated routes without a workflow body", () => {
     expect(await res.json()).toMatchObject({ error: "workflow_lint_failed" });
     expect(upstream.seen).toEqual([]);
     expect(authzSaw).toEqual(["create"]);
-  });
-});
-
-describe("proxy: policy logging", () => {
-  test("the text line names the rules that fired, so warn mode is readable", () => {
-    const lines: string[] = [];
-    const write = process.stdout.write.bind(process.stdout);
-    // biome-ignore lint/suspicious/noExplicitAny: narrow stdout stub for one assertion
-    (process.stdout as any).write = (chunk: string) => {
-      lines.push(String(chunk));
-      return true;
-    };
-    try {
-      new Logger("text").log({
-        action: "warn",
-        method: "PUT",
-        path: "/api/v1/workflows/wf1",
-        status: 200,
-        identity: "dev@example.com",
-        violations: [
-          { rule: "authz-denied", severity: "error", message: "not in any allowed group" },
-          { rule: "node-params", severity: "warning", message: "missing parameter" },
-        ],
-      });
-    } finally {
-      process.stdout.write = write;
-    }
-
-    const line = lines.join("");
-    // A count alone cannot distinguish "denied" from "the lookup failed".
-    expect(line).toContain("violations=2[authz-denied,node-params]");
-    expect(line).toContain('identity="dev@example.com"');
   });
 });
