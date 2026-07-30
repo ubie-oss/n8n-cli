@@ -12,6 +12,13 @@ import {
   loadFromEnv,
   validate,
 } from "../config/config.ts";
+import { buildClientMiddlewares } from "../middleware/client-registry.ts";
+import {
+  DEFAULT_CLIENT_MIDDLEWARE_CHAIN,
+  registerClientBuiltins,
+} from "../middleware/client-wiring.ts";
+import { resolveEnabledList } from "../middleware/registry.ts";
+import type { ClientMiddleware } from "../middleware/types.ts";
 import { runVersion } from "./commands/version.ts";
 
 export interface GlobalContext {
@@ -24,8 +31,29 @@ export interface GlobalContext {
   dataTableService: DataTableService;
 }
 
+/**
+ * Builds the egress middleware chain for the API client from
+ * `N8N_CLIENT_MIDDLEWARES`. Empty by default, which keeps the direct-to-n8n
+ * path byte-identical to before — nothing is registered, nothing runs.
+ *
+ * Deliberately knows no middleware by name: each factory reads its own
+ * configuration off the environment, so authentication stays an opt-in
+ * extension rather than something the core request path carries.
+ */
+function buildEgressChain(): ClientMiddleware[] {
+  const enabled = resolveEnabledList({
+    env: process.env,
+    envVar: "N8N_CLIENT_MIDDLEWARES",
+    fallback: DEFAULT_CLIENT_MIDDLEWARE_CHAIN,
+  });
+  if (enabled.length === 0) return [];
+
+  registerClientBuiltins();
+  return buildClientMiddlewares({ enabled, env: process.env });
+}
+
 function createContext(config: Config): GlobalContext {
-  const client = new Client(config.apiURL, config.apiKey, config.timeoutMs);
+  const client = new Client(config.apiURL, config.apiKey, config.timeoutMs, buildEgressChain());
   return {
     config,
     client,

@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { ClientMiddlewareFactory } from "@/middleware/types.ts";
+import { AdcImpersonateTokenSource } from "./adc-impersonate-source.ts";
 import { IapAuthMiddleware } from "./middleware.ts";
 import {
   EnvTokenSource,
@@ -19,11 +20,18 @@ const optionsSchema = z.object({
     .min(1, { message: "iap-auth: audience must not be empty" }),
   /**
    * Where to get the id_token from. Defaults to "metadata" (GCE metadata
-   * server) — the production path. "env" reads a pre-minted token from an
-   * env var for local development. "static" is reserved for tests.
+   * server) — the production path for workloads. "adc-impersonate" mints the
+   * token as `impersonateServiceAccount` using local Application Default
+   * Credentials, which is what a developer laptop (no metadata server) needs.
+   * "env" reads a pre-minted token from an env var. "static" is for tests.
    */
   tokenSourceKind: z
-    .union([z.literal("metadata"), z.literal("env"), z.literal("static")])
+    .union([
+      z.literal("metadata"),
+      z.literal("adc-impersonate"),
+      z.literal("env"),
+      z.literal("static"),
+    ])
     .default("metadata"),
   /** Env var name when tokenSourceKind=env. */
   tokenEnvVar: z.string().optional(),
@@ -71,6 +79,21 @@ function buildTokenSource(opts: IapAuthRawOptions): TokenSource {
       }
       return new EnvTokenSource(opts.tokenEnvVar);
     }
+    case "adc-impersonate": {
+      if (!opts.impersonateServiceAccount) {
+        throw new Error(
+          "iap-auth: tokenSourceKind=adc-impersonate requires impersonateServiceAccount " +
+            "(the service account whose identity the gateway expects)",
+        );
+      }
+      return new AdcImpersonateTokenSource(opts.impersonateServiceAccount, {
+        cacheTtlMs: opts.cacheTtlMs,
+        // ADC + IAM Credentials are remote calls, unlike the local metadata
+        // server, so the metadata-tuned default timeout is too tight here.
+        timeoutMs: Math.max(opts.timeoutMs, 10_000),
+        iamCredentialsBaseUrl: opts.iamCredentialsBaseUrl,
+      });
+    }
     case "metadata":
       return new MetadataServerTokenSource({
         cacheTtlMs: opts.cacheTtlMs,
@@ -84,7 +107,14 @@ function buildTokenSource(opts: IapAuthRawOptions): TokenSource {
 
 function fromEnv(env: NodeJS.ProcessEnv): Partial<IapAuthRawOptions> {
   const out: Partial<IapAuthRawOptions> = {};
-  if (env.N8N_IAP_AUTH_AUDIENCE) out.audience = env.N8N_IAP_AUTH_AUDIENCE;
+  // Falling back to the API URL keeps the common case to one variable: when the
+  // gateway is a Cloud Run service, the `aud` it expects *is* its URL, and two
+  // variables holding the same value only drift apart. The fallback lives here
+  // rather than in the CLI wiring so nothing outside this middleware needs to
+  // know that `iap-auth` has an audience at all.
+  if (env.N8N_IAP_AUTH_AUDIENCE || env.N8N_API_URL) {
+    out.audience = env.N8N_IAP_AUTH_AUDIENCE ?? env.N8N_API_URL;
+  }
   if (env.N8N_IAP_AUTH_TOKEN_SOURCE) {
     out.tokenSourceKind = env.N8N_IAP_AUTH_TOKEN_SOURCE as IapAuthRawOptions["tokenSourceKind"];
   }

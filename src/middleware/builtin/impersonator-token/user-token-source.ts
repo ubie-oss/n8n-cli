@@ -11,6 +11,20 @@
 export interface UserTokenSource {
   /** Returns a possibly-cached id_token whose `aud` claim equals `audience`. */
   getToken(audience: string): Promise<string>;
+  /**
+   * Audience to use when the operator didn't configure one, if the source can
+   * derive it from its own credentials.
+   *
+   * This matters because the `aud` of a token minted through the refresh-token
+   * grant is not a free choice: Google only issues one for a client in the
+   * same project as the credentials. Making the source name its own audience
+   * removes a whole failure class where a configured constant silently doesn't
+   * match the credentials in use (the request is then rejected downstream, or
+   * the grant fails outright with `invalid_audience`).
+   *
+   * Return undefined when the source has no opinion.
+   */
+  defaultAudience?(): Promise<string | undefined>;
 }
 
 /** Static token — used by tests and pre-minted-token setups. */

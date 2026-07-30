@@ -13,15 +13,14 @@ const DEFAULT_HEADER_NAME = "X-Impersonator-Id-Token";
 
 const optionsSchema = z.object({
   /**
-   * `aud` for the minted id_token. Required — every issuer has a
-   * different audience convention (an OAuth client id, a resource URI,
-   * an OIDC RP identifier). Set this to whatever value the server-side
-   * `impersonator-verify` expects.
+   * `aud` for the minted id_token. Optional: when omitted the selected token
+   * source names its own audience (`tokenSourceKind=adc` reads `client_id` out
+   * of the credentials file, which is the only aud that grant can produce).
+   * Set it explicitly only when the server expects something else — every
+   * issuer has its own convention (an OAuth client id, a resource URI, an
+   * OIDC RP identifier).
    */
-  audience: z.string().min(1, {
-    message:
-      "impersonator-token: `audience` is required. Set it to the aud claim your server expects on impersonator tokens.",
-  }),
+  audience: z.string().default(""),
   tokenSourceKind: z
     .union([z.literal("adc"), z.literal("env"), z.literal("static")])
     .default("env"),

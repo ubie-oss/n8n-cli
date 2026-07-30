@@ -55,8 +55,16 @@ export function loadFromEnv(config: Config): Config {
   return config;
 }
 
-/** Validates the configuration. Throws ConfigError if invalid. */
-export function validate(config: Config): void {
+/**
+ * Validates the configuration. Throws ConfigError if invalid.
+ *
+ * The API key requirement is waived when an egress middleware chain is
+ * configured (`N8N_CLIENT_MIDDLEWARES`): a gateway that terminates
+ * authentication holds the n8n key itself and injects it upstream, so the
+ * caller has none. Demanding one anyway would push operators to park a
+ * placeholder — or worse, the real shared key — in every developer's shell.
+ */
+export function validate(config: Config, env: NodeJS.ProcessEnv = process.env): void {
   if (!config.apiURL) {
     throw new ConfigError(
       "api-url",
@@ -64,11 +72,13 @@ export function validate(config: Config): void {
       "Set N8N_API_URL environment variable or use --api-url flag",
     );
   }
-  if (!config.apiKey) {
+  const hasEgressChain = (env.N8N_CLIENT_MIDDLEWARES ?? "").trim().length > 0;
+  if (!config.apiKey && !hasEgressChain) {
     throw new ConfigError(
       "api-key",
       "API key is required",
-      "Set N8N_API_KEY environment variable or use --api-key flag",
+      "Set N8N_API_KEY environment variable or use --api-key flag " +
+        "(not needed when N8N_CLIENT_MIDDLEWARES supplies credentials)",
     );
   }
 }
