@@ -143,6 +143,18 @@ export interface PipelineVerdict {
  */
 export interface ServerMiddleware {
   readonly name: string;
+  /**
+   * True when the middleware's judgement is about the workflow definition in
+   * the request body.
+   *
+   * Such a middleware must not run on a route that carries something else —
+   * tag assignment, delete, activate. Handed no definition it would judge an
+   * empty document, and "this empty document is not a valid workflow" blocks a
+   * request that never claimed to contain one. The host skips these on those
+   * routes; middlewares that judge *the operation* — who is calling, what they
+   * may do — keep running everywhere.
+   */
+  readonly readsWorkflowBody?: boolean;
   evaluate(ctx: ServerMiddlewareContext): Promise<MiddlewareVerdict> | MiddlewareVerdict;
   prepare?(): Promise<void> | void;
   dispose?(): Promise<void> | void;

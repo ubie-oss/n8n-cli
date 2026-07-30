@@ -295,7 +295,13 @@ async function handleWorkflowMutation(
   // Identity is left undefined here so each middleware can resolve from
   // its own spec; the proxy doesn't need to know which middleware needs
   // identity or which header it lives on.
-  const verdict = await runPipeline(deps.middlewares, {
+  // Routes that carry no workflow definition must not be judged by middleware
+  // whose subject *is* the definition — see `readsWorkflowBody`.
+  const applicable = mutation.bodyIsWorkflow
+    ? deps.middlewares
+    : deps.middlewares.filter((m) => !m.readsWorkflowBody);
+
+  const verdict = await runPipeline(applicable, {
     workflow,
     // Middleware that reads a body only makes sense where one exists.
     rawJSON: mutation.bodyIsWorkflow ? rawJSON : undefined,

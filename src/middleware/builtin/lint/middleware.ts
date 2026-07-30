@@ -39,6 +39,8 @@ export interface LintMiddlewareOptions {
  */
 export class LintMiddleware implements ServerMiddleware {
   readonly name = "lint";
+  /** Its whole verdict is about the definition being written. */
+  readonly readsWorkflowBody = true;
   private ctx?: WriteLintContext;
 
   constructor(private readonly options: LintMiddlewareOptions) {}
