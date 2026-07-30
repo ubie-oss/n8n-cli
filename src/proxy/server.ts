@@ -7,7 +7,11 @@ import {
 } from "@/middleware/client-wiring.ts";
 import { runPipeline } from "@/middleware/pipeline.ts";
 import { buildMiddlewares, resolveEnabledList } from "@/middleware/registry.ts";
-import type { ClientMiddleware, ServerMiddleware } from "@/middleware/types.ts";
+import type {
+  ClientMiddleware,
+  ServerMiddleware,
+  ServerMiddlewareContext,
+} from "@/middleware/types.ts";
 import { DEFAULT_SERVER_MIDDLEWARE_CHAIN, registerBuiltins } from "@/middleware/wiring.ts";
 import { normalizeUpstream, type ProxyConfig, parseListenAddr } from "./config.ts";
 import { DuplicateChecker } from "./duplicate.ts";
@@ -301,7 +305,7 @@ async function handleWorkflowMutation(
     ? deps.middlewares
     : deps.middlewares.filter((m) => !m.readsWorkflowBody);
 
-  const verdict = await runPipeline(applicable, {
+  const pipelineCtx: ServerMiddlewareContext = {
     workflow,
     // Middleware that reads a body only makes sense where one exists.
     rawJSON: mutation.bodyIsWorkflow ? rawJSON : undefined,
@@ -309,8 +313,12 @@ async function handleWorkflowMutation(
     mode: "proxy",
     action: mutation.action,
     workflowId: mutation.id,
-    fetchStoredWorkflow: (id) => fetchStoredWorkflow(id, apiKey, deps),
-  });
+    fetchStoredWorkflow: (id: string) => fetchStoredWorkflow(id, apiKey, deps),
+  };
+  const verdict = await runPipeline(applicable, pipelineCtx);
+  // Auth middlewares put the verified caller on the context; carry it into the
+  // audit line so a decision can be traced to a person.
+  const identity = pipelineCtx.identity;
 
   const workflowName = workflow?.name;
 
@@ -321,6 +329,7 @@ async function handleWorkflowMutation(
       path: pathname,
       status: verdict.denial?.status ?? 422,
       workflowName,
+      identity,
       violations: verdict.violations.map((v) => ({
         rule: v.rule,
         severity: v.severity,
@@ -376,6 +385,7 @@ async function handleWorkflowMutation(
       status: response.status,
       upstreamMs: elapsedMs,
       workflowName,
+      identity,
       violations: verdict.violations.length
         ? verdict.violations.map((v) => ({
             rule: v.rule,
