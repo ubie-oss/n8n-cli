@@ -126,6 +126,23 @@ describe("iapAuthFactory: adc-impersonate", () => {
     ).not.toThrow();
   });
 
+  test("audience falls back to the API URL, so one variable covers the common case", () => {
+    const opts = iapAuthFactory.loadFromEnv({
+      N8N_API_URL: "https://gateway.example.run.app",
+    } as NodeJS.ProcessEnv);
+
+    expect(opts.audience).toBe("https://gateway.example.run.app");
+  });
+
+  test("an explicit audience still wins over the fallback", () => {
+    const opts = iapAuthFactory.loadFromEnv({
+      N8N_API_URL: "https://gateway.example.run.app",
+      N8N_IAP_AUTH_AUDIENCE: "explicit-client-id",
+    } as NodeJS.ProcessEnv);
+
+    expect(opts.audience).toBe("explicit-client-id");
+  });
+
   test("is selectable from the environment", () => {
     const opts = iapAuthFactory.loadFromEnv({
       N8N_IAP_AUTH_TOKEN_SOURCE: "adc-impersonate",

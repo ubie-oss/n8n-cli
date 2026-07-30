@@ -107,7 +107,14 @@ function buildTokenSource(opts: IapAuthRawOptions): TokenSource {
 
 function fromEnv(env: NodeJS.ProcessEnv): Partial<IapAuthRawOptions> {
   const out: Partial<IapAuthRawOptions> = {};
-  if (env.N8N_IAP_AUTH_AUDIENCE) out.audience = env.N8N_IAP_AUTH_AUDIENCE;
+  // Falling back to the API URL keeps the common case to one variable: when the
+  // gateway is a Cloud Run service, the `aud` it expects *is* its URL, and two
+  // variables holding the same value only drift apart. The fallback lives here
+  // rather than in the CLI wiring so nothing outside this middleware needs to
+  // know that `iap-auth` has an audience at all.
+  if (env.N8N_IAP_AUTH_AUDIENCE || env.N8N_API_URL) {
+    out.audience = env.N8N_IAP_AUTH_AUDIENCE ?? env.N8N_API_URL;
+  }
   if (env.N8N_IAP_AUTH_TOKEN_SOURCE) {
     out.tokenSourceKind = env.N8N_IAP_AUTH_TOKEN_SOURCE as IapAuthRawOptions["tokenSourceKind"];
   }

@@ -34,13 +34,13 @@ export interface GlobalContext {
 /**
  * Builds the egress middleware chain for the API client from
  * `N8N_CLIENT_MIDDLEWARES`. Empty by default, which keeps the direct-to-n8n
- * path byte-identical to before.
+ * path byte-identical to before — nothing is registered, nothing runs.
  *
- * `iap-auth` inherits the API URL as its audience unless the operator set one:
- * for a Cloud Run gateway the expected `aud` *is* the service URL, and making
- * people repeat it in a second variable only invites the two to drift.
+ * Deliberately knows no middleware by name: each factory reads its own
+ * configuration off the environment, so authentication stays an opt-in
+ * extension rather than something the core request path carries.
  */
-function buildEgressChain(config: Config): ClientMiddleware[] {
+function buildEgressChain(): ClientMiddleware[] {
   const enabled = resolveEnabledList({
     env: process.env,
     envVar: "N8N_CLIENT_MIDDLEWARES",
@@ -49,20 +49,11 @@ function buildEgressChain(config: Config): ClientMiddleware[] {
   if (enabled.length === 0) return [];
 
   registerClientBuiltins();
-  const cliOpts: Record<string, unknown> = {};
-  if (!process.env.N8N_IAP_AUTH_AUDIENCE) {
-    cliOpts.iapAuthAudience = config.apiURL;
-  }
-  return buildClientMiddlewares({ enabled, env: process.env, cliOpts });
+  return buildClientMiddlewares({ enabled, env: process.env });
 }
 
 function createContext(config: Config): GlobalContext {
-  const client = new Client(
-    config.apiURL,
-    config.apiKey,
-    config.timeoutMs,
-    buildEgressChain(config),
-  );
+  const client = new Client(config.apiURL, config.apiKey, config.timeoutMs, buildEgressChain());
   return {
     config,
     client,
