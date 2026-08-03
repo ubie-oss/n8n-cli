@@ -872,6 +872,8 @@ n8n-cli proxy [options]
 | `--upstream-timeout <ms>` | Per-request upstream timeout in milliseconds (default: 30000, 0 disables) |
 | `--middleware <list>` | Comma-separated middleware chain (default: `lint`; env: `N8N_MIDDLEWARES`). Example: `lint,authz` |
 | `--tags <tags>` | Only run middleware against workflow saves whose tags contain ALL of the listed names (AND condition; env: `PROXY_FILTER_BY_TAGS`). Non-matching saves are forwarded transparently |
+| `--routes <table>` | Replace the policy-relevant endpoint table (env: `N8N_PROXY_ROUTES`). See below |
+| `--extra-routes <table>` | Append to the endpoint table instead of replacing it (env: `N8N_PROXY_EXTRA_ROUTES`). See below |
 
 **Enforcement levels:**
 
@@ -886,7 +888,28 @@ n8n-cli proxy [options]
 - `POST /api/v1/workflows` (create)
 - `PUT /api/v1/workflows/:id` (update)
 
-All other paths (including the n8n editor's internal `/rest/*` routes) are forwarded transparently. The `X-N8N-API-KEY` header is passed through as-is.
+Plus tag assignment, delete, activate and deactivate. All other paths (including the n8n editor's internal `/rest/*` routes and `/webhook/*`) are forwarded transparently — no middleware runs on them. The `X-N8N-API-KEY` header is passed through as-is.
+
+**Changing which endpoints are policy-relevant:**
+
+Both flags take the same one-route-per-line (or comma-separated) format; `#` starts a comment:
+
+```
+METHOD /path/:id -> action [body=workflow]
+```
+
+`:id` matches exactly one path segment and is handed to middleware as `ctx.workflowId`. `body=workflow` marks routes that carry a workflow definition — middleware that reads one (lint) is skipped on routes without it, so a route declared without `body=workflow` will not be rejected for "not being a workflow".
+
+Use `--routes` to describe a different API surface entirely; it replaces the table. Use `--extra-routes` to bring one more endpoint under policy — it appends, so a later change to the built-in table still reaches the deployment. Base routes win ties, so an appended entry cannot reclassify an already-gated endpoint.
+
+A transparently-forwarded path runs no middleware, which means no authentication middleware either. If a deployment authenticates callers with `oauth-verify` / `impersonator-verify` and wants a non-API path held to the same bar, that path has to be in the table:
+
+```bash
+n8n-cli proxy \
+  --extra-routes 'POST /webhook/__agent-trigger__/:id -> trigger'
+```
+
+Middleware that should not judge the new action can be scoped out of it — `authz`, for instance, takes `--authz-actions`.
 
 **Example: run the proxy in front of a production n8n**
 

@@ -86,6 +86,29 @@ export function parseRoutes(raw: string | undefined): RouteSpec[] | undefined {
   });
 }
 
+/**
+ * Resolves the effective route table from the two knobs the proxy exposes.
+ *
+ * `--routes` replaces the table wholesale, which is right when an operator is
+ * describing a different API surface, but wrong for the common case of adding
+ * one endpoint: restating the five workflow-mutation routes just to append a
+ * sixth means a later change to the defaults silently misses this deployment.
+ * `--extra-routes` appends instead, so a deployment can bring one more path
+ * under policy without pinning the rest.
+ *
+ * Extras append *after* the base, so a base route always wins a tie — an
+ * appended entry cannot quietly reclassify an endpoint that is already gated.
+ */
+export function resolveRouteTable(
+  explicitRaw: string | undefined,
+  extraRaw: string | undefined,
+): RouteSpec[] | undefined {
+  const explicit = parseRoutes(explicitRaw);
+  const extra = parseRoutes(extraRaw);
+  if (!extra) return explicit;
+  return [...(explicit ?? DEFAULT_ROUTES), ...extra];
+}
+
 function matchPattern(pattern: string, pathname: string): { id?: string } | null {
   const pParts = pattern.split("/");
   const aParts = pathname.split("/");

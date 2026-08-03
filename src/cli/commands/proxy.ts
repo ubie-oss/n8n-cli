@@ -2,7 +2,7 @@ import type { Command } from "commander";
 import { parseTagFilter } from "@/common/tags.ts";
 import { parseMiddlewareList } from "@/middleware/registry.ts";
 import { parseEnforceLevel } from "@/proxy/config.ts";
-import { parseRoutes } from "@/proxy/rest/router.ts";
+import { resolveRouteTable } from "@/proxy/rest/router.ts";
 import { startProxy } from "@/proxy/server.ts";
 
 interface ProxyOptions {
@@ -19,6 +19,7 @@ interface ProxyOptions {
   clientMiddleware?: string;
   tags?: string;
   routes?: string;
+  extraRoutes?: string;
   // iap-auth client-middleware options.
   iapAuthAudience?: string;
   iapAuthTokenSource?: string;
@@ -156,6 +157,13 @@ export function registerProxyCommand(program: Command): void {
         '"METHOD /path/:id -> action [body=workflow]" (env: N8N_PROXY_ROUTES). ' +
         "Defaults to workflow create/update/tags/delete/activate.",
     )
+    .option(
+      "--extra-routes <table>",
+      "Additional policy-relevant endpoints, same format as --routes " +
+        "(env: N8N_PROXY_EXTRA_ROUTES). Appended to the default table (or to " +
+        "--routes when both are given), so one endpoint can be brought under " +
+        "policy without restating the rest.",
+    )
     // Authz options — only meaningful when "authz" is in the server-middleware chain.
     .option("--authz-enforce <level>", "Authz enforcement level: off, warn, error")
     .option("--authz-on-error <mode>", "Behavior when groups API fails: deny, allow")
@@ -261,7 +269,10 @@ export function registerProxyCommand(program: Command): void {
       const middlewares = parseMiddlewareList(opts.serverMiddleware);
       const clientMiddlewares = parseMiddlewareList(opts.clientMiddleware);
       const filterByTags = parseTagFilter(opts.tags ?? process.env.PROXY_FILTER_BY_TAGS);
-      const routes = parseRoutes(opts.routes ?? process.env.N8N_PROXY_ROUTES);
+      const routes = resolveRouteTable(
+        opts.routes ?? process.env.N8N_PROXY_ROUTES,
+        opts.extraRoutes ?? process.env.N8N_PROXY_EXTRA_ROUTES,
+      );
 
       const handle = startProxy({
         routes,
