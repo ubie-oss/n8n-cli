@@ -29,6 +29,13 @@ export interface GlobalContext {
   executionService: ExecutionService;
   credentialService: CredentialService;
   dataTableService: DataTableService;
+  /**
+   * The egress chain the API client uses, exposed so commands that reach
+   * outside `/api/v1` — webhook calls — send the same credentials. Without it
+   * those would be the only unauthenticated requests the CLI makes, and a
+   * gateway would reject them while every other command worked.
+   */
+  clientMiddlewares: ClientMiddleware[];
 }
 
 /**
@@ -53,10 +60,12 @@ function buildEgressChain(): ClientMiddleware[] {
 }
 
 function createContext(config: Config): GlobalContext {
-  const client = new Client(config.apiURL, config.apiKey, config.timeoutMs, buildEgressChain());
+  const clientMiddlewares = buildEgressChain();
+  const client = new Client(config.apiURL, config.apiKey, config.timeoutMs, clientMiddlewares);
   return {
     config,
     client,
+    clientMiddlewares,
     workflowService: new WorkflowService(client),
     tagService: new TagService(client),
     executionService: new ExecutionService(client),

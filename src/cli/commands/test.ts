@@ -55,7 +55,12 @@ export function registerTestCommand(program: Command): void {
         }
       }
 
-      const executor = new Executor(ctx.config.apiURL, ctx.workflowService, ctx.executionService);
+      const executor = new Executor(
+        ctx.config.apiURL,
+        ctx.workflowService,
+        ctx.executionService,
+        ctx.clientMiddlewares,
+      );
 
       const result = await executor.execute(workflow, {
         data,

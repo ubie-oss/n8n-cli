@@ -1,7 +1,9 @@
 import type { Execution, ExecutionService } from "../api/execution-service.ts";
 import { isTerminalStatus } from "../api/execution-service.ts";
 import type { Workflow } from "../api/types.ts";
+import { callWebhook } from "../api/webhook.ts";
 import type { WorkflowService } from "../api/workflow-service.ts";
+import type { ClientMiddleware } from "../middleware/types.ts";
 import { buildWebhookURL, detectTestWebhook, type WebhookInfo } from "./detector.ts";
 
 /** TestOptions represents options for running a workflow test */
@@ -73,6 +75,16 @@ export class Executor {
     private readonly baseURL: string,
     private readonly workflowService: WorkflowService,
     private readonly executionService: ExecutionService,
+    /**
+     * Egress middlewares for the webhook call itself.
+     *
+     * The execution lookups below already go through the API client, so they
+     * carry whatever a gateway requires. The webhook POST does not use that
+     * client — its URL sits outside `/api/v1` — so without the chain here the
+     * first request of a test is the one request that arrives unauthenticated,
+     * and the whole command fails at the edge on an otherwise working setup.
+     */
+    private readonly clientMiddlewares: ClientMiddleware[] = [],
   ) {}
 
   /** Execute runs a test against a workflow */
@@ -157,35 +169,19 @@ export class Executor {
 
   /** callWebhook sends an HTTP request to the webhook */
   private async callWebhook(info: WebhookInfo, opts: TestOptions): Promise<[number, string]> {
-    const headers: Record<string, string> = {
-      "Content-Type": "application/json",
-      Accept: "application/json",
-    };
-
-    // Add authentication header if token is provided
+    // Authenticates the request at n8n's own webhook node (header auth), which
+    // is a separate concern from the gateway credentials the middleware chain
+    // attaches.
     const token = process.env.N8N_CLI_TEST_TOKEN;
-    if (token) {
-      headers["x-n8n-cli-test-token"] = token;
-    }
 
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), opts.timeoutMs);
-
-    try {
-      const resp = await fetch(info.fullURL, {
-        method: info.httpMethod,
-        headers,
-        body: opts.data !== undefined ? JSON.stringify(opts.data) : undefined,
-        signal: controller.signal,
-      });
-
-      const body = await resp.text();
-      return [resp.status, body];
-    } catch (e) {
-      throw new Error(`webhook request failed: ${e instanceof Error ? e.message : String(e)}`);
-    } finally {
-      clearTimeout(timer);
-    }
+    const { status, body } = await callWebhook(info.fullURL, {
+      method: info.httpMethod,
+      data: opts.data,
+      timeoutMs: opts.timeoutMs,
+      headers: token ? { "x-n8n-cli-test-token": token } : {},
+      clientMiddlewares: this.clientMiddlewares,
+    });
+    return [status, body];
   }
 
   /** waitForLatestExecution waits for the most recent execution to complete */

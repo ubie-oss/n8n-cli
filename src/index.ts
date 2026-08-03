@@ -11,6 +11,8 @@ import { registerProxyCommand } from "./cli/commands/proxy.ts";
 import { registerTagCommand } from "./cli/commands/tag.ts";
 import { registerTestCommand } from "./cli/commands/test.ts";
 import { registerTraceCommand } from "./cli/commands/trace.ts";
+import { registerWebhookCommand } from "./cli/commands/webhook.ts";
+
 import { registerWorkflowCommand } from "./cli/commands/workflow.ts";
 import { createProgram } from "./cli/root.ts";
 import { maybeShowUpdateNotice, runUpdateCheck } from "./cli/update-check.ts";
@@ -35,6 +37,7 @@ registerNodeSchemaCommand(program);
 registerFmtCommand(program);
 registerTestCommand(program);
 registerTraceCommand(program);
+registerWebhookCommand(program);
 registerProxyCommand(program);
 
 try {
