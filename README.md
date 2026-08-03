@@ -11,6 +11,7 @@ A command-line interface for managing [n8n](https://n8n.io/) workflows as code. 
 - **Proxy** - Transparent HTTP proxy that intercepts workflow saves to the n8n public API and runs lint server-side, blocking violations before they reach n8n
 - **Format** - Auto-organize node positions for cleaner workflow layouts
 - **Test** - Execute CLI tests against workflows via webhook endpoints
+- **Webhook** - List and call a workflow's webhook nodes through the authenticated egress path
 - **Workflow management** - List, get, create, update, delete, activate, and deactivate workflows via the n8n API
 - **Execution management** - List executions, get execution details, delete, retry, and stop executions
 - **Tag management** - List, get, create, update, and delete tags
@@ -336,6 +337,56 @@ n8n-cli test <workflow-id> [options]
 | `--activate` | Automatically activate the workflow if inactive |
 | `--dry-run` | Show webhook URL without executing |
 | `--show-inputs` | Display workflow input parameters without executing |
+
+### `webhook`
+
+Call a workflow's webhook through the CLI's authenticated egress path.
+
+```bash
+n8n-cli webhook list <workflow-id>
+n8n-cli webhook call <workflow-id> --node "<node name>" [options]
+```
+
+**Why this exists, given `curl`.** When n8n sits behind a gateway that
+authenticates callers per request, the credentials are minted by the
+[egress middleware chain](#talking-to-an-authenticating-gateway) inside this
+process. Every other command already goes through it; webhook URLs sit outside
+`/api/v1` and had no way in. Reproducing that outside the CLI means
+reimplementing token minting, impersonation and caching — so the transport is
+the one part that belongs here.
+
+`webhook call` options:
+
+| Option | Description |
+|--------|-------------|
+| `-n, --node <name>` | **Required.** Exact name of the webhook node to call |
+| `-d, --data <json>` | JSON body to send |
+| `--timeout <ms>` | HTTP request timeout in milliseconds (default: 30000) |
+| `--dry-run` | Print the resolved URL without calling it |
+| `--allow-inactive` | Call even when the workflow is inactive |
+
+**`--node` is required on purpose.** The command never searches, guesses, or
+falls back to "the only webhook in the workflow". Every webhook in an n8n
+instance is a live entry point and some are wired to inbound events from other
+systems; a caller that has to name the node cannot fire one it did not mean to.
+Use `webhook list` to see what a workflow exposes.
+
+**No policy beyond that.** This command takes no position on which webhooks are
+safe to call, what they should be named, or whether they ought to return data.
+Those are deployment policy: they differ per organization, and a naming
+convention compiled into a released binary is a convention nobody can change.
+If you are building "let an agent run a workflow on request", put the rules —
+which nodes qualify, whether the response may carry data, who may ask — in the
+layer that owns them, and hand this command a node name.
+
+Set `N8N_WEBHOOK_TOKEN` when the node uses n8n's header auth; it is sent as
+`x-n8n-webhook-token` (override the header with `N8N_WEBHOOK_TOKEN_HEADER`).
+That authenticates the request to n8n itself, separately from the gateway
+credentials the egress middlewares attach.
+
+Compared with [`test`](#test): `test` targets `[CLI Test]` webhooks by
+convention, waits for the execution and reports its status — a development
+affordance. `webhook` addresses any webhook by name and just performs the call.
 
 ### `workflow`
 
@@ -959,7 +1010,10 @@ n8n-cli version
 | `N8N_API_KEY` | n8n API key (required, unless an egress chain supplies credentials — see below) |
 | `N8N_API_TIMEOUT` | Request timeout in milliseconds |
 | `N8N_DEFAULT_PROJECT` | Default project ID for apply |
-| `N8N_CLIENT_MIDDLEWARES` | Comma-separated egress middlewares applied to every API call (see below) |
+| `N8N_CLIENT_MIDDLEWARES` | Comma-separated egress middlewares applied to every request (see below) |
+| `N8N_CLI_TEST_TOKEN` | Shared secret sent as `x-n8n-cli-test-token` by [`test`](#test) |
+| `N8N_WEBHOOK_TOKEN` | Shared secret sent by [`webhook call`](#webhook) for n8n's header auth |
+| `N8N_WEBHOOK_TOKEN_HEADER` | Header name for the above (default: `x-n8n-webhook-token`) |
 | `APPLY_FILTER_BY_TAGS` | Comma-separated tags to filter apply targets |
 | `CHECKS_FILTER_BY_TAGS` | Comma-separated tags to filter lint/fmt targets (AND condition) |
 | `PROXY_FILTER_BY_TAGS` | Comma-separated tags to scope proxy middleware enforcement (AND condition) |
@@ -969,7 +1023,8 @@ n8n-cli version
 When n8n sits behind a gateway that authenticates callers per request — for example
 the [`proxy`](#proxy) subcommand deployed in front of it, or an identity-aware proxy —
 point `N8N_API_URL` at the gateway and enable the egress middlewares it expects.
-They run on every API call the CLI makes, so ordinary commands (`apply`, `import`,
+They run on every request the CLI makes — API calls and the webhook calls behind
+`test` / `webhook call` alike — so ordinary commands (`apply`, `import`,
 `workflow ...`) work unchanged:
 
 ```bash
