@@ -67,6 +67,78 @@ describe("ImpersonatorTokenMiddleware", () => {
     expect(headers.get("H")).toBeNull();
   });
 
+  test("drops a caller-supplied header when the mint fails under onError=skip", async () => {
+    // The proxy hands this middleware the incoming request's headers, so a
+    // forged X-Impersonator-Id-Token must not survive a hop that declined to
+    // authenticate it.
+    const src: UserTokenSource = {
+      getToken: () => Promise.reject(new Error("source unavailable")),
+    };
+    const mw = new ImpersonatorTokenMiddleware({
+      audience: "aud",
+      headerName: "X-Impersonator-Id-Token",
+      tokenSource: src,
+      onError: "skip",
+    });
+    const headers = new Headers({ "X-Impersonator-Id-Token": "forged-by-caller" });
+    await mw.apply(headers, baseCtx);
+    expect(headers.get("x-impersonator-id-token")).toBeNull();
+  });
+
+  test("drops a caller-supplied header when the source returns an empty token", async () => {
+    const mw = new ImpersonatorTokenMiddleware({
+      audience: "aud",
+      headerName: "X-Impersonator-Id-Token",
+      tokenSource: { getToken: () => Promise.resolve("") },
+      onError: "throw",
+    });
+    const headers = new Headers({ "X-Impersonator-Id-Token": "forged-by-caller" });
+    await mw.apply(headers, baseCtx);
+    expect(headers.get("x-impersonator-id-token")).toBeNull();
+  });
+
+  test("drops a caller-supplied header before throwing under onError=throw", async () => {
+    const src: UserTokenSource = {
+      getToken: () => Promise.reject(new Error("source unavailable")),
+    };
+    const mw = new ImpersonatorTokenMiddleware({
+      audience: "aud",
+      headerName: "X-Impersonator-Id-Token",
+      tokenSource: src,
+      onError: "throw",
+    });
+    const headers = new Headers({ "X-Impersonator-Id-Token": "forged-by-caller" });
+    await expect(mw.apply(headers, baseCtx)).rejects.toThrow(/source unavailable/);
+    expect(headers.get("x-impersonator-id-token")).toBeNull();
+  });
+
+  test("replaces a caller-supplied header with the freshly minted token", async () => {
+    const mw = new ImpersonatorTokenMiddleware({
+      audience: "aud",
+      headerName: "X-Impersonator-Id-Token",
+      tokenSource: new StaticUserTokenSource("minted"),
+      onError: "throw",
+    });
+    const headers = new Headers({ "X-Impersonator-Id-Token": "forged-by-caller" });
+    await mw.apply(headers, baseCtx);
+    expect(headers.get("x-impersonator-id-token")).toBe("minted");
+  });
+
+  test("leaves other headers alone", async () => {
+    const mw = new ImpersonatorTokenMiddleware({
+      audience: "aud",
+      headerName: "X-Impersonator-Id-Token",
+      tokenSource: new StaticUserTokenSource("minted"),
+      onError: "throw",
+    });
+    const headers = new Headers({
+      "X-Impersonator-Id-Token": "forged",
+      authorization: "Bearer sa-token",
+    });
+    await mw.apply(headers, baseCtx);
+    expect(headers.get("authorization")).toBe("Bearer sa-token");
+  });
+
   test("requests the token using configured audience", async () => {
     let seenAud: string | undefined;
     const src: UserTokenSource = {

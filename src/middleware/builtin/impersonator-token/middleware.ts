@@ -53,6 +53,24 @@ export class ImpersonatorTokenMiddleware implements ClientMiddleware {
   constructor(private readonly options: ImpersonatorTokenOptions) {}
 
   async apply(headers: Headers, _ctx: ClientMiddlewareContext): Promise<void> {
+    // Drop whatever is already on the header before doing any work, mirroring
+    // how iap-auth treats Authorization.
+    //
+    // In proxy mode these headers come from the *incoming* request, so without
+    // this a caller could supply their own X-Impersonator-Id-Token and have it
+    // forwarded verbatim on any path where this middleware then declines to
+    // write one — an empty token, or a mint failure under the default
+    // onError=skip. It would reach the upstream looking like the proxy vouched
+    // for it. Deleting first makes the header mean exactly one thing: this
+    // middleware minted it on this hop.
+    //
+    // `impersonator-verify` checks the signature, so this is not the only
+    // thing standing between a forged header and a trusted identity — but a
+    // receiver that reads the header without verifying is a plausible
+    // deployment, and the header should not survive a hop that failed to
+    // authenticate it.
+    headers.delete(this.options.headerName);
+
     try {
       const token = await this.options.tokenSource.getToken(await this.resolveAudience());
       if (!token) return;
