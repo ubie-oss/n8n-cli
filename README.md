@@ -1048,7 +1048,44 @@ no external refresh step is involved.
 
 Available egress middlewares: `iap-auth` (Bearer id_token; sources `metadata`,
 `adc-impersonate`, `env`, `static`), `impersonator-token`
-(`X-Impersonator-Id-Token`; sources `adc`, `env`, `static`), `api-key-inject`.
+(`X-Impersonator-Id-Token`; sources `adc`, `env`, `static`), `api-key-inject`,
+`webhook-token-inject`.
+
+#### webhook-token-inject
+
+Webhook nodes can require a shared secret in a header. `webhook-token-inject`
+lets the proxy hold those secrets instead of every caller, so a caller that has
+already authenticated to the proxy needs nothing else to fire a webhook — while
+a request arriving through some other ingress still carries no token and is
+rejected by n8n.
+
+Rules are path-scoped, because a webhook token is not a gateway credential: it
+is the secret one specific family of webhook nodes checks. Injecting it on every
+upstream call would mean anyone able to reach the proxy could satisfy that
+header wherever it happens to be checked.
+
+```bash
+export N8N_CLIENT_MIDDLEWARES="iap-auth,api-key-inject,webhook-token-inject"
+export N8N_WEBHOOK_TOKEN_INJECT_RULES='[
+  {"pathPrefix":"/webhook/ops-triggers/","header":"x-ops-trigger-token","tokenEnvVar":"OPS_TRIGGER_TOKEN"},
+  {"pathPrefix":"/webhook/smoke-tests/","header":"x-smoke-test-token","tokenEnvVar":"SMOKE_TEST_TOKEN"}
+]'
+export OPS_TRIGGER_TOKEN="..."   # typically mounted from a secret store
+export SMOKE_TEST_TOKEN="..."
+```
+
+| Field | Required | Notes |
+| --- | --- | --- |
+| `pathPrefix` | yes | Matched against the incoming pathname. Keep the trailing slash — `/webhook/ops` would also match `/webhook/opsx`. |
+| `header` | yes | Any valid HTTP header name. |
+| `tokenEnvVar` | either this | Name of an env var holding the token. Preferred: the rule set itself travels through env/CLI, where a literal would land in process listings and config dumps. |
+| `token` | or this | Literal value, for deployments that already render config from a secret store. |
+| `conflictPolicy` | no | `set-if-absent` (default) keeps a token the caller brought, which eases migration; `replace` makes the proxy the single holder. |
+
+Every matching rule is applied, not just the first, so a broad rule can be
+combined with narrower ones; when two matching rules share a header the later
+one decides. A rule naming an unset `tokenEnvVar` fails at startup rather than
+silently injecting nothing.
 
 ### CLAUDE.md Integration
 
