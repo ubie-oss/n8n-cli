@@ -42,19 +42,27 @@ jobs:
 
   build:
     name: Build (${{ matrix.target }})
-    runs-on: ubuntu-latest
+    # macOS targets run on a macOS runner so codesign is available; see the
+    # ad-hoc signing step below for why they need it.
+    runs-on: ${{ matrix.runner }}
     needs: [test]
     strategy:
       matrix:
         include:
           - target: bun-darwin-arm64
             artifact: n8n-cli-darwin-arm64
+            runner: macos-latest
+            sign: true
           - target: bun-darwin-x64
             artifact: n8n-cli-darwin-x64
+            runner: macos-latest
+            sign: true
           - target: bun-linux-x64
             artifact: n8n-cli-linux-x64
+            runner: ubuntu-latest
           - target: bun-windows-x64
             artifact: n8n-cli-windows-x64.exe
+            runner: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # ratchet:actions/checkout@v4
 
@@ -86,6 +94,27 @@ jobs:
             --define "CLI_VERSION='${{ steps.version.outputs.version }}'" \
             --define "CLI_GIT_COMMIT='${{ steps.version.outputs.commit }}'" \
             --define "CLI_BUILD_DATE='${{ steps.version.outputs.date }}'"
+
+      # `bun build --compile` appends the bundle to a copy of the bun runtime.
+      # The runtime ships with an ad-hoc (linker-signed) signature covering the
+      # original bytes, so once the bundle is appended that signature no longer
+      # matches and the binary is left in a "code or signature have been
+      # modified" state. On Apple Silicon a valid signature is mandatory, so
+      # macOS may refuse to run it at all — SIGKILL before main(), which looks
+      # like the binary silently doing nothing (`--help` prints an empty
+      # string, exit 137).
+      #
+      # Re-signing ad-hoc recomputes the hashes over the final bytes. This is
+      # not notarization and grants no Gatekeeper trust — it only makes the
+      # file internally consistent, which is what the kernel checks here.
+      #
+      # Verified afterwards so a signing failure breaks the release instead of
+      # shipping a binary that cannot start.
+      - name: Ad-hoc sign the macOS binary
+        if: matrix.sign
+        run: |
+          codesign --force --sign - "dist/${{ matrix.artifact }}"
+          codesign --verify --verbose "dist/${{ matrix.artifact }}"
 
       - name: Upload artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # ratchet:actions/upload-artifact@v4
