@@ -33,6 +33,10 @@ interface ProxyOptions {
   apiKeyInjectKeyEnvVar?: string;
   apiKeyInjectHeader?: string;
   apiKeyInjectConflictPolicy?: string;
+  // webhook-token-inject client-middleware options. Rules travel as JSON; the
+  // token values inside them should be env-var references rather than literals
+  // for the same reason api-key-inject refuses a raw key here.
+  webhookTokenInjectRules?: string;
   // impersonator-token client-middleware options. Attaches the user's own
   // Google id_token as a side header so the server can attribute the call
   // to the human running the CLI (instead of the impersonated SA).
@@ -145,6 +149,16 @@ export function registerProxyCommand(program: Command): void {
     .option(
       "--api-key-inject-conflict-policy <policy>",
       "Behavior when the incoming request already carries the header: replace (default) or set-if-absent",
+    )
+    // webhook-token-inject options — only meaningful when "webhook-token-inject"
+    // is in the client-middleware chain.
+    .option(
+      "--webhook-token-inject-rules <json>",
+      "JSON array of path-scoped webhook token rules: " +
+        '[{"pathPrefix":"/webhook/x/","header":"x-token","tokenEnvVar":"X_TOKEN"}]. ' +
+        "Each rule needs exactly one of tokenEnvVar (preferred) or token, and an " +
+        "optional conflictPolicy of set-if-absent (default) or replace. " +
+        "env: N8N_WEBHOOK_TOKEN_INJECT_RULES",
     )
     .option(
       "--tags <tags>",
@@ -362,6 +376,7 @@ function extractClientMiddlewareCliOpts(opts: ProxyOptions): Record<string, unkn
   copy("apiKeyInjectKeyEnvVar");
   copy("apiKeyInjectHeader");
   copy("apiKeyInjectConflictPolicy");
+  copy("webhookTokenInjectRules");
   copy("impersonatorTokenAudience");
   copy("impersonatorTokenSource");
   copy("impersonatorTokenEnvVar");

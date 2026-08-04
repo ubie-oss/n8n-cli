@@ -1,6 +1,7 @@
 import { apiKeyInjectFactory } from "./builtin/api-key-inject/factory.ts";
 import { iapAuthFactory } from "./builtin/iap-auth/factory.ts";
 import { impersonatorTokenFactory } from "./builtin/impersonator-token/factory.ts";
+import { webhookTokenInjectFactory } from "./builtin/webhook-token-inject/factory.ts";
 import { knownClientMiddlewareNames, registerClientFactory } from "./client-registry.ts";
 
 /**
@@ -13,6 +14,7 @@ export function registerClientBuiltins(): void {
   registerClientFactory(iapAuthFactory);
   registerClientFactory(apiKeyInjectFactory);
   registerClientFactory(impersonatorTokenFactory);
+  registerClientFactory(webhookTokenInjectFactory);
 }
 
 /**
