@@ -1,11 +1,14 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { Workflow } from "@/api/types.ts";
+import { connectionsEqual, nodesEqual, pinDataEqual } from "@/apply/differ.ts";
 import {
   extractWorkflowIDFromDirname,
   generateDirnameWithID,
   generateFilenameWithID,
 } from "@/naming/naming.ts";
+import { generateTsWorkflow } from "@/ts/generator.ts";
+import { parseTsWorkflow } from "@/ts/loader.ts";
 import { generateYamlWorkflow, SubfilesDir, sanitizeNodeName } from "@/yaml/generator.ts";
 
 /** Maximum filename length in bytes. */
@@ -67,6 +70,17 @@ export function generateFilePath(
   return path.join(directory, filename);
 }
 
+/** Generates the file path for a new TypeScript workflow file. */
+export function generateTsFilePath(
+  directory: string,
+  workflowID: string,
+  workflowName: string,
+): string {
+  const sanitized = sanitizeFilename(workflowName);
+  const filename = generateFilenameWithID(sanitized, workflowID, ".ts");
+  return path.join(directory, filename);
+}
+
 /** Generates the file path for a new YAML workflow file. */
 export function generateYamlFilePath(
   directory: string,
@@ -108,6 +122,58 @@ export function writeWorkflowJSON(filePath: string, workflow: Workflow): void {
   ensureDirectory(path.dirname(filePath));
   const data = `${JSON.stringify(workflow, null, 2)}\n`;
   writeFileAtomic(filePath, data);
+}
+
+/**
+ * Writes a workflow as a `.ts` file written against `@n8n/workflow-sdk`.
+ *
+ * The generated file is parsed back and compared against the source before it is
+ * written. `.ts` is a lossier format than JSON — the SDK models workflows as a
+ * builder graph, not as arbitrary JSON — so a workflow it cannot represent
+ * faithfully must fail loudly here rather than silently become the wrong file.
+ */
+export function writeWorkflowTS(filePath: string, workflow: Workflow): void {
+  const code = generateTsWorkflow(workflow);
+
+  const mismatch = describeRoundTripMismatch(workflow, code);
+  if (mismatch) {
+    throw new Error(
+      `workflow cannot be represented as TypeScript without loss (${mismatch}). ` +
+        "Import this workflow as JSON or YAML instead.",
+    );
+  }
+
+  ensureDirectory(path.dirname(filePath));
+  writeFileAtomic(filePath, code);
+}
+
+/**
+ * Parses generated code back and reports the first field that does not survive
+ * the round trip, or null when the workflow round-trips cleanly.
+ *
+ * Node IDs are excluded from the comparison on purpose: the `.ts` format has no
+ * field for them, so the loader derives them from node names and `apply` adopts
+ * the remote's IDs (see `ts/node-ids.ts` and `apply/executor.ts`).
+ */
+function describeRoundTripMismatch(workflow: Workflow, code: string): string | null {
+  let parsed: Workflow;
+  try {
+    parsed = parseTsWorkflow(code, workflow.id ?? "");
+  } catch (err) {
+    return err instanceof Error ? err.message : String(err);
+  }
+
+  if (parsed.name !== workflow.name) return "name";
+  if (!nodesEqual(stripNodeIDs(parsed.nodes), stripNodeIDs(workflow.nodes))) return "nodes";
+  if (!connectionsEqual(parsed.connections, workflow.connections)) return "connections";
+  if (!pinDataEqual(parsed.pinData, workflow.pinData)) return "pinData";
+
+  return null;
+}
+
+/** Copies nodes with the `id` field removed, for ID-insensitive comparison. */
+function stripNodeIDs(nodes: Workflow["nodes"] | undefined): Workflow["nodes"] {
+  return (nodes ?? []).map(({ id: _id, ...rest }) => rest as Workflow["nodes"][number]);
 }
 
 /**

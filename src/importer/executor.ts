@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { Workflow } from "@/api/types.ts";
 import type { ListOptions, WorkflowService } from "@/api/workflow-service.ts";
+import { detectWorkflowFormat, type WorkflowFormat } from "@/common/extensions.ts";
 import { hasAllTags } from "@/common/tags.ts";
 import { cleanupOrphanFiles, cleanupOrphanSubfiles, matchOrphansByName } from "./orphan.ts";
 import { reportDuplicates } from "./reporter.ts";
@@ -16,11 +17,30 @@ import {
   ensureDirectory,
   findExistingSubfilesDirs,
   generateFilePath,
+  generateTsFilePath,
   generateYamlFilePath,
   getSubfilesDir,
   writeWorkflowJSON,
+  writeWorkflowTS,
   writeWorkflowYAML,
 } from "./writer.ts";
+
+/** Resolves the on-disk path a workflow gets in a given format. */
+function pathForFormat(
+  format: WorkflowFormat,
+  directory: string,
+  workflowID: string,
+  workflowName: string,
+): string {
+  switch (format) {
+    case "yaml":
+      return generateYamlFilePath(directory, workflowID, workflowName);
+    case "ts":
+      return generateTsFilePath(directory, workflowID, workflowName);
+    default:
+      return generateFilePath(directory, workflowID, workflowName);
+  }
+}
 
 /** ImportExecutor orchestrates the import process. */
 export class ImportExecutor {
@@ -177,19 +197,19 @@ export class ImportExecutor {
     const [localPath, exists] = idMap.get(remote.id);
     let targetPath = localPath;
 
-    // Determine format: preserve existing format, or use yamlEnabled for new
-    let useYaml = false;
-    if (exists) {
-      const lowerPath = targetPath.toLowerCase();
-      useYaml = lowerPath.endsWith(".yaml") || lowerPath.endsWith(".yml");
-    } else {
-      useYaml = this.opts.yamlEnabled;
-    }
+    // Determine format: preserve the existing file's format, otherwise fall back
+    // to the format requested on the command line.
+    const format: WorkflowFormat = exists
+      ? (detectWorkflowFormat(targetPath) ?? "json")
+      : this.opts.tsEnabled
+        ? "ts"
+        : this.opts.yamlEnabled
+          ? "yaml"
+          : "json";
+    const useYaml = format === "yaml";
 
     // Compute expected path under current naming rules
-    const expectedPath = useYaml
-      ? generateYamlFilePath(this.opts.directory, remote.id, remote.name)
-      : generateFilePath(this.opts.directory, remote.id, remote.name);
+    const expectedPath = pathForFormat(format, this.opts.directory, remote.id, remote.name);
     const needsRename = exists && path.resolve(localPath) !== path.resolve(expectedPath);
 
     if (exists) {
@@ -245,6 +265,8 @@ export class ImportExecutor {
             const subfilesDir = getSubfilesDir(this.opts.directory, remote.id, remote.name);
             cleanupOrphanSubfiles(subfilesDir, written, this.opts.dryRun, result);
           }
+        } else if (format === "ts") {
+          writeWorkflowTS(targetPath, remote);
         } else {
           writeWorkflowJSON(targetPath, remote);
         }
@@ -281,8 +303,8 @@ export class ImportExecutor {
       // dry-run: report all non-description.md subfiles as potential orphans
       const subfilesDir = getSubfilesDir(this.opts.directory, remote.id!, remote.name);
       cleanupOrphanSubfiles(subfilesDir, [], true, result);
-    } else if (!exists && useYaml) {
-      targetPath = generateYamlFilePath(this.opts.directory, remote.id, remote.name);
+    } else if (!exists) {
+      targetPath = pathForFormat(format, this.opts.directory, remote.id, remote.name);
     }
 
     result.addOperation({

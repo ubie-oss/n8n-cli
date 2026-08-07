@@ -5,7 +5,7 @@ import type { Violation } from "../lint/rules/violation.ts";
 export type OperationType = "create" | "update" | "skip" | "conflict" | "error";
 
 /** SourceType indicates the format of the source file. */
-export type SourceType = "json" | "yaml";
+export type SourceType = "json" | "yaml" | "ts";
 
 /** ApplyOptions holds configuration for the apply command. */
 export interface ApplyOptions {
@@ -21,6 +21,14 @@ export interface ApplyOptions {
   gitDiffSpec: string;
   yamlEnabled: boolean;
   noYaml: boolean;
+  /**
+   * When true, `.ts` workflow files written against `@n8n/workflow-sdk` are
+   * scanned alongside JSON and YAML. Off by default so that unrelated
+   * TypeScript in a definitions directory is never parsed as a workflow.
+   */
+  tsEnabled: boolean;
+  /** Forces `.ts` scanning off even when enabled elsewhere. */
+  noTs: boolean;
   /**
    * When true, skip the upstream duplicate-name check.
    *
@@ -77,6 +85,8 @@ export function defaultApplyOptions(): ApplyOptions {
     gitDiffSpec: "",
     yamlEnabled: false,
     noYaml: false,
+    tsEnabled: false,
+    noTs: false,
     allowDuplicates: false,
     noLint: false,
     lintDisableRules: [],

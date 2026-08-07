@@ -12,6 +12,7 @@ export interface CLIConfig {
   defaultProjectID: string;
   autoTags: string[];
   yamlEnabled: boolean;
+  tsEnabled: boolean;
   externalizeThreshold: number;
 }
 
@@ -23,6 +24,7 @@ export function loadCLIConfig(): CLIConfig {
       defaultProjectID: DefaultProjectID,
       autoTags: [...DefaultAutoTags],
       yamlEnabled: false,
+      tsEnabled: false,
       externalizeThreshold: 0,
     };
   }
@@ -68,6 +70,7 @@ export function parseClaudeMD(filePath: string): CLIConfig {
     defaultProjectID: DefaultProjectID,
     autoTags: [...DefaultAutoTags],
     yamlEnabled: false,
+    tsEnabled: false,
     externalizeThreshold: 0,
   };
 
@@ -140,6 +143,14 @@ export function parseClaudeMD(filePath: string): CLIConfig {
           case "yamlEnabled":
             if (value && value !== "-") {
               config.yamlEnabled = parseBooleanEnabled(value);
+            }
+            break;
+
+          case "TypeScript モード":
+          case "TypeScript Mode":
+          case "tsEnabled":
+            if (value && value !== "-") {
+              config.tsEnabled = parseBooleanEnabled(value);
             }
             break;
 
@@ -219,6 +230,27 @@ export function getEffectiveYamlEnabled(
     return true;
   }
   return false;
+}
+
+/**
+ * Returns whether `.ts` mode is enabled, using the same precedence as YAML:
+ * 1. --no-ts flag (explicit disable)
+ * 2. --ts flag (explicit enable)
+ * 3. CLAUDE.md configuration
+ * 4. Default: disabled
+ */
+export function getEffectiveTsEnabled(
+  tsFlag: boolean,
+  noTsFlag: boolean,
+  config: CLIConfig | null,
+): boolean {
+  if (noTsFlag) {
+    return false;
+  }
+  if (tsFlag) {
+    return true;
+  }
+  return config?.tsEnabled === true;
 }
 
 /**

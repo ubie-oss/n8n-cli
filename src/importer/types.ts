@@ -2,7 +2,7 @@
 export type OperationType = "create" | "update" | "skip" | "error" | "cleanup" | "match" | "rename";
 
 /** SourceType indicates the format of the source file. */
-export type SourceType = "json" | "yaml";
+export type SourceType = "json" | "yaml" | "ts";
 
 /** ImportOptions configures the import command behavior. */
 export interface ImportOptions {
@@ -10,6 +10,12 @@ export interface ImportOptions {
   dryRun: boolean;
   includeArchived: boolean;
   yamlEnabled: boolean;
+  /**
+   * When true, new workflow files are written as `.ts` against
+   * `@n8n/workflow-sdk`. Existing files keep whatever format they already use,
+   * so this only affects workflows imported for the first time.
+   */
+  tsEnabled: boolean;
   externalizeThreshold: number;
   cleanupOrphans: boolean;
   cleanupSubfiles: boolean;
@@ -24,6 +30,7 @@ export function defaultImportOptions(): ImportOptions {
     dryRun: false,
     includeArchived: false,
     yamlEnabled: false,
+    tsEnabled: false,
     externalizeThreshold: 3,
     cleanupOrphans: false,
     cleanupSubfiles: false,

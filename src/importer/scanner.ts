@@ -2,7 +2,9 @@ import fs from "node:fs";
 import path from "node:path";
 import yaml from "js-yaml";
 import type { Workflow } from "@/api/types.ts";
+import { detectWorkflowFormat } from "@/common/extensions.ts";
 import { extractWorkflowIDFromFilename } from "@/naming/naming.ts";
+import { loadTsWorkflow } from "@/ts/loader.ts";
 import { loadYamlWorkflow } from "@/yaml/loader.ts";
 import { OrphanFileMap, type SourceType, WorkflowIDMap } from "./types.ts";
 
@@ -33,19 +35,23 @@ export function scanDirectory(dir: string): WorkflowIDMap {
     throw new Error(`not a directory: ${dir}`);
   }
 
-  walkDir(dir, (filePath, entry) => {
-    const ext = path.extname(entry.name).toLowerCase();
-
-    if (ext === ".json") {
-      const id = extractWorkflowID(filePath);
-      if (id) idMap.add(id, filePath);
-    } else if (ext === ".yaml" || ext === ".yml") {
-      const id = extractWorkflowID(filePath);
-      if (id) idMap.add(id, filePath);
-    }
+  walkDir(dir, (filePath) => {
+    if (!isWorkflowCandidate(filePath)) return;
+    const id = extractWorkflowID(filePath);
+    if (id) idMap.add(id, filePath);
   });
 
   return idMap;
+}
+
+/**
+ * True when a path has an extension we can read a workflow out of.
+ *
+ * `.d.ts` files are excluded: they are type declarations, never workflows.
+ */
+function isWorkflowCandidate(filePath: string): boolean {
+  if (filePath.toLowerCase().endsWith(".d.ts")) return false;
+  return detectWorkflowFormat(filePath) != null;
 }
 
 /**
@@ -65,31 +71,33 @@ export function scanDirectoryWithOrphans(dir: string): [WorkflowIDMap, OrphanFil
     throw new Error(`not a directory: ${dir}`);
   }
 
-  walkDir(dir, (filePath, entry) => {
-    const ext = path.extname(entry.name).toLowerCase();
+  walkDir(dir, (filePath) => {
+    if (!isWorkflowCandidate(filePath)) return;
 
-    if (ext === ".json" || ext === ".yaml" || ext === ".yml") {
-      const [id, name] = extractIDAndName(filePath);
-      const sourceType: SourceType = ext === ".json" ? "json" : "yaml";
-      if (id) {
-        idMap.add(id, filePath);
-      } else if (name) {
-        orphanMap.add({ path: filePath, name, sourceType });
-      }
+    const [id, name] = extractIDAndName(filePath);
+    const sourceType = detectWorkflowFormat(filePath) as SourceType;
+    if (id) {
+      idMap.add(id, filePath);
+    } else if (name) {
+      orphanMap.add({ path: filePath, name, sourceType });
     }
   });
 
   return [idMap, orphanMap];
 }
 
-/** Parses a workflow JSON/YAML file and returns the full Workflow object. */
+/** Parses a workflow JSON/YAML/TS file and returns the full Workflow object. */
 export function parseWorkflowFile(filePath: string): Workflow {
-  const ext = path.extname(filePath).toLowerCase();
-  if (ext === ".yaml" || ext === ".yml") {
-    return loadYamlWorkflow(filePath);
+  switch (detectWorkflowFormat(filePath)) {
+    case "yaml":
+      return loadYamlWorkflow(filePath);
+    case "ts":
+      return loadTsWorkflow(filePath);
+    default: {
+      const data = fs.readFileSync(filePath, "utf-8");
+      return JSON.parse(data) as Workflow;
+    }
   }
-  const data = fs.readFileSync(filePath, "utf-8");
-  return JSON.parse(data) as Workflow;
 }
 
 /** Walk a directory recursively, skipping underscore-prefixed dirs. */
@@ -109,18 +117,10 @@ function walkDir(dir: string, callback: (filePath: string, entry: fs.Dirent) => 
   }
 }
 
-/** Extracts the workflow ID from a JSON/YAML file by parsing the `id` field. */
+/** Extracts the workflow ID from a JSON/YAML/TS file by parsing the `id` field. */
 function extractWorkflowID(filePath: string): string {
   try {
-    const data = fs.readFileSync(filePath, "utf-8");
-    const ext = path.extname(filePath).toLowerCase();
-    let parsed: Record<string, unknown>;
-    if (ext === ".yaml" || ext === ".yml") {
-      parsed = yaml.load(data, { schema: permissiveSchema }) as Record<string, unknown>;
-    } else {
-      parsed = JSON.parse(data) as Record<string, unknown>;
-    }
-    const rawId = parsed.id;
+    const [rawId] = readIdAndNameFields(filePath);
     const id = typeof rawId === "string" ? rawId : typeof rawId === "number" ? String(rawId) : "";
     if (id) {
       // Check filename ID mismatch
@@ -138,22 +138,38 @@ function extractWorkflowID(filePath: string): string {
   return "";
 }
 
-/** Extracts both ID and name from a JSON/YAML file. */
+/** Extracts both ID and name from a JSON/YAML/TS file. */
 function extractIDAndName(filePath: string): [string, string] {
   try {
-    const data = fs.readFileSync(filePath, "utf-8");
-    const ext = path.extname(filePath).toLowerCase();
-    let parsed: Record<string, unknown>;
-    if (ext === ".yaml" || ext === ".yml") {
-      parsed = yaml.load(data, { schema: permissiveSchema }) as Record<string, unknown>;
-    } else {
-      parsed = JSON.parse(data) as Record<string, unknown>;
-    }
-    const rawId = parsed.id;
+    const [rawId, rawName] = readIdAndNameFields(filePath);
     const id = typeof rawId === "string" ? rawId : typeof rawId === "number" ? String(rawId) : "";
-    const name = typeof parsed.name === "string" ? parsed.name : "";
+    const name = typeof rawName === "string" ? rawName : "";
     return [id, name];
   } catch {
     return ["", ""];
   }
+}
+
+/**
+ * Reads the raw `id` and `name` fields out of a workflow file.
+ *
+ * JSON and YAML are parsed shallowly — YAML with a permissive schema so that
+ * unresolved `!include` tags do not fail the read. TypeScript has no shallow
+ * form, so the file is loaded through the SDK; anything that is not a workflow
+ * throws and is reported as an empty pair by the callers.
+ */
+function readIdAndNameFields(filePath: string): [unknown, unknown] {
+  if (detectWorkflowFormat(filePath) === "ts") {
+    const workflow = loadTsWorkflow(filePath);
+    return [workflow.id, workflow.name];
+  }
+
+  const data = fs.readFileSync(filePath, "utf-8");
+  const parsed = (
+    detectWorkflowFormat(filePath) === "yaml"
+      ? yaml.load(data, { schema: permissiveSchema })
+      : JSON.parse(data)
+  ) as Record<string, unknown>;
+
+  return [parsed?.id, parsed?.name];
 }

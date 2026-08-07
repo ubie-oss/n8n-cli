@@ -11,8 +11,8 @@ import { parseWorkflowFile } from "@/importer/scanner.ts";
 export function registerConvertCommand(program: Command): void {
   program
     .command("convert")
-    .description("Convert workflow files between formats (JSON ↔ YAML)")
-    .requiredOption("--format <format>", "Target format: json, yaml")
+    .description("Convert workflow files between formats (JSON / YAML / TS)")
+    .requiredOption("--format <format>", "Target format: json, yaml, ts")
     .option("-d, --directory <dir>", "Directory to scan for workflow files")
     .option("--ids <ids>", "Comma-separated workflow IDs to convert")
     .option("--tags <tags>", "Filter by tags (comma-separated, AND condition)")
@@ -35,8 +35,8 @@ export function registerConvertCommand(program: Command): void {
       ) => {
         // Validate target format
         const targetFormat = opts.format as TargetFormat;
-        if (targetFormat !== "json" && targetFormat !== "yaml") {
-          console.error(`Error: unsupported format "${opts.format}". Use "json" or "yaml".`);
+        if (targetFormat !== "json" && targetFormat !== "yaml" && targetFormat !== "ts") {
+          console.error(`Error: unsupported format "${opts.format}". Use "json", "yaml" or "ts".`);
           process.exit(1);
         }
 

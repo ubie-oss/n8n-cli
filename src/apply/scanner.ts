@@ -4,6 +4,7 @@ import type { Workflow } from "../api/types.ts";
 import { hasAllTags } from "../common/tags.ts";
 import { Detector } from "../git/detector.ts";
 import { extractWorkflowIDFromDirname, extractWorkflowIDFromFilename } from "../naming/naming.ts";
+import { loadTsWorkflow } from "../ts/loader.ts";
 import { loadYamlWorkflow } from "../yaml/loader.ts";
 import type { ApplyOptions, WorkflowFile } from "./types.ts";
 
@@ -15,13 +16,14 @@ export class Scanner {
    */
   async scanWithOptions(opts: ApplyOptions): Promise<WorkflowFile[]> {
     const yamlEnabled = opts.yamlEnabled && !opts.noYaml;
+    const tsEnabled = opts.tsEnabled && !opts.noTs;
 
     let files: WorkflowFile[];
 
     if (opts.fromGitChanges) {
-      files = await this.scanFromGitChanges(opts, yamlEnabled);
+      files = await this.scanFromGitChanges(opts, yamlEnabled, tsEnabled);
     } else {
-      files = await this.scanDirectory(opts.directory, yamlEnabled);
+      files = await this.scanDirectory(opts.directory, yamlEnabled, tsEnabled);
     }
 
     // Filter by IDs BEFORE checking for duplicates
@@ -44,7 +46,11 @@ export class Scanner {
   }
 
   /** Scans a directory recursively for workflow files. */
-  async scanDirectory(dir: string, yamlEnabled: boolean): Promise<WorkflowFile[]> {
+  async scanDirectory(
+    dir: string,
+    yamlEnabled: boolean,
+    tsEnabled = false,
+  ): Promise<WorkflowFile[]> {
     if (!fs.existsSync(dir)) {
       throw new Error(`directory not found: ${dir}`);
     }
@@ -54,13 +60,14 @@ export class Scanner {
     }
 
     const files: WorkflowFile[] = [];
-    await this.walkDirectory(dir, yamlEnabled, files);
+    await this.walkDirectory(dir, yamlEnabled, tsEnabled, files);
     return files;
   }
 
   private async walkDirectory(
     dir: string,
     yamlEnabled: boolean,
+    tsEnabled: boolean,
     files: WorkflowFile[],
   ): Promise<void> {
     const entries = fs.readdirSync(dir, { withFileTypes: true });
@@ -69,7 +76,7 @@ export class Scanner {
       if (entry.isDirectory()) {
         // Skip _subfiles directories (they contain external files, not workflows)
         if (entry.name === "_subfiles") continue;
-        await this.walkDirectory(fullPath, yamlEnabled, files);
+        await this.walkDirectory(fullPath, yamlEnabled, tsEnabled, files);
       } else {
         const ext = path.extname(entry.name).toLowerCase();
         if (ext === ".json") {
@@ -77,6 +84,11 @@ export class Scanner {
         } else if (ext === ".yaml" || ext === ".yml") {
           if (yamlEnabled) {
             files.push(this.parseYAMLFile(fullPath));
+          }
+        } else if (ext === ".ts") {
+          // `.d.ts` files are type declarations, never workflows.
+          if (tsEnabled && !entry.name.toLowerCase().endsWith(".d.ts")) {
+            files.push(this.parseTSFile(fullPath));
           }
         }
       }
@@ -112,10 +124,25 @@ export class Scanner {
     return wf;
   }
 
+  /** Parses a `.ts` workflow file written against `@n8n/workflow-sdk`. */
+  private parseTSFile(filePath: string): WorkflowFile {
+    const wf: WorkflowFile = { path: filePath, sourceType: "ts" };
+    try {
+      const workflow = loadTsWorkflow(filePath);
+      this.validateWorkflow(workflow);
+      this.checkIDMismatch(filePath, workflow);
+      wf.workflow = workflow;
+    } catch (err) {
+      wf.error = err instanceof Error ? err : new Error(String(err));
+    }
+    return wf;
+  }
+
   /** Scans workflow files from git diff output. */
   private async scanFromGitChanges(
     opts: ApplyOptions,
     yamlEnabled: boolean,
+    tsEnabled: boolean,
   ): Promise<WorkflowFile[]> {
     const detector = new Detector();
     const changedFiles = await detector.getChangedFiles(opts.gitDiffSpec, "");
@@ -127,7 +154,7 @@ export class Scanner {
     const workflowIDToFile = new Map<string, string>();
     if (yamlEnabled) {
       try {
-        const allFiles = await this.scanDirectory(absDir, true);
+        const allFiles = await this.scanDirectory(absDir, true, false);
         for (const wf of allFiles) {
           if (wf.workflow?.id && wf.sourceType === "yaml") {
             workflowIDToFile.set(wf.workflow.id, wf.path);
@@ -165,6 +192,14 @@ export class Scanner {
         if (!processedFiles.has(absPath)) {
           processedFiles.add(absPath);
           files.push(this.parseYAMLFile(absPath));
+        }
+        continue;
+      }
+
+      if (ext === ".ts" && tsEnabled && !absPath.toLowerCase().endsWith(".d.ts")) {
+        if (!processedFiles.has(absPath)) {
+          processedFiles.add(absPath);
+          files.push(this.parseTSFile(absPath));
         }
         continue;
       }

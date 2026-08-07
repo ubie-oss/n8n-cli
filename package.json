@@ -8,6 +8,8 @@
   "scripts": {
     "dev": "bun run src/index.ts",
     "generate-schemas": "bun run scripts/generate-schemas.ts",
+    "generate-third-party-licenses": "bun run scripts/generate-third-party-licenses.ts",
+    "check-third-party-licenses": "bun run scripts/generate-third-party-licenses.ts --check",
     "prebuild": "bun run generate-schemas",
     "build": "bun build src/index.ts --compile --outfile n8n-cli",
     "test": "bun test",
@@ -28,6 +30,8 @@
   },
   "dependencies": {
     "@dagrejs/dagre": "^2.0.4",
+    "@n8n/workflow-sdk": "0.26.1",
+    "acorn": "^8.18.0",
     "commander": "^14.0.3",
     "js-yaml": "^4.1.1",
     "n8n-workflow": "^1",

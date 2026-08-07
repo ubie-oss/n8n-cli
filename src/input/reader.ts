@@ -1,10 +1,18 @@
 import type { Workflow, WorkflowInput } from "@/api/types.ts";
+import { detectWorkflowFormat } from "@/common/extensions.ts";
+import { loadTsWorkflow } from "@/ts/loader.ts";
 
 /**
  * Reads workflow input from a file or stdin.
  * If filename is "-" or empty, reads from stdin.
  */
 export async function readWorkflowInput(filename: string): Promise<WorkflowInput> {
+  const fromFile = readTsFile(filename);
+  if (fromFile) {
+    validateWorkflowInput(fromFile);
+    return fromFile;
+  }
+
   const data = await readData(filename);
 
   if (data.length === 0) {
@@ -18,10 +26,25 @@ export async function readWorkflowInput(filename: string): Promise<WorkflowInput
 }
 
 /**
+ * Loads a workflow from a `.ts` file, or returns null for anything else.
+ *
+ * YAML is deliberately not handled here: these entry points have always been
+ * JSON-or-stdin, and widening them further is a separate change.
+ */
+function readTsFile(filename: string): Workflow | null {
+  if (filename === "" || filename === "-") return null;
+  if (detectWorkflowFormat(filename) !== "ts") return null;
+  return loadTsWorkflow(filename);
+}
+
+/**
  * Reads a full workflow from a file or stdin.
  * Used for imports where we want the full workflow structure.
  */
 export async function readWorkflowFull(filename: string): Promise<Workflow> {
+  const fromFile = readTsFile(filename);
+  if (fromFile) return fromFile;
+
   const data = await readData(filename);
 
   if (data.length === 0) {

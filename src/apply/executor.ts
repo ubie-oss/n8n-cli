@@ -143,9 +143,10 @@ export class Executor {
       throw new Error("3-way detection not enabled");
     }
 
-    // Skip YAML files - they cannot be reliably retrieved via git show
+    // Skip YAML and TypeScript files - `git show` hands back the source, not the
+    // workflow JSON this method is expected to return.
     const ext = path.extname(filePath).toLowerCase();
-    if (ext === ".yaml" || ext === ".yml") {
+    if (ext === ".yaml" || ext === ".yml" || ext === ".ts") {
       throw new Error(`${ext} files not supported for 3-way detection`);
     }
 
@@ -317,6 +318,14 @@ export class Executor {
     }
 
     op.remoteUpdated = remoteWorkflow.updatedAt;
+
+    // A `.ts` workflow cannot express node IDs — the SDK has no field for them,
+    // so the loader derives them from the node names. Adopt the IDs the remote
+    // already uses for the same names, otherwise the first apply after a file is
+    // converted to `.ts` would rewrite every node ID for no reason.
+    if (wf.sourceType === "ts") {
+      adoptRemoteNodeIDs(workflow, remoteWorkflow);
+    }
 
     // Compare workflows
     const diff = compare(workflow, remoteWorkflow);
@@ -626,4 +635,24 @@ async function updateLocalWorkflowFile(filePath: string, workflow: Workflow): Pr
 
   const output = JSON.stringify(existing, null, 2);
   fs.writeFileSync(filePath, `${output}\n`);
+}
+
+/**
+ * Rewrites local node IDs to match the remote workflow's, matching on node name.
+ *
+ * Only used for `.ts` sources, where node IDs are synthesised rather than
+ * authored (see `ts/node-ids.ts`). Nodes with no remote counterpart keep their
+ * derived ID.
+ */
+function adoptRemoteNodeIDs(local: Workflow, remote: Workflow): void {
+  const remoteIDsByName = new Map<string, string>();
+  for (const node of remote.nodes ?? []) {
+    if (node.name && node.id) remoteIDsByName.set(node.name, node.id);
+  }
+  if (remoteIDsByName.size === 0) return;
+
+  for (const node of local.nodes ?? []) {
+    const remoteID = remoteIDsByName.get(node.name);
+    if (remoteID) node.id = remoteID;
+  }
 }
