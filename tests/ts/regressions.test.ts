@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import path from "node:path";
+import { Command } from "commander";
 import type { Workflow } from "@/api/types.ts";
 import {
   detectWorkflowFormat,
@@ -67,13 +68,29 @@ describe("`.ts` never leaks into commands that did not ask for it", () => {
     expect(detectWorkflowFormat("workflow.ts")).toBe("ts");
   });
 
-  test("the importer scan ignores .ts unless ts mode is on", () => {
+  test("the importer never treats non-workflow TypeScript as an orphan", () => {
     // Otherwise `--cleanup-orphans` would delete hand-written TypeScript that
     // merely happens to live in the definitions directory.
     fs.writeFileSync(path.join(dir, "helper.ts"), "export const add = (a: number) => a;\n");
 
-    const [, orphansOff] = scanDirectoryWithOrphans(dir, false);
-    expect(orphansOff.count()).toBe(0);
+    for (const tsEnabled of [false, true]) {
+      const [ids, orphans] = scanDirectoryWithOrphans(dir, tsEnabled);
+      expect(orphans.count()).toBe(0);
+      expect(ids.count()).toBe(0);
+    }
+  });
+
+  test("an existing .ts with an ID is indexed even when ts mode is off", () => {
+    // The importer decides a workflow's format from the file it already has. If
+    // the scan hid `.ts`, import would think the workflow is new and write a
+    // second file — a .json next to the .ts — that then drifts out of sync.
+    writeWorkflowTS(path.join(dir, "w__wf-1.ts"), workflow());
+
+    const [ids] = scanDirectoryWithOrphans(dir, false);
+    const [found, ok] = ids.get("wf-1");
+
+    expect(ok).toBe(true);
+    expect(found.endsWith(".ts")).toBe(true);
   });
 
   test("a workflow .ts without an ID is still seen as an orphan when ts mode is on", () => {
@@ -142,6 +159,23 @@ describe("round-trip verification covers the fields the SDK drops", () => {
     expect(() => writeWorkflowTS(path.join(dir, "broken.ts"), wf)).toThrow();
   });
 
+  test("accepts a workflow whose settings object is empty", () => {
+    // The loader drops empty settings so apply never sends `settings: {}`, which
+    // must not then read as a round-trip loss.
+    const wf = workflow({ settings: {} as Workflow["settings"] });
+
+    expect(() => writeWorkflowTS(path.join(dir, "empty-settings.ts"), wf)).not.toThrow();
+  });
+
+  test("accepts a workflow whose nodes carry no IDs", () => {
+    // Hand-written JSON often omits node IDs. The loader has to invent one, but
+    // that is not information loss and must not block conversion.
+    const wf = workflow();
+    const nodes = wf.nodes.map(({ id: _id, ...rest }) => rest as Workflow["nodes"][number]);
+
+    expect(() => writeWorkflowTS(path.join(dir, "no-ids.ts"), { ...wf, nodes })).not.toThrow();
+  });
+
   test("keeps settings rather than replacing them with an empty object", () => {
     const wf = workflow({ settings: { executionOrder: "v1" } as Workflow["settings"] });
 
@@ -196,5 +230,44 @@ describe("metadata block edge cases", () => {
     expect(() => preprocessTsWorkflow("export const meta = { nodeIds: { A: 1 } };\n")).toThrow(
       /nodeIds values must be strings/,
     );
+  });
+});
+
+describe("import format flags distinguish 'not passed' from 'explicitly off'", () => {
+  // A commander `.option(..., false)` default makes an unpassed flag report
+  // `false`, which is indistinguishable from `--no-yaml` / `--no-ts` — so the
+  // CLAUDE.md setting could never be reached.
+  function resolve(argv: string[]): { yaml: [boolean, boolean]; ts: [boolean, boolean] } {
+    const program = new Command();
+    let opts: Record<string, unknown> = {};
+    program
+      .command("import")
+      .option("--yaml", "y")
+      .option("--no-yaml", "ny")
+      .option("--ts", "t")
+      .option("--no-ts", "nt")
+      .action((o) => {
+        opts = o as Record<string, unknown>;
+      });
+    program.parse(["node", "cli", "import", ...argv]);
+
+    return {
+      yaml: [opts.yaml === true, opts.yaml === false && "yaml" in opts],
+      ts: [opts.ts === true, opts.ts === false && "ts" in opts],
+    };
+  }
+
+  test("no flag leaves both undecided, so the config is consulted", () => {
+    expect(resolve([])).toEqual({ yaml: [false, false], ts: [false, false] });
+  });
+
+  test("--ts and --no-ts are distinguishable", () => {
+    expect(resolve(["--ts"]).ts).toEqual([true, false]);
+    expect(resolve(["--no-ts"]).ts).toEqual([false, true]);
+  });
+
+  test("--yaml and --no-yaml are distinguishable", () => {
+    expect(resolve(["--yaml"]).yaml).toEqual([true, false]);
+    expect(resolve(["--no-yaml"]).yaml).toEqual([false, true]);
   });
 });

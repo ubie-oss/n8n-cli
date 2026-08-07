@@ -168,11 +168,20 @@ function describeRoundTripMismatch(workflow: Workflow, code: string): string | n
     return err instanceof Error ? err.message : String(err);
   }
 
+  const parsedNodes = alignSynthesisedNodeIDs(parsed.nodes, workflow.nodes);
+
   if (parsed.name !== workflow.name) return "name";
-  if (!nodesEqual(parsed.nodes, workflow.nodes)) return describeNodeMismatch(parsed, workflow);
+  if (!nodesEqual(parsedNodes, workflow.nodes)) {
+    return describeNodeMismatch(parsedNodes, workflow);
+  }
   if (!connectionsEqual(parsed.connections, workflow.connections)) return "connections";
   if (!pinDataEqual(parsed.pinData, workflow.pinData)) return "pinData";
-  if (!settingsEqual(parsed.settings, workflow.settings)) return "settings";
+  // An absent settings object and an empty one mean the same thing here — the
+  // loader drops empty settings so apply does not send `settings: {}` — but
+  // `settingsEqual` treats them as different.
+  if (!settingsEqual(orUndefined(parsed.settings), orUndefined(workflow.settings))) {
+    return "settings";
+  }
   // `staticData` has no representation in the SDK at all, so it silently
   // disappears rather than coming back wrong. Catch it here.
   if (!deepEqual(parsed.staticData ?? null, workflow.staticData ?? null)) return "staticData";
@@ -180,12 +189,39 @@ function describeRoundTripMismatch(workflow: Workflow, code: string): string | n
   return null;
 }
 
+/** Collapses an empty object to undefined so the two compare as equal. */
+function orUndefined<T extends object>(value: T | undefined): T | undefined {
+  if (value == null) return undefined;
+  return Object.keys(value).length === 0 ? undefined : value;
+}
+
+/**
+ * Drops node IDs the loader had to invent.
+ *
+ * A workflow whose nodes carry no `id` — hand-written JSON, typically — has
+ * nothing to record in `meta.nodeIds`, so the loader derives one. That is not a
+ * loss of information and must not fail the round-trip check; a node that *did*
+ * have an ID is still compared.
+ */
+function alignSynthesisedNodeIDs(
+  parsedNodes: Workflow["nodes"] | undefined,
+  sourceNodes: Workflow["nodes"] | undefined,
+): Workflow["nodes"] {
+  const sourceHasID = new Map((sourceNodes ?? []).map((n) => [n.name, !!n.id]));
+
+  return (parsedNodes ?? []).map((node) => {
+    if (sourceHasID.get(node.name) !== false) return node;
+    const { id: _id, ...rest } = node;
+    return rest as Workflow["nodes"][number];
+  });
+}
+
 /**
  * Names the nodes and fields that changed, so the error tells the user what to
  * look at instead of just "nodes".
  */
-function describeNodeMismatch(parsed: Workflow, workflow: Workflow): string {
-  const parsedByName = new Map((parsed.nodes ?? []).map((n) => [n.name, n]));
+function describeNodeMismatch(parsedNodes: Workflow["nodes"], workflow: Workflow): string {
+  const parsedByName = new Map(parsedNodes.map((n) => [n.name, n]));
   const details: string[] = [];
 
   for (const node of workflow.nodes ?? []) {
@@ -194,7 +230,10 @@ function describeNodeMismatch(parsed: Workflow, workflow: Workflow): string {
       details.push(`node "${node.name}" is missing`);
       continue;
     }
-    const fields = Object.keys(node).filter(
+    // Union of both sides' keys: a field the round trip *added* is as much of a
+    // mismatch as one it changed, and looking at the source alone would miss it.
+    const keys = new Set([...Object.keys(node), ...Object.keys(other)]);
+    const fields = [...keys].filter(
       (key) =>
         !deepEqual(
           (node as unknown as Record<string, unknown>)[key],
@@ -206,8 +245,8 @@ function describeNodeMismatch(parsed: Workflow, workflow: Workflow): string {
     }
   }
 
-  if (parsed.nodes?.length !== workflow.nodes?.length) {
-    details.push(`node count ${workflow.nodes?.length} → ${parsed.nodes?.length}`);
+  if (parsedNodes.length !== workflow.nodes?.length) {
+    details.push(`node count ${workflow.nodes?.length} → ${parsedNodes.length}`);
   }
 
   return details.length > 0 ? `nodes — ${details.join("; ")}` : "nodes";

@@ -23,7 +23,7 @@ const permissiveSchema = yaml.DEFAULT_SCHEMA.extend([permissiveIncludeType]);
  * Scans a directory recursively for workflow JSON and YAML files.
  * Returns a WorkflowIDMap containing workflow ID → file path mappings.
  */
-export function scanDirectory(dir: string, tsEnabled = false): WorkflowIDMap {
+export function scanDirectory(dir: string): WorkflowIDMap {
   const idMap = new WorkflowIDMap();
 
   if (!fs.existsSync(dir)) {
@@ -36,7 +36,7 @@ export function scanDirectory(dir: string, tsEnabled = false): WorkflowIDMap {
   }
 
   walkDir(dir, (filePath) => {
-    if (!isWorkflowCandidate(filePath, tsEnabled)) return;
+    if (!isWorkflowCandidate(filePath)) return;
     const id = extractWorkflowID(filePath);
     if (id) idMap.add(id, filePath);
   });
@@ -44,17 +44,9 @@ export function scanDirectory(dir: string, tsEnabled = false): WorkflowIDMap {
   return idMap;
 }
 
-/**
- * True when a path is a workflow file this scan should read.
- *
- * `.ts` is only a candidate when the caller asked for it: a definitions
- * directory that holds `.ts` workflows also holds ordinary TypeScript, and
- * treating those as workflows would let `--cleanup-orphans` delete them.
- */
-function isWorkflowCandidate(filePath: string, tsEnabled: boolean): boolean {
-  const format = detectWorkflowFormat(filePath);
-  if (format == null) return false;
-  return format !== "ts" || tsEnabled;
+/** True when a path is a workflow file this scan should read. */
+function isWorkflowCandidate(filePath: string): boolean {
+  return detectWorkflowFormat(filePath) != null;
 }
 
 /**
@@ -78,14 +70,21 @@ export function scanDirectoryWithOrphans(
   }
 
   walkDir(dir, (filePath) => {
-    if (!isWorkflowCandidate(filePath, tsEnabled)) return;
+    if (!isWorkflowCandidate(filePath)) return;
 
     const [id, name] = extractIDAndName(filePath);
     const sourceType = detectWorkflowFormat(filePath) as SourceType;
     if (id) {
+      // Files with an ID are always indexed, whatever their format. Skipping
+      // `.ts` here would hide an existing file from the format-preservation
+      // check in the importer, and it would write a second file alongside it.
       idMap.add(id, filePath);
     } else if (name) {
-      orphanMap.add({ path: filePath, name, sourceType });
+      // Orphans are what `--cleanup-orphans` deletes, so an ID-less `.ts` only
+      // counts as one when the caller asked to manage `.ts` at all.
+      if (sourceType !== "ts" || tsEnabled) {
+        orphanMap.add({ path: filePath, name, sourceType });
+      }
     }
   });
 

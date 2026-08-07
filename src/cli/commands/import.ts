@@ -18,11 +18,11 @@ export function registerImportCommand(parent: Command): void {
     .option("-d, --dir <directory>", "Target directory for workflow files", "./definitions")
     .option("--ids <ids>", "Comma-separated workflow IDs to import (empty = all)")
     .option("--include-archived", "Include archived workflows", false)
-    .option("--yaml", "Output as YAML format with external files", false)
+    // Neither format flag carries a default value. With one, commander reports
+    // `false` even when the flag was never passed, which is indistinguishable
+    // from `--no-yaml` / `--no-ts` and makes the CLAUDE.md setting unreachable.
+    .option("--yaml", "Output as YAML format with external files")
     .option("--no-yaml", "Force JSON format output")
-    // No default value: with one, commander reports `ts === false` even when the
-    // flag was never passed, which is indistinguishable from --no-ts and would
-    // make the CLAUDE.md setting unreachable.
     .option("--ts", "Output new workflows as .ts (@n8n/workflow-sdk format)")
     .option("--no-ts", "Do not write .ts output")
     .option("-t, --threshold <n>", "Minimum lines for code externalization", "0")
