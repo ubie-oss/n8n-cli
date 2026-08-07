@@ -128,6 +128,7 @@ n8n-cli convert [options] [files...]
 | Option | Description |
 |--------|-------------|
 | `--format <format>` | Target format: `json`, `yaml`, `ts` (required) |
+| `--ts` | Include `.ts` files when scanning a directory (explicit file arguments are always honoured) |
 | `-d, --directory <dir>` | Directory to scan for workflow files |
 | `--ids <ids>` | Comma-separated workflow IDs to convert |
 | `--tags <tags>` | Filter by tags (comma-separated, AND condition) |
@@ -1061,6 +1062,10 @@ import { workflow, trigger, node } from "@n8n/workflow-sdk";
 export const meta = {
   active: true,
   tags: ["managed-as-code"],
+  // Written by n8n-cli when it generates the file; keeps node IDs and the
+  // import skip-check stable. Optional in hand-written files.
+  nodeIds: { Trigger: "a1b2c3d4-...", Set: "e5f6a7b8-..." },
+  updatedAt: "2026-08-07T00:00:00.000Z",
 };
 
 const start = trigger({
@@ -1104,15 +1109,24 @@ happens to be valid TypeScript, not a general program:
 
 Two further consequences of the SDK's data model:
 
-- **Node IDs are not stored in `.ts`.** The SDK has no field for them, so n8n-cli
-  derives each node's ID deterministically from the workflow ID and node name.
-  IDs stay stable across runs, and on `apply` the IDs already used upstream for
-  the same node names are adopted, so switching a workflow to `.ts` does not churn
-  them.
+- **Node IDs live in `meta.nodeIds`.** The SDK's builder has no field for a node
+  ID and mints a random one on every parse, so generated files record them
+  explicitly. Hand-written files that omit them get IDs derived deterministically
+  from the workflow ID and node name, and `apply` adopts whatever IDs upstream
+  already uses for the same node names — so IDs never churn.
 - **Conversion to `.ts` is verified.** `convert --format ts` and `import --ts`
-  parse the generated file back and compare it against the source; a workflow the
-  SDK cannot represent faithfully fails loudly rather than producing a subtly
-  wrong file.
+  parse the generated file back and compare name, nodes, connections, settings,
+  pinData and staticData against the source. A workflow the SDK cannot represent
+  faithfully — one carrying `staticData`, for instance — fails loudly, naming the
+  node and field, rather than producing a subtly wrong file.
+
+Other commands are unaffected by `.ts`: `lint` and `fmt` still read JSON and YAML
+only, so ordinary TypeScript in a definitions directory is never mistaken for a
+workflow. `apply` still lints `.ts` workflows before writing them upstream.
+
+`apply` does not update `meta.updatedAt` after a successful write (the same is
+true of YAML), so editing and re-applying a workflow that changed upstream in the
+meantime reports a conflict and needs `--force`.
 
 
 ## Configuration

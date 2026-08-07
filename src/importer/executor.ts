@@ -64,7 +64,7 @@ export class ImportExecutor {
     ensureDirectory(this.opts.directory);
 
     // Scan local directory
-    const [idMap, orphanMap] = scanDirectoryWithOrphans(this.opts.directory);
+    const [idMap, orphanMap] = scanDirectoryWithOrphans(this.opts.directory, this.opts.tsEnabled);
 
     // Track orphan paths
     for (const orphan of orphanMap.all()) {

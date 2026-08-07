@@ -20,7 +20,10 @@ export function registerImportCommand(parent: Command): void {
     .option("--include-archived", "Include archived workflows", false)
     .option("--yaml", "Output as YAML format with external files", false)
     .option("--no-yaml", "Force JSON format output")
-    .option("--ts", "Output new workflows as .ts (@n8n/workflow-sdk format)", false)
+    // No default value: with one, commander reports `ts === false` even when the
+    // flag was never passed, which is indistinguishable from --no-ts and would
+    // make the CLAUDE.md setting unreachable.
+    .option("--ts", "Output new workflows as .ts (@n8n/workflow-sdk format)")
     .option("--no-ts", "Do not write .ts output")
     .option("-t, --threshold <n>", "Minimum lines for code externalization", "0")
     .option("--cleanup-orphans", "Delete local files without matching remote workflow", false)

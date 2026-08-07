@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { Workflow } from "../api/types.ts";
+import { detectWorkflowFormat } from "../common/extensions.ts";
 import { hasAllTags } from "../common/tags.ts";
 import { Detector } from "../git/detector.ts";
 import { extractWorkflowIDFromDirname, extractWorkflowIDFromFilename } from "../naming/naming.ts";
@@ -85,11 +86,8 @@ export class Scanner {
           if (yamlEnabled) {
             files.push(this.parseYAMLFile(fullPath));
           }
-        } else if (ext === ".ts") {
-          // `.d.ts` files are type declarations, never workflows.
-          if (tsEnabled && !entry.name.toLowerCase().endsWith(".d.ts")) {
-            files.push(this.parseTSFile(fullPath));
-          }
+        } else if (tsEnabled && detectWorkflowFormat(entry.name) === "ts") {
+          files.push(this.parseTSFile(fullPath));
         }
       }
     }
@@ -196,7 +194,7 @@ export class Scanner {
         continue;
       }
 
-      if (ext === ".ts" && tsEnabled && !absPath.toLowerCase().endsWith(".d.ts")) {
+      if (tsEnabled && detectWorkflowFormat(absPath) === "ts") {
         if (!processedFiles.has(absPath)) {
           processedFiles.add(absPath);
           files.push(this.parseTSFile(absPath));

@@ -86,16 +86,36 @@ describe("JSON → TS → JSON round trip", () => {
     expect(back.tags?.map((t) => t.name)).toEqual(["prod", "billing"]);
   });
 
-  test("defaults active to false when there is no meta block", () => {
-    expect(generateTsWorkflow(simple)).not.toContain("export const meta");
+  test("always writes active, so a generated file never reads back as inactive", () => {
+    // Omitting `active: false` would make apply deactivate a running workflow
+    // the first time the file round-trips.
+    expect(generateTsWorkflow(simple)).toContain("active: false");
     expect(roundTrip(simple).active).toBe(false);
   });
 
-  test("produces node IDs that are identical across runs", () => {
-    const first = roundTrip(simple).nodes.map((n) => n.id);
-    const second = roundTrip(simple).nodes.map((n) => n.id);
+  test("preserves node IDs exactly via meta.nodeIds", () => {
+    expect(roundTrip(simple).nodes.map((n) => n.id)).toEqual(["n1", "n2"]);
+  });
+
+  test("derives stable node IDs for a hand-written file with no meta.nodeIds", () => {
+    const handwritten = [
+      `const t = trigger({ type: 'n8n-nodes-base.manualTrigger', version: 1, config: { name: 'T' } });`,
+      `const wf = workflow('wf-hand', 'Hand');`,
+      "export default wf.add(t)",
+      "",
+    ].join("\n");
+
+    const first = parseTsWorkflow(handwritten, "wf-hand").nodes.map((n) => n.id);
+    const second = parseTsWorkflow(handwritten, "wf-hand").nodes.map((n) => n.id);
 
     expect(first).toEqual(second);
+    expect(first[0]).toMatch(/^[0-9a-f-]{36}$/);
+  });
+
+  test("does not invent a settings object for a workflow that has none", () => {
+    // `builder.toJSON()` always returns `settings: {}`; passing that on would
+    // make apply send `settings: {}` and wipe the server's settings.
+    expect(roundTrip(simple).settings).toBeUndefined();
   });
 
   test("emits an import statement covering every SDK function used", () => {

@@ -37,14 +37,16 @@ export function parseTsWorkflow(
 
   const builder = parseWorkflowCodeToBuilder(code);
 
-  // The SDK mints random node IDs on every parse; replace them with values
-  // derived from the workflow ID and node name so diffs stay stable.
+  // The SDK mints random node IDs on every parse. Prefer the IDs recorded in the
+  // metadata block, fall back to IDs derived from the workflow ID and node name
+  // for hand-written files that have none — either way they are stable, so a
+  // workflow does not look changed on every apply.
   const workflowID = builder.id || fallbackID;
   const names = builder
     .toJSON()
     .nodes.map((n) => n.name)
     .filter((n): n is string => typeof n === "string");
-  builder.regenerateNodeIds(stableNodeIdMap(workflowID, names, options?.existing));
+  builder.regenerateNodeIds(stableNodeIdMap(workflowID, names, options?.existing, meta.nodeIds));
 
   const json = builder.toJSON();
 
@@ -57,7 +59,12 @@ export function parseTsWorkflow(
 
   const id = json.id || fallbackID;
   if (id) workflow.id = id;
-  if (json.settings) workflow.settings = json.settings as Workflow["settings"];
+  // `toJSON()` always returns a settings object, empty when the workflow has no
+  // settings. Passing that empty object on would make apply send `settings: {}`
+  // and wipe whatever the server has.
+  if (json.settings && Object.keys(json.settings).length > 0) {
+    workflow.settings = json.settings as Workflow["settings"];
+  }
   if (json.pinData) workflow.pinData = json.pinData as unknown as Workflow["pinData"];
   if (meta.isArchived !== undefined) workflow.isArchived = meta.isArchived;
   if (meta.tags) workflow.tags = meta.tags.map((name) => ({ id: "", name }));

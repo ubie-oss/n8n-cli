@@ -35,6 +35,15 @@ export interface TsWorkflowMeta {
   isArchived?: boolean;
   tags?: string[];
   /**
+   * Node IDs keyed by node name.
+   *
+   * The SDK's builder has no field for a node ID and mints a random UUID on
+   * every parse, so without this the IDs of a workflow would change every time
+   * it was read. Recording them here keeps a generated file an exact
+   * representation of the workflow it came from.
+   */
+  nodeIds?: Record<string, string>;
+  /**
    * Upstream `updatedAt` at the time the file was written.
    *
    * `import` skips a workflow whose local copy is at least as new as the remote
@@ -160,6 +169,20 @@ function coerceMeta(raw: unknown): TsWorkflowMeta {
     }
     meta.updatedAt = obj.updatedAt;
   }
+  if (obj.nodeIds !== undefined) {
+    const raw = obj.nodeIds;
+    if (raw == null || typeof raw !== "object" || Array.isArray(raw)) {
+      throw new TsPreprocessError(`${META_EXPORT_NAME}.nodeIds must be an object`);
+    }
+    const nodeIds: Record<string, string> = {};
+    for (const [name, id] of Object.entries(raw as Record<string, unknown>)) {
+      if (typeof id !== "string") {
+        throw new TsPreprocessError(`${META_EXPORT_NAME}.nodeIds values must be strings`);
+      }
+      nodeIds[name] = id;
+    }
+    meta.nodeIds = nodeIds;
+  }
 
   return meta;
 }
@@ -178,6 +201,13 @@ function isMetaExport(stmt: acorn.Statement | acorn.ModuleDeclaration): boolean 
 /** Reads the value of `export const meta = ...` from a statement. */
 function readMetaExport(stmt: acorn.ExportNamedDeclaration): TsWorkflowMeta {
   const decl = stmt.declaration as acorn.VariableDeclaration;
+  // The whole statement is removed, so a second declarator sharing it would be
+  // silently deleted along with the metadata. Refuse rather than do that.
+  if (decl.declarations.length > 1) {
+    throw new TsPreprocessError(
+      `${META_EXPORT_NAME} must be declared on its own, not alongside other exports`,
+    );
+  }
   const declarator = decl.declarations.find(
     (d) => d.id.type === "Identifier" && d.id.name === META_EXPORT_NAME,
   );

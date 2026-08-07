@@ -1,7 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { Workflow } from "@/api/types.ts";
-import { connectionsEqual, nodesEqual, pinDataEqual } from "@/apply/differ.ts";
+import {
+  connectionsEqual,
+  deepEqual,
+  nodesEqual,
+  pinDataEqual,
+  settingsEqual,
+} from "@/apply/differ.ts";
 import {
   extractWorkflowIDFromDirname,
   generateDirnameWithID,
@@ -151,9 +157,8 @@ export function writeWorkflowTS(filePath: string, workflow: Workflow): void {
  * Parses generated code back and reports the first field that does not survive
  * the round trip, or null when the workflow round-trips cleanly.
  *
- * Node IDs are excluded from the comparison on purpose: the `.ts` format has no
- * field for them, so the loader derives them from node names and `apply` adopts
- * the remote's IDs (see `ts/node-ids.ts` and `apply/executor.ts`).
+ * Node IDs are included: they round-trip through `meta.nodeIds`, so a generated
+ * file is an exact representation of the workflow it came from.
  */
 function describeRoundTripMismatch(workflow: Workflow, code: string): string | null {
   let parsed: Workflow;
@@ -164,16 +169,48 @@ function describeRoundTripMismatch(workflow: Workflow, code: string): string | n
   }
 
   if (parsed.name !== workflow.name) return "name";
-  if (!nodesEqual(stripNodeIDs(parsed.nodes), stripNodeIDs(workflow.nodes))) return "nodes";
+  if (!nodesEqual(parsed.nodes, workflow.nodes)) return describeNodeMismatch(parsed, workflow);
   if (!connectionsEqual(parsed.connections, workflow.connections)) return "connections";
   if (!pinDataEqual(parsed.pinData, workflow.pinData)) return "pinData";
+  if (!settingsEqual(parsed.settings, workflow.settings)) return "settings";
+  // `staticData` has no representation in the SDK at all, so it silently
+  // disappears rather than coming back wrong. Catch it here.
+  if (!deepEqual(parsed.staticData ?? null, workflow.staticData ?? null)) return "staticData";
 
   return null;
 }
 
-/** Copies nodes with the `id` field removed, for ID-insensitive comparison. */
-function stripNodeIDs(nodes: Workflow["nodes"] | undefined): Workflow["nodes"] {
-  return (nodes ?? []).map(({ id: _id, ...rest }) => rest as Workflow["nodes"][number]);
+/**
+ * Names the nodes and fields that changed, so the error tells the user what to
+ * look at instead of just "nodes".
+ */
+function describeNodeMismatch(parsed: Workflow, workflow: Workflow): string {
+  const parsedByName = new Map((parsed.nodes ?? []).map((n) => [n.name, n]));
+  const details: string[] = [];
+
+  for (const node of workflow.nodes ?? []) {
+    const other = parsedByName.get(node.name);
+    if (!other) {
+      details.push(`node "${node.name}" is missing`);
+      continue;
+    }
+    const fields = Object.keys(node).filter(
+      (key) =>
+        !deepEqual(
+          (node as unknown as Record<string, unknown>)[key],
+          (other as unknown as Record<string, unknown>)[key],
+        ),
+    );
+    if (fields.length > 0) {
+      details.push(`node "${node.name}": ${fields.join(", ")}`);
+    }
+  }
+
+  if (parsed.nodes?.length !== workflow.nodes?.length) {
+    details.push(`node count ${workflow.nodes?.length} → ${parsed.nodes?.length}`);
+  }
+
+  return details.length > 0 ? `nodes — ${details.join("; ")}` : "nodes";
 }
 
 /**

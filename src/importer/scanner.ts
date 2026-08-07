@@ -23,7 +23,7 @@ const permissiveSchema = yaml.DEFAULT_SCHEMA.extend([permissiveIncludeType]);
  * Scans a directory recursively for workflow JSON and YAML files.
  * Returns a WorkflowIDMap containing workflow ID → file path mappings.
  */
-export function scanDirectory(dir: string): WorkflowIDMap {
+export function scanDirectory(dir: string, tsEnabled = false): WorkflowIDMap {
   const idMap = new WorkflowIDMap();
 
   if (!fs.existsSync(dir)) {
@@ -36,7 +36,7 @@ export function scanDirectory(dir: string): WorkflowIDMap {
   }
 
   walkDir(dir, (filePath) => {
-    if (!isWorkflowCandidate(filePath)) return;
+    if (!isWorkflowCandidate(filePath, tsEnabled)) return;
     const id = extractWorkflowID(filePath);
     if (id) idMap.add(id, filePath);
   });
@@ -45,20 +45,26 @@ export function scanDirectory(dir: string): WorkflowIDMap {
 }
 
 /**
- * True when a path has an extension we can read a workflow out of.
+ * True when a path is a workflow file this scan should read.
  *
- * `.d.ts` files are excluded: they are type declarations, never workflows.
+ * `.ts` is only a candidate when the caller asked for it: a definitions
+ * directory that holds `.ts` workflows also holds ordinary TypeScript, and
+ * treating those as workflows would let `--cleanup-orphans` delete them.
  */
-function isWorkflowCandidate(filePath: string): boolean {
-  if (filePath.toLowerCase().endsWith(".d.ts")) return false;
-  return detectWorkflowFormat(filePath) != null;
+function isWorkflowCandidate(filePath: string, tsEnabled: boolean): boolean {
+  const format = detectWorkflowFormat(filePath);
+  if (format == null) return false;
+  return format !== "ts" || tsEnabled;
 }
 
 /**
  * Scans a directory recursively for workflow files, returning both
  * a WorkflowIDMap (files with IDs) and an OrphanFileMap (files without IDs).
  */
-export function scanDirectoryWithOrphans(dir: string): [WorkflowIDMap, OrphanFileMap] {
+export function scanDirectoryWithOrphans(
+  dir: string,
+  tsEnabled = false,
+): [WorkflowIDMap, OrphanFileMap] {
   const idMap = new WorkflowIDMap();
   const orphanMap = new OrphanFileMap();
 
@@ -72,7 +78,7 @@ export function scanDirectoryWithOrphans(dir: string): [WorkflowIDMap, OrphanFil
   }
 
   walkDir(dir, (filePath) => {
-    if (!isWorkflowCandidate(filePath)) return;
+    if (!isWorkflowCandidate(filePath, tsEnabled)) return;
 
     const [id, name] = extractIDAndName(filePath);
     const sourceType = detectWorkflowFormat(filePath) as SourceType;
@@ -119,35 +125,58 @@ function walkDir(dir: string, callback: (filePath: string, entry: fs.Dirent) => 
 
 /** Extracts the workflow ID from a JSON/YAML/TS file by parsing the `id` field. */
 function extractWorkflowID(filePath: string): string {
-  try {
-    const [rawId] = readIdAndNameFields(filePath);
-    const id = typeof rawId === "string" ? rawId : typeof rawId === "number" ? String(rawId) : "";
-    if (id) {
-      // Check filename ID mismatch
-      const [filenameID, found] = extractWorkflowIDFromFilename(filePath);
-      if (found && filenameID !== id) {
-        console.error(
-          `Warning: ${filePath}: filename ID (${filenameID}) does not match file ID (${id}), using file ID`,
-        );
-      }
-      return id;
-    }
-  } catch {
-    // Silently skip unparseable files
-  }
-  return "";
+  return extractIDAndName(filePath)[0];
 }
 
 /** Extracts both ID and name from a JSON/YAML/TS file. */
 function extractIDAndName(filePath: string): [string, string] {
+  let rawId: unknown;
+  let rawName: unknown;
   try {
-    const [rawId, rawName] = readIdAndNameFields(filePath);
-    const id = typeof rawId === "string" ? rawId : typeof rawId === "number" ? String(rawId) : "";
-    const name = typeof rawName === "string" ? rawName : "";
-    return [id, name];
-  } catch {
-    return ["", ""];
+    [rawId, rawName] = readIdAndNameFields(filePath);
+  } catch (err) {
+    return [idFromUnreadableFile(filePath, err), ""];
   }
+
+  const id = typeof rawId === "string" ? rawId : typeof rawId === "number" ? String(rawId) : "";
+  const name = typeof rawName === "string" ? rawName : "";
+
+  if (id) {
+    // Check filename ID mismatch
+    const [filenameID, found] = extractWorkflowIDFromFilename(filePath);
+    if (found && filenameID !== id) {
+      console.error(
+        `Warning: ${filePath}: filename ID (${filenameID}) does not match file ID (${id}), using file ID`,
+      );
+    }
+  }
+
+  return [id, name];
+}
+
+/**
+ * Recovers the workflow ID of a `.ts` file that failed to parse, from its
+ * filename.
+ *
+ * Without this a broken `.ts` workflow simply disappears from the scan, and
+ * `import` happily writes a second file for the same workflow — leaving the user
+ * with a duplicate and no explanation. Falling back to the filename keeps the
+ * slot occupied; the warning says why the file was not read.
+ *
+ * Limited to `.ts` on purpose: unreadable JSON and YAML have always been skipped
+ * silently, and changing that is a separate decision.
+ */
+function idFromUnreadableFile(filePath: string, err: unknown): string {
+  if (detectWorkflowFormat(filePath) !== "ts") return "";
+
+  const [filenameID, found] = extractWorkflowIDFromFilename(filePath);
+  if (!found) return "";
+
+  console.error(
+    `Warning: ${filePath}: could not be parsed (${err instanceof Error ? err.message : String(err)}); ` +
+      `using the ID from its filename (${filenameID})`,
+  );
+  return filenameID;
 }
 
 /**

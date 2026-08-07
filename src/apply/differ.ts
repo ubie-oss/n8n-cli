@@ -173,7 +173,7 @@ export function isEmpty(v: unknown): boolean {
 }
 
 /** Deep equality comparison using stable (key-sorted) JSON serialization. */
-function deepEqual(a: unknown, b: unknown): boolean {
+export function deepEqual(a: unknown, b: unknown): boolean {
   return stableStringify(a) === stableStringify(b);
 }
 
