@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { Command } from "commander";
 import type { Workflow } from "@/api/types.ts";
+import { registerImportCommand } from "@/cli/commands/import.ts";
 import {
   detectWorkflowFormat,
   WORKFLOW_EXTENSIONS,
@@ -236,38 +237,88 @@ describe("metadata block edge cases", () => {
 describe("import format flags distinguish 'not passed' from 'explicitly off'", () => {
   // A commander `.option(..., false)` default makes an unpassed flag report
   // `false`, which is indistinguishable from `--no-yaml` / `--no-ts` — so the
-  // CLAUDE.md setting could never be reached.
-  function resolve(argv: string[]): { yaml: [boolean, boolean]; ts: [boolean, boolean] } {
+  // CLAUDE.md setting could never be reached. Asserted against the real command
+  // definition, not a stand-in built in the test.
+  function importCommand() {
     const program = new Command();
-    let opts: Record<string, unknown> = {};
-    program
-      .command("import")
-      .option("--yaml", "y")
-      .option("--no-yaml", "ny")
-      .option("--ts", "t")
-      .option("--no-ts", "nt")
-      .action((o) => {
-        opts = o as Record<string, unknown>;
-      });
-    program.parse(["node", "cli", "import", ...argv]);
-
-    return {
-      yaml: [opts.yaml === true, opts.yaml === false && "yaml" in opts],
-      ts: [opts.ts === true, opts.ts === false && "ts" in opts],
-    };
+    registerImportCommand(program);
+    const cmd = program.commands.find((c) => c.name() === "import");
+    if (!cmd) throw new Error("import command was not registered");
+    return cmd;
   }
 
-  test("no flag leaves both undecided, so the config is consulted", () => {
-    expect(resolve([])).toEqual({ yaml: [false, false], ts: [false, false] });
+  function parsedOptions(argv: string[]): Record<string, unknown> {
+    const cmd = importCommand();
+    // Stop before the action handler, which would try to reach a server.
+    cmd.exitOverride();
+    cmd.parseOptions(argv);
+    return cmd.opts() as Record<string, unknown>;
+  }
+
+  test("neither format flag carries a default value", () => {
+    const options = importCommand().options;
+    for (const long of ["--yaml", "--ts"]) {
+      const option = options.find((o) => o.long === long);
+      expect(option).toBeDefined();
+      expect(option?.defaultValue).toBeUndefined();
+    }
   });
 
-  test("--ts and --no-ts are distinguishable", () => {
-    expect(resolve(["--ts"]).ts).toEqual([true, false]);
-    expect(resolve(["--no-ts"]).ts).toEqual([false, true]);
+  test("an unpassed flag is undefined, so the config is consulted", () => {
+    const opts = parsedOptions([]);
+    expect(opts.yaml).toBeUndefined();
+    expect(opts.ts).toBeUndefined();
   });
 
-  test("--yaml and --no-yaml are distinguishable", () => {
-    expect(resolve(["--yaml"]).yaml).toEqual([true, false]);
-    expect(resolve(["--no-yaml"]).yaml).toEqual([false, true]);
+  test("--ts and --no-ts stay distinguishable", () => {
+    expect(parsedOptions(["--ts"]).ts).toBe(true);
+    expect(parsedOptions(["--no-ts"]).ts).toBe(false);
+  });
+
+  test("--yaml and --no-yaml stay distinguishable", () => {
+    expect(parsedOptions(["--yaml"]).yaml).toBe(true);
+    expect(parsedOptions(["--no-yaml"]).yaml).toBe(false);
+  });
+});
+
+describe("an unparseable .ts is only claimed as a workflow in ts mode", () => {
+  test("ordinary TypeScript named like a workflow is left alone", () => {
+    // `utils__abc123.ts` is a helper, not the workflow `abc123`. Claiming it
+    // would let import overwrite — or rename and delete — the user's source file.
+    fs.writeFileSync(
+      path.join(dir, "utils__abc123.ts"),
+      "export const add = (a: number) => a + 1;\n",
+    );
+
+    const [ids] = scanDirectoryWithOrphans(dir, false);
+
+    expect(ids.count()).toBe(0);
+  });
+
+  test("but a broken .ts workflow still holds its slot when ts mode is on", () => {
+    fs.writeFileSync(path.join(dir, "broken__abc123.ts"), "const a = (((;\n");
+
+    const [ids] = scanDirectoryWithOrphans(dir, true);
+
+    expect(ids.get("abc123")[1]).toBe(true);
+  });
+});
+
+describe("empty-string node IDs", () => {
+  test("count as absent on both sides of the comparison", () => {
+    // Otherwise the source's `id: ""` and the loader's derived ID read as a
+    // difference and the workflow could never be written.
+    const wf = workflow();
+    const nodes = wf.nodes.map((n) => ({ ...n, id: "" }));
+
+    expect(() => writeWorkflowTS(path.join(dir, "empty-ids.ts"), { ...wf, nodes })).not.toThrow();
+  });
+
+  test("a node whose real ID changed still fails", () => {
+    // The relaxation above must not swallow a genuine ID mismatch.
+    const wf = workflow();
+    const code = generateTsWorkflow(wf).replace('"bbb"', '"tampered"');
+
+    expect(parseTsWorkflow(code, "wf-1").nodes[1]?.id).toBe("tampered");
   });
 });

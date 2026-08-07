@@ -23,7 +23,7 @@ const permissiveSchema = yaml.DEFAULT_SCHEMA.extend([permissiveIncludeType]);
  * Scans a directory recursively for workflow JSON and YAML files.
  * Returns a WorkflowIDMap containing workflow ID → file path mappings.
  */
-export function scanDirectory(dir: string): WorkflowIDMap {
+export function scanDirectory(dir: string, tsEnabled = false): WorkflowIDMap {
   const idMap = new WorkflowIDMap();
 
   if (!fs.existsSync(dir)) {
@@ -37,7 +37,7 @@ export function scanDirectory(dir: string): WorkflowIDMap {
 
   walkDir(dir, (filePath) => {
     if (!isWorkflowCandidate(filePath)) return;
-    const id = extractWorkflowID(filePath);
+    const id = extractWorkflowID(filePath, tsEnabled);
     if (id) idMap.add(id, filePath);
   });
 
@@ -72,7 +72,7 @@ export function scanDirectoryWithOrphans(
   walkDir(dir, (filePath) => {
     if (!isWorkflowCandidate(filePath)) return;
 
-    const [id, name] = extractIDAndName(filePath);
+    const [id, name] = extractIDAndName(filePath, tsEnabled);
     const sourceType = detectWorkflowFormat(filePath) as SourceType;
     if (id) {
       // Files with an ID are always indexed, whatever their format. Skipping
@@ -123,18 +123,18 @@ function walkDir(dir: string, callback: (filePath: string, entry: fs.Dirent) => 
 }
 
 /** Extracts the workflow ID from a JSON/YAML/TS file by parsing the `id` field. */
-function extractWorkflowID(filePath: string): string {
-  return extractIDAndName(filePath)[0];
+function extractWorkflowID(filePath: string, tsEnabled: boolean): string {
+  return extractIDAndName(filePath, tsEnabled)[0];
 }
 
 /** Extracts both ID and name from a JSON/YAML/TS file. */
-function extractIDAndName(filePath: string): [string, string] {
+function extractIDAndName(filePath: string, tsEnabled: boolean): [string, string] {
   let rawId: unknown;
   let rawName: unknown;
   try {
     [rawId, rawName] = readIdAndNameFields(filePath);
   } catch (err) {
-    return [idFromUnreadableFile(filePath, err), ""];
+    return [idFromUnreadableFile(filePath, err, tsEnabled), ""];
   }
 
   const id = typeof rawId === "string" ? rawId : typeof rawId === "number" ? String(rawId) : "";
@@ -163,9 +163,13 @@ function extractIDAndName(filePath: string): [string, string] {
  * slot occupied; the warning says why the file was not read.
  *
  * Limited to `.ts` on purpose: unreadable JSON and YAML have always been skipped
- * silently, and changing that is a separate decision.
+ * silently, and changing that is a separate decision. It also only applies when
+ * ts mode is on — otherwise an ordinary TypeScript file that happens to be named
+ * `utils__abc123.ts` would be claimed as the workflow `abc123`, and import would
+ * overwrite it with whatever the server has under that ID.
  */
-function idFromUnreadableFile(filePath: string, err: unknown): string {
+function idFromUnreadableFile(filePath: string, err: unknown, tsEnabled: boolean): string {
+  if (!tsEnabled) return "";
   if (detectWorkflowFormat(filePath) !== "ts") return "";
 
   const [filenameID, found] = extractWorkflowIDFromFilename(filePath);

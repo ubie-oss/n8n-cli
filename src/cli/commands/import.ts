@@ -33,10 +33,12 @@ export function registerImportCommand(parent: Command): void {
       const ctx = resolveContext(command.parent!);
       const cliConfig = loadCLIConfig();
 
+      // The flags carry no default, so `undefined` means "not passed" and the
+      // CLAUDE.md setting decides.
       const yamlFlag = options.yaml === true;
-      const noYamlFlag = options.yaml === false && "yaml" in options;
+      const noYamlFlag = options.yaml === false;
       const tsFlag = options.ts === true;
-      const noTsFlag = options.ts === false && "ts" in options;
+      const noTsFlag = options.ts === false;
 
       // Unlike apply — which scans every enabled format — import writes one
       // format per new workflow, so asking for two is a mistake worth catching

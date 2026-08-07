@@ -168,11 +168,11 @@ function describeRoundTripMismatch(workflow: Workflow, code: string): string | n
     return err instanceof Error ? err.message : String(err);
   }
 
-  const parsedNodes = alignSynthesisedNodeIDs(parsed.nodes, workflow.nodes);
+  const nodes = alignSynthesisedNodeIDs(parsed.nodes, workflow.nodes);
 
   if (parsed.name !== workflow.name) return "name";
-  if (!nodesEqual(parsedNodes, workflow.nodes)) {
-    return describeNodeMismatch(parsedNodes, workflow);
+  if (!nodesEqual(nodes.parsed, nodes.source)) {
+    return describeNodeMismatch(nodes.parsed, nodes.source);
   }
   if (!connectionsEqual(parsed.connections, workflow.connections)) return "connections";
   if (!pinDataEqual(parsed.pinData, workflow.pinData)) return "pinData";
@@ -196,35 +196,43 @@ function orUndefined<T extends object>(value: T | undefined): T | undefined {
 }
 
 /**
- * Drops node IDs the loader had to invent.
+ * Drops node IDs the loader had to invent, from both sides of the comparison.
  *
  * A workflow whose nodes carry no `id` — hand-written JSON, typically — has
  * nothing to record in `meta.nodeIds`, so the loader derives one. That is not a
  * loss of information and must not fail the round-trip check; a node that *did*
- * have an ID is still compared.
+ * have an ID is still compared. An empty-string `id` counts as absent, so that
+ * `""` and a derived ID do not read as a difference either.
  */
 function alignSynthesisedNodeIDs(
   parsedNodes: Workflow["nodes"] | undefined,
   sourceNodes: Workflow["nodes"] | undefined,
-): Workflow["nodes"] {
+): { parsed: Workflow["nodes"]; source: Workflow["nodes"] } {
   const sourceHasID = new Map((sourceNodes ?? []).map((n) => [n.name, !!n.id]));
 
-  return (parsedNodes ?? []).map((node) => {
-    if (sourceHasID.get(node.name) !== false) return node;
+  const withoutID = (node: Workflow["nodes"][number]) => {
     const { id: _id, ...rest } = node;
     return rest as Workflow["nodes"][number];
-  });
+  };
+
+  return {
+    parsed: (parsedNodes ?? []).map((n) => (sourceHasID.get(n.name) === false ? withoutID(n) : n)),
+    source: (sourceNodes ?? []).map((n) => (n.id ? n : withoutID(n))),
+  };
 }
 
 /**
  * Names the nodes and fields that changed, so the error tells the user what to
  * look at instead of just "nodes".
  */
-function describeNodeMismatch(parsedNodes: Workflow["nodes"], workflow: Workflow): string {
+function describeNodeMismatch(
+  parsedNodes: Workflow["nodes"],
+  sourceNodes: Workflow["nodes"],
+): string {
   const parsedByName = new Map(parsedNodes.map((n) => [n.name, n]));
   const details: string[] = [];
 
-  for (const node of workflow.nodes ?? []) {
+  for (const node of sourceNodes) {
     const other = parsedByName.get(node.name);
     if (!other) {
       details.push(`node "${node.name}" is missing`);
@@ -245,8 +253,8 @@ function describeNodeMismatch(parsedNodes: Workflow["nodes"], workflow: Workflow
     }
   }
 
-  if (parsedNodes.length !== workflow.nodes?.length) {
-    details.push(`node count ${workflow.nodes?.length} → ${parsedNodes.length}`);
+  if (parsedNodes.length !== sourceNodes.length) {
+    details.push(`node count ${sourceNodes.length} → ${parsedNodes.length}`);
   }
 
   return details.length > 0 ? `nodes — ${details.join("; ")}` : "nodes";
