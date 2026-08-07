@@ -4,9 +4,9 @@ A command-line interface for managing [n8n](https://n8n.io/) workflows as code. 
 
 ## Features
 
-- **Apply** - Deploy local workflow definitions (JSON/YAML) to an n8n server with dry-run support and conflict detection
-- **Convert** - Convert workflow files between JSON and YAML formats locally
-- **Import** - Pull workflows from an n8n server to local files, with optional YAML conversion and code externalization
+- **Apply** - Deploy local workflow definitions (JSON/YAML/TypeScript) to an n8n server with dry-run support and conflict detection
+- **Convert** - Convert workflow files between JSON, YAML and TypeScript formats locally
+- **Import** - Pull workflows from an n8n server to local files, with optional YAML/TypeScript conversion and code externalization
 - **Lint** - Validate workflow definitions against configurable rules
 - **Proxy** - Transparent HTTP proxy that intercepts workflow saves to the n8n public API and runs lint server-side, blocking violations before they reach n8n
 - **Format** - Auto-organize node positions for cleaner workflow layouts
@@ -21,7 +21,8 @@ A command-line interface for managing [n8n](https://n8n.io/) workflows as code. 
 - **Trace** - Analyze data flow and item cardinality through workflow nodes
 - **Git integration** - Apply only workflows changed in a Git diff
 - **YAML support** - Work with YAML workflow definitions and external code/SQL files
-- **CLAUDE.md integration** - Read project settings (default project ID, auto tags, YAML mode) from CLAUDE.md
+- **TypeScript support** - Work with type-checked `.ts` workflow definitions written against [`@n8n/workflow-sdk`](https://www.npmjs.com/package/@n8n/workflow-sdk)
+- **CLAUDE.md integration** - Read project settings (default project ID, auto tags, YAML mode, TypeScript mode) from CLAUDE.md
 
 ## Installation
 
@@ -102,6 +103,7 @@ n8n-cli apply [options]
 | `--force` | Override conflict detection and duplicate warnings |
 | `--no-auto-tag` | Disable automatic tagging |
 | `--yaml` / `--no-yaml` | Enable/disable YAML file processing |
+| `--ts` / `--no-ts` | Enable/disable `.ts` file processing (see [TypeScript workflow definitions](#typescript-workflow-definitions)) |
 | `--allow-duplicates` | Skip the upstream duplicate-name check (the check is on by default; use `--force` to push through warnings instead of disabling the check) |
 | `--no-lint` | Skip the pre-write lint check (the check is on by default; an error-level violation marks the workflow as failed and prevents the API call. `--force` does NOT bypass lint failures — they represent policy, not merge conflicts) |
 | `--lint-config <path>` | Path to `.n8nlintrc.json` used by the pre-write lint check (auto-discovered if omitted) |
@@ -117,7 +119,7 @@ n8n-cli apply [options]
 
 ### `convert`
 
-Convert workflow files between formats (JSON ↔ YAML). This is a local-only operation that does not require an n8n server connection.
+Convert workflow files between formats (JSON / YAML / TypeScript). This is a local-only operation that does not require an n8n server connection.
 
 ```bash
 n8n-cli convert [options] [files...]
@@ -125,7 +127,7 @@ n8n-cli convert [options] [files...]
 
 | Option | Description |
 |--------|-------------|
-| `--format <format>` | Target format: `json`, `yaml` (required) |
+| `--format <format>` | Target format: `json`, `yaml`, `ts` (required) |
 | `-d, --directory <dir>` | Directory to scan for workflow files |
 | `--ids <ids>` | Comma-separated workflow IDs to convert |
 | `--tags <tags>` | Filter by tags (comma-separated, AND condition) |
@@ -156,6 +158,7 @@ n8n-cli convert --format yaml workflow__wf-100.json
 
 - **JSON → YAML**: Generates YAML with code externalization (`_subfiles/`) and `description.md`
 - **YAML → JSON**: Resolves `!include` directives (inlines external files) and removes `_subfiles/` directories
+- **→ TypeScript**: Emits a `.ts` file against `@n8n/workflow-sdk`. The generated file is parsed back and compared against the source before it is written; a workflow the SDK cannot represent faithfully fails with an error instead of being silently mangled
 - Files already in the target format are skipped
 - Original files are removed after conversion unless `--keep` is specified
 
@@ -174,6 +177,7 @@ n8n-cli import [options]
 | `--ids <ids>` | Comma-separated workflow IDs to import (empty = all) |
 | `--include-archived` | Include archived workflows |
 | `--yaml` / `--no-yaml` | Output as YAML format with external files / Force JSON |
+| `--ts` / `--no-ts` | Write new workflows as `.ts` against `@n8n/workflow-sdk` |
 | `-t, --threshold <n>` | Minimum lines for code externalization |
 | `--cleanup-orphans` | Delete local files without matching remote workflow |
 | `--cleanup-subfiles` | Delete orphan external files |
@@ -1000,6 +1004,117 @@ n8n-cli version
 | `--timeout <duration>` | Request timeout, e.g. `30s`, `5m` (env: `N8N_API_TIMEOUT`) |
 | `-o, --output <format>` | Output format: `json`, `table` (default: `json`) |
 
+## TypeScript workflow definitions
+
+Workflows can be stored as `.ts` files written against
+[`@n8n/workflow-sdk`](https://www.npmjs.com/package/@n8n/workflow-sdk), giving you
+type-checked, reviewable workflow definitions alongside — or instead of — JSON and
+YAML.
+
+```bash
+# Author a .ts workflow, then deploy it
+n8n-cli apply --ts --ids wf-100 -d ./definitions
+
+# Pull workflows down as .ts
+n8n-cli import --ts -d ./definitions
+
+# Convert existing definitions
+n8n-cli convert --format ts -d ./definitions
+```
+
+`apply` skips `.ts` files unless the format is enabled, so unrelated TypeScript
+sitting in a definitions directory is never parsed as a workflow. Enable it
+per-invocation with `--ts`, or project-wide via the `TypeScript Mode` row in
+CLAUDE.md.
+
+`import` behaves like it does for YAML: `--ts` chooses the format for workflows
+being written for the first time, while an existing `.ts` file is always
+recognised and updated in place, so a workflow never silently switches format.
+
+Importing a workflow whose local `.ts` file is already up to date is skipped
+entirely — the generated `meta.updatedAt` records the upstream timestamp, so your
+comments, variable names and formatting are left alone.
+
+### Mixing formats safely
+
+JSON, YAML and `.ts` can coexist in one directory. Every file, whatever its
+format, is resolved to the same internal workflow representation and then checked
+for duplicate workflow IDs — so a workflow accidentally defined twice in two
+different formats is reported as an error rather than one silently winning:
+
+```
+Error: duplicate workflow ID: wf-100
+  Files:
+    - definitions/orders__wf-100.json
+    - definitions/orders__wf-100.ts
+```
+
+A `.ts` file that fails to parse is reported against that file alone; the rest of
+the directory still applies.
+
+### File format
+
+```typescript
+import { workflow, trigger, node } from "@n8n/workflow-sdk";
+
+// Optional. Carries the fields the SDK has no representation for.
+export const meta = {
+  active: true,
+  tags: ["managed-as-code"],
+};
+
+const start = trigger({
+  type: "n8n-nodes-base.manualTrigger",
+  version: 1,
+  config: { name: "Trigger" },
+});
+
+const set = node({
+  type: "n8n-nodes-base.set",
+  version: 3.4,
+  config: { name: "Set", parameters: { value: "={{ $json.x }}" } },
+});
+
+const wf = workflow("wf-100", "My workflow");
+
+export default wf.add(start).to(set);
+```
+
+Install the SDK in your definitions repository (`bun add -d @n8n/workflow-sdk`) to
+get editor type-checking. n8n-cli does **not** need it installed — the parser is
+bundled into the binary.
+
+### How it is parsed
+
+`.ts` workflows are **never executed**. n8n-cli strips TypeScript syntax and the
+module imports, then hands the result to the SDK's AST interpreter, which
+evaluates a small whitelist of SDK calls without `eval()` or `new Function()`.
+A workflow file cannot read your environment, touch the filesystem, or make
+network calls.
+
+### Limitations
+
+The accepted subset is deliberately narrow — it is a declarative format that
+happens to be valid TypeScript, not a general program:
+
+- only `const` declarations, expression statements and a single `export default`
+- no `let`/`var`, destructuring, loops, conditionals, or function definitions
+- no importing shared helpers from other files (imports are stripped, not resolved)
+- `export const meta` must be an object literal of static values
+
+Two further consequences of the SDK's data model:
+
+- **Node IDs are not stored in `.ts`.** The SDK has no field for them, so n8n-cli
+  derives each node's ID deterministically from the workflow ID and node name.
+  IDs stay stable across runs, and on `apply` the IDs already used upstream for
+  the same node names are adopted, so switching a workflow to `.ts` does not churn
+  them.
+- **Conversion to `.ts` is verified.** `convert --format ts` and `import --ts`
+  parse the generated file back and compare it against the source; a workflow the
+  SDK cannot represent faithfully fails loudly rather than producing a subtly
+  wrong file.
+
+
 ## Configuration
 
 ### Environment Variables
@@ -1094,6 +1209,7 @@ n8n-cli can read project settings from a `CLAUDE.md` file in your repository:
 - **Default project ID** - Automatically set the target project for apply
 - **Auto tags** - Tags to automatically add to deployed workflows
 - **YAML mode** - Enable/disable YAML processing by default
+- **TypeScript mode** - Enable/disable `.ts` processing by default (table key: `TypeScript モード`, `TypeScript Mode` or `tsEnabled`)
 - **Externalize threshold** - Minimum lines for code externalization during import
 
 ## Documentation
@@ -1106,4 +1222,24 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, build instructions
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+n8n-cli's own source code is licensed under the MIT License — see the [LICENSE](LICENSE) file.
+
+The distributed **binary is an aggregate work**. `bun build --compile` links every
+production dependency into the executable, and those dependencies keep their own
+licenses; the MIT license above covers only n8n-cli's own code and does not
+relicense them.
+
+In particular, the bundled n8n packages — including `n8n-workflow` and
+`@n8n/workflow-sdk` — are distributed under the
+[n8n Sustainable Use License](https://docs.n8n.io/privacy-and-security/sustainable-use-license),
+which is a source-available license, not a permissive one. Its Notices clause
+requires that anyone receiving a copy of the software also receives a copy of its
+terms, so [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md) lists every bundled
+dependency with its license text and is attached to each GitHub release.
+
+That file is generated from the lockfile and verified in CI:
+
+```bash
+bun run generate-third-party-licenses   # regenerate after changing dependencies
+bun run check-third-party-licenses      # fail if it is out of date
+```
