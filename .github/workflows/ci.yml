@@ -135,6 +135,16 @@ jobs:
 
           export default wf.add(t)
           EOF
-          ./n8n-cli convert --format json -d /tmp/defs --keep
+          cat > /tmp/defs/not-a-workflow.ts <<'EOF'
+          export const helper = (a: number) => a + 1;
+          EOF
+
+          # Without --ts the directory scan must ignore .ts entirely, so there is
+          # nothing to convert. A definitions directory full of ordinary
+          # TypeScript must never be mistaken for workflows.
+          ! ./n8n-cli convert --format json -d /tmp/defs --keep 2>/dev/null
+          test ! -f /tmp/defs/smoke__wf-smoke.json
+
+          ./n8n-cli convert --format json -d /tmp/defs --ts --keep || true
           test -f /tmp/defs/smoke__wf-smoke.json
           grep -q '"name": "Smoke"' /tmp/defs/smoke__wf-smoke.json
