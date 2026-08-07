@@ -1019,8 +1019,13 @@ n8n-cli apply --ts --ids wf-100 -d ./definitions
 # Pull workflows down as .ts
 n8n-cli import --ts -d ./definitions
 
-# Convert existing definitions
+# Convert existing JSON/YAML definitions to .ts
 n8n-cli convert --format ts -d ./definitions
+
+# Go back the other way. Directory scans need --ts to look at .ts at all;
+# an explicit file path is always honoured.
+n8n-cli convert --format json -d ./definitions --ts
+n8n-cli convert --format json ./definitions/orders__wf-100.ts
 ```
 
 `apply` skips `.ts` files unless the format is enabled, so unrelated TypeScript
@@ -1105,7 +1110,8 @@ happens to be valid TypeScript, not a general program:
 - only `const` declarations, expression statements and a single `export default`
 - no `let`/`var`, destructuring, loops, conditionals, or function definitions
 - no importing shared helpers from other files (imports are stripped, not resolved)
-- `export const meta` must be an object literal of static values
+- `export const meta` must be an object literal of static values, declared on its
+  own rather than sharing a statement with another export
 
 Two further consequences of the SDK's data model:
 
