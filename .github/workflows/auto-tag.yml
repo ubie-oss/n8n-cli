@@ -1,0 +1,73 @@
+name: Auto Tag
+
+# Tags a release whenever a version bump lands on main, so releasing is just
+# "merge the version bump PR" instead of a manual `git tag && git push`.
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'package.json'
+  # Escape hatch for a bump that never got tagged — because it landed while
+  # this workflow was broken, or alongside a change that did not touch
+  # package.json. If the tag was pushed but the release jobs failed, this is
+  # the wrong lever (the guard below will skip): re-run the failed run instead.
+  workflow_dispatch:
+
+# Serialise so two bumps landing back to back cannot race on tag creation.
+concurrency:
+  group: auto-tag
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  tag:
+    name: Tag version bump
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+      tagged: ${{ steps.check.outputs.tagged }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # ratchet:actions/checkout@v4
+
+      # The condition is "no tag exists for the current version" rather than
+      # "package.json changed in this push": it is idempotent, survives
+      # re-runs, force pushes and squash merges, and cannot double-tag an
+      # already released version.
+      - name: Check whether this version needs a tag
+        id: check
+        run: |
+          version="v$(node -p "require('./package.json').version")"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+
+          if [ -n "$(git ls-remote --tags origin "refs/tags/${version}")" ]; then
+            echo "tagged=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::${version} is already tagged; nothing to release."
+            exit 0
+          fi
+
+          echo "tagged=true" >> "$GITHUB_OUTPUT"
+          echo "::notice::Tagging ${version}."
+
+      - name: Create and push tag
+        if: steps.check.outputs.tagged == 'true'
+        env:
+          VERSION: ${{ steps.check.outputs.version }}
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          git tag -a "$VERSION" -m "$VERSION"
+          git push origin "$VERSION"
+
+  release:
+    name: Release
+    needs: [tag]
+    if: needs.tag.outputs.tagged == 'true'
+    # GITHUB_TOKEN is passed automatically; release.yml uses no other secrets.
+    # If it ever does, add `secrets: inherit` here or this path breaks quietly.
+    uses: ./.github/workflows/release.yml
+    with:
+      version: ${{ needs.tag.outputs.version }}
