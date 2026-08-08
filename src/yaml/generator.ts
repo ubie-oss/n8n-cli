@@ -349,9 +349,23 @@ export function buildYamlObject(
     id: workflow.id,
     name: workflow.name,
     active: workflow.active,
-    nodes,
-    connections: workflow.connections,
   };
+
+  // Server-assigned timestamp of the state this file was written from. It is
+  // never sent back on a write — it exists so `apply` can tell "my definition
+  // is based on the current upstream state" from "someone edited this workflow
+  // in the n8n UI after I last imported it", which is the difference between an
+  // update and an accidental revert. Only emitted when the source carries one,
+  // so hand-written files and `convert` output stay untouched.
+  //
+  // js-yaml quotes the ISO string on dump, which matters: an unquoted timestamp
+  // is parsed back as a `Date`, not a `string`.
+  if (workflow.updatedAt) {
+    result.updatedAt = workflow.updatedAt;
+  }
+
+  result.nodes = nodes;
+  result.connections = workflow.connections;
 
   if (workflow.settings) {
     result.settings = workflow.settings;

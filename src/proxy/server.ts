@@ -1,5 +1,7 @@
+import { STALE_WRITE_WARNING_HEADER } from "@/api/headers.ts";
 import type { Workflow } from "@/api/types.ts";
 import { hasAllTags } from "@/common/tags.ts";
+import { STALE_WRITE_RULE } from "@/middleware/builtin/stale-write/middleware.ts";
 import { buildClientMiddlewares } from "@/middleware/client-registry.ts";
 import {
   DEFAULT_CLIENT_MIDDLEWARE_CHAIN,
@@ -366,6 +368,16 @@ async function handleWorkflowMutation(
     }
     if (duplicateMatches.length > 0) {
       response.headers.set("x-n8n-duplicate-warning", String(duplicateMatches.length));
+    }
+    // A stale write that reached this point ran under `enforce: warn`. Say so
+    // out of band, the way the duplicate check does, so a client can notice it
+    // reverted something without the write having been refused.
+    const staleWrites = verdict.violations.filter((v) => v.rule === STALE_WRITE_RULE);
+    if (staleWrites.length > 0) {
+      response.headers.set(
+        STALE_WRITE_WARNING_HEADER.toLowerCase(),
+        staleWrites[0]?.message ?? "stale write",
+      );
     }
     const action = verdict.violations.length > 0 || duplicateMatches.length > 0 ? "warn" : "pass";
     deps.logger.log({

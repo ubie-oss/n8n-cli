@@ -13,6 +13,7 @@ import type { ServerMiddleware } from "../middleware/types.ts";
 import { DEFAULT_SERVER_MIDDLEWARE_CHAIN, registerBuiltins } from "../middleware/wiring.ts";
 import { compare } from "./differ.ts";
 import { DuplicateChecker } from "./duplicate.ts";
+import { updateLocalWorkflowFile } from "./local-file.ts";
 import { Scanner } from "./scanner.ts";
 import { TagMerger } from "./tags.ts";
 import { ThreeWayDetector } from "./threeway/detector.ts";
@@ -495,9 +496,39 @@ export class Executor {
       staticData: workflow.staticData,
     };
 
-    const updated = await this.workflowService.updateWorkflow(workflow.id!, input);
+    // The local timestamp, not the one just fetched from upstream: the claim
+    // being made is "my definition is based on this state", and a freshly
+    // fetched value would always match and assert nothing.
+    const updated = await this.workflowService.updateWorkflow(
+      workflow.id!,
+      input,
+      workflow.updatedAt,
+    );
     await this.applyTagsAndProject(updated, workflow, op);
-    await updateLocalWorkflowFile(wf.path, updated);
+    await updateLocalWorkflowFile(wf.path, await this.settledWorkflow(updated, op));
+  }
+
+  /**
+   * Returns the workflow as it stands after every post-write operation.
+   *
+   * Tagging, project transfer and activation are separate API calls that each
+   * bump `updatedAt` again, so the response to the update itself is already
+   * stale by the time they finish. Stamping a local file with it would leave
+   * the file permanently one step behind upstream, and the next edit would read
+   * as a conflict. Re-fetch only when one of those calls actually ran.
+   */
+  private async settledWorkflow(updated: Workflow, op: ApplyOperation): Promise<Workflow> {
+    const mutatedAfterWrite =
+      op.tagsAdded.length > 0 || op.projectMoved || op.activated !== undefined;
+    if (!mutatedAfterWrite || !updated.id) return updated;
+
+    try {
+      return await this.workflowService.getWorkflow(updated.id);
+    } catch {
+      // Non-fatal: the write succeeded, and a stamp that is one step behind is
+      // better than failing an apply that already did its job.
+      return updated;
+    }
   }
 
   /** Applies tags and transfers workflow to target project. */
@@ -605,36 +636,6 @@ function buildMiddlewareErrorMessage(
     errorOnly.length === 1 ? "" : "s"
   })${hint}`;
   return [summary, ...lines].join("\n  ");
-}
-
-/** Updates the local workflow file with server response data. */
-async function updateLocalWorkflowFile(filePath: string, workflow: Workflow): Promise<void> {
-  // Skip non-JSON files
-  const ext = path.extname(filePath).toLowerCase();
-  if (ext !== ".json") return;
-
-  let data: string;
-  try {
-    data = fs.readFileSync(filePath, "utf-8");
-  } catch {
-    return;
-  }
-
-  let existing: Record<string, unknown>;
-  try {
-    existing = JSON.parse(data);
-  } catch {
-    return;
-  }
-
-  existing.id = workflow.id;
-  existing.name = workflow.name;
-  existing.active = workflow.active;
-  if (workflow.updatedAt) existing.updatedAt = workflow.updatedAt;
-  if (workflow.createdAt) existing.createdAt = workflow.createdAt;
-
-  const output = JSON.stringify(existing, null, 2);
-  fs.writeFileSync(filePath, `${output}\n`);
 }
 
 /**

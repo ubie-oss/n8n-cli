@@ -1,4 +1,5 @@
 import type { Client } from "./client.ts";
+import { BASE_UPDATED_AT_HEADER } from "./headers.ts";
 import type { ListWorkflowsResponse, TransferInput, Workflow, WorkflowInput } from "./types.ts";
 
 /** ListOptions represents options for listing workflows */
@@ -87,10 +88,23 @@ export class WorkflowService {
     return JSON.parse(data) as Workflow;
   }
 
-  /** UpdateWorkflow updates an existing workflow */
-  async updateWorkflow(id: string, input: WorkflowInput): Promise<Workflow> {
+  /**
+   * UpdateWorkflow updates an existing workflow.
+   *
+   * `baseUpdatedAt` is the upstream timestamp the caller's definition was
+   * written from. It is advisory: n8n itself ignores it, but a `proxy` running
+   * the stale-write guard uses it to reject a write whose base is no longer
+   * the stored state. Omit it when the caller has no basis to claim one —
+   * sending a wrong value is worse than sending none.
+   */
+  async updateWorkflow(
+    id: string,
+    input: WorkflowInput,
+    baseUpdatedAt?: string,
+  ): Promise<Workflow> {
     const path = `/workflows/${encodeURIComponent(id)}`;
-    const data = await this.client.put(path, input);
+    const headers = baseUpdatedAt ? { [BASE_UPDATED_AT_HEADER]: baseUpdatedAt } : undefined;
+    const data = await this.client.put(path, input, headers);
     return JSON.parse(data) as Workflow;
   }
 

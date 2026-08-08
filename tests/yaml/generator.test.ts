@@ -54,6 +54,20 @@ describe("buildYamlObject", () => {
     const result = buildYamlObject(baseWorkflow, {});
     expect(result.tags).toBeUndefined();
   });
+
+  test("records updatedAt so apply can tell an update from a revert", () => {
+    const result = buildYamlObject({ ...baseWorkflow, updatedAt: "2026-03-01T10:00:00.000Z" }, {});
+    expect(result.updatedAt).toBe("2026-03-01T10:00:00.000Z");
+    // Written before the bulk of the document, where a reader will see it.
+    expect(Object.keys(result).indexOf("updatedAt")).toBeLessThan(
+      Object.keys(result).indexOf("nodes"),
+    );
+  });
+
+  test("omits updatedAt for a workflow that carries none", () => {
+    const result = buildYamlObject(baseWorkflow, {});
+    expect(result.updatedAt).toBeUndefined();
+  });
 });
 
 describe("stripJavaScriptHeaders", () => {
