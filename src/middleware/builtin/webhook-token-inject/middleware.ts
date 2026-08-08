@@ -62,8 +62,22 @@ export interface WebhookTokenInjectOptions {
  */
 export class WebhookTokenInjectMiddleware implements ClientMiddleware {
   readonly name = "webhook-token-inject";
+  readonly ownedHeaders: readonly string[];
 
-  constructor(private readonly options: WebhookTokenInjectOptions) {}
+  constructor(private readonly options: WebhookTokenInjectOptions) {
+    // Only the "replace" rules claim their header — those are the ones that
+    // make the proxy the single holder of that value. A "set-if-absent" rule
+    // says the opposite by design: the caller's own value wins, so it neither
+    // conflicts with another writer nor licenses discarding what the caller
+    // sent.
+    this.ownedHeaders = [
+      ...new Set(
+        options.rules
+          .filter((r) => r.conflictPolicy === "replace")
+          .map((r) => r.header.toLowerCase()),
+      ),
+    ];
+  }
 
   apply(headers: Headers, ctx: ClientMiddlewareContext): void {
     for (const rule of this.options.rules) {

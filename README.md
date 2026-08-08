@@ -1345,6 +1345,14 @@ caller cannot smuggle its own gateway token through — only the token the proxy
 mints reaches IAP. Reverting is one env var: unset `N8N_IAP_AUTH_HEADER_NAME`
 and the id_token goes back to `Authorization`.
 
+**This assumes something authenticates callers in front of the proxy.** Unlike a
+webhook token, an MCP token is a general-purpose credential for the instance, and
+`/mcp-server/` is transparently forwarded, so it never passes through the
+server-middleware chain — anyone who can open a connection to the proxy's port
+gets the token attached on their behalf. Deploy the proxy behind IAP (or an
+equivalent ingress that authenticates every request) and do not expose its port
+directly.
+
 ### CLAUDE.md Integration
 
 n8n-cli can read project settings from a `CLAUDE.md` file in your repository:
