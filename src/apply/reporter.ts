@@ -186,6 +186,17 @@ function printSkipSection(ops: ApplyOperation[]): void {
     const threeWayTag = op.threeWayUsed ? " [3-way]" : "";
     console.log(`  = ${path.basename(op.file)} (no changes)${threeWayTag}`);
     printThreeWayInfo(op);
+    if (op.folderDeclared) {
+      // Placement travels with a workflow write, and there is nothing to write
+      // here. Saying nothing would leave someone who just added `folderPath` to
+      // a settled definition watching apply report success and move nothing.
+      const where = op.folderPath ? ` "${op.folderPath}"` : "";
+      console.log(
+        `    ⚠ declares folder${where}, not applied: placement rides along with a workflow ` +
+          "update and this workflow has no changes to write. Edit the workflow, or move it " +
+          "with `n8n-cli folder`.",
+      );
+    }
   }
 }
 

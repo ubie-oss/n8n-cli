@@ -47,11 +47,14 @@ export class CredentialApplyExecutor {
     const files = selectFiles(scanCredentialDirectory(this.opts.directory), this.opts.ids);
     if (files.length === 0) return result;
 
-    // Loaded once, and only when something might actually be created. On a
-    // server with many credentials this is the only listing the run makes.
-    const existingByName = files.some((f) => f.definition && !f.definition.id)
-      ? await this.loadExistingNames()
-      : new Map<string, Credential>();
+    // Loaded once, and only when something might actually be created. Skipped
+    // entirely on a dry run, which is meant to stay cheap and work offline —
+    // the same trade `apply` makes for its own duplicate check, and what lets
+    // the report honestly claim it fetched nothing.
+    const existingByName =
+      !this.opts.dryRun && files.some((f) => f.definition && !f.definition.id)
+        ? await this.loadExistingNames()
+        : new Map<string, Credential>();
 
     for (const file of files) {
       result.operations.push(await this.applyFile(file, existingByName));

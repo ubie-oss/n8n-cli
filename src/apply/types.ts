@@ -142,6 +142,8 @@ export interface ApplyOperation {
   baseToRemoteFields: string[];
   activated?: boolean; // true: activated, false: deactivated, undefined: no change
   activationError?: Error; // activation/deactivation error
+  /** Whether the definition declared a folder at all, by path or by ID. */
+  folderDeclared?: boolean;
   /** Folder path the definition declared, when it declared one by path. */
   folderPath?: string;
   /**

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { isSecretRefFor, parseSecretRef } from "../../src/secrets/reference.ts";
+import { parseSecretRef } from "../../src/secrets/reference.ts";
 
 describe("parseSecretRef", () => {
   it("parses a scheme and locator", () => {
@@ -35,20 +35,7 @@ describe("parseSecretRef", () => {
   it("parses ordinary URLs as references of an unclaimed scheme", () => {
     // Parsing is not claiming: the registry decides whether a scheme belongs to
     // a resolver, and https does not — so an https value survives resolution.
+    // See registry.test.ts for the half that matters.
     expect(parseSecretRef("https://example.com/hook")?.scheme).toBe("https");
-    expect(isSecretRefFor("https://example.com/hook", ["gcp-sm", "env"])).toBe(false);
-  });
-});
-
-describe("isSecretRefFor", () => {
-  it("matches only the given schemes", () => {
-    expect(isSecretRefFor("env://TOKEN", ["env"])).toBe(true);
-    expect(isSecretRefFor("env://TOKEN", ["gcp-sm"])).toBe(false);
-  });
-
-  it("is false for non-strings", () => {
-    expect(isSecretRefFor(42, ["env"])).toBe(false);
-    expect(isSecretRefFor(null, ["env"])).toBe(false);
-    expect(isSecretRefFor({ a: "env://X" }, ["env"])).toBe(false);
   });
 });

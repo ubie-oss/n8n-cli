@@ -45,6 +45,7 @@ function mockService(remote: Workflow | null): {
       recorded.updates.push(input);
       return { ...remote, ...input, updatedAt: "2026-04-01T00:00:00.000Z" } as unknown as Workflow;
     },
+    transferWorkflow: async () => {},
     getWorkflowCurrentProjectID: () => "",
   } as unknown as WorkflowService;
   return { service, recorded };
@@ -229,6 +230,53 @@ describe("folder placement on write", () => {
     // Nothing was written upstream: the placement is part of the write, not a
     // follow-up call that could leave a workflow in the wrong folder.
     expect(recorded.creates).toEqual([]);
+  });
+
+  test("treats a null description from the server as no description", () => {
+    // If a server reports description-less workflows as null, `import` writes
+    // that null into every file. Read as "managed", it would send a null the
+    // write schema rejects — an apply failure per workflow, on every run.
+    const base: Workflow = { id: "wf1", name: "wf", active: false, nodes: [], connections: {} };
+    const local = { ...base, description: null } as unknown as Workflow;
+    expect(compare(local, base).hasChanges).toBe(false);
+  });
+
+  test("does not re-place a workflow that has no other changes", async () => {
+    const remote: Workflow = { id: "wf1", name: "wf", active: false, nodes: [], connections: {} };
+    const { service, recorded } = mockService(remote);
+    const folders = new FakeFolderService([{ id: "f1", name: "Ops" }]);
+    writeDefinition({ id: "wf1", name: "wf", folderPath: "Ops" });
+
+    const result = await executor(service, folders).execute();
+
+    // Placement rides along with a workflow write and cannot be diffed, so an
+    // otherwise-unchanged workflow is skipped — and the operation records the
+    // declaration so the reporter can say so.
+    expect(result.skipCount).toBe(1);
+    expect(recorded.updates).toEqual([]);
+    expect(result.operations[0]?.folderDeclared).toBe(true);
+    expect(result.operations[0]?.folderPath).toBe("Ops");
+  });
+
+  test("places into the target project only after the transfer", async () => {
+    const { service, recorded } = mockService(null);
+    const folders = new FakeFolderService([{ id: "f1", name: "Ops" }]);
+    const opts = defaultApplyOptions();
+    opts.directory = dir;
+    opts.all = true;
+    opts.noLint = true;
+    opts.allowDuplicates = true;
+    opts.projectID = "proj-target";
+    const ex = new Executor(service, opts);
+    ex.setFolderService(folders.asService());
+    writeDefinition({ name: "fresh", folderPath: "Ops" });
+
+    await ex.execute();
+
+    // The create must not carry a folder from a project the workflow is not in
+    // yet; the placement is a follow-up write issued after the transfer.
+    expect("parentFolderId" in recorded.creates[0]!).toBe(false);
+    expect(recorded.updates[0]?.parentFolderId).toBe("f1");
   });
 
   test("reports an error rather than throwing when no folder service is wired", async () => {

@@ -30,20 +30,3 @@ export function parseSecretRef(value: string): SecretRef | null {
   const locator = match[2]!;
   return { scheme, locator, raw: value };
 }
-
-/**
- * True when the value looks like a reference to one of the given schemes.
- *
- * Used to decide whether a credential file still needs resolving without
- * actually resolving it — `--dry-run` reports which fields would be fetched,
- * and must not fetch them to find out.
- */
-export function isSecretRefFor(value: unknown, schemes: Iterable<string>): boolean {
-  if (typeof value !== "string") return false;
-  const ref = parseSecretRef(value);
-  if (!ref) return false;
-  for (const scheme of schemes) {
-    if (scheme.toLowerCase() === ref.scheme) return true;
-  }
-  return false;
-}

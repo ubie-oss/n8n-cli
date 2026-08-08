@@ -260,6 +260,13 @@ export class Executor {
     const workflow = wf.workflow!;
     op.workflowName = workflow.name;
     op.localUpdated = workflow.updatedAt;
+    // Recorded up front, before any decision to skip. Placement rides along
+    // with a workflow write and cannot be diffed — the API does not report a
+    // workflow's folder — so a workflow that is otherwise unchanged is never
+    // re-placed. The reporter uses this to say so, rather than leaving the user
+    // to wonder why adding `folderPath` to a settled definition did nothing.
+    op.folderDeclared = workflow.folderId !== undefined || workflow.folderPath !== undefined;
+    if (workflow.folderPath !== undefined) op.folderPath = workflow.folderPath;
 
     // Pre-write middleware pipeline. Runs every enabled middleware (lint,
     // authz, future policies) before any remote fetch so a broken or
@@ -531,22 +538,71 @@ export class Executor {
     );
   }
 
-  /** Performs the actual create operation. */
-  private async executeCreate(wf: WorkflowFile, op: ApplyOperation): Promise<void> {
-    const workflow = wf.workflow!;
-    const input: WorkflowInput = {
+  /**
+   * Whether folder placement has to wait until after the project transfer.
+   *
+   * A folder belongs to a project, and `--project` moves the workflow into its
+   * target project only *after* it has been written — so a create would carry a
+   * `parentFolderId` from a project the workflow is not in yet, which n8n has no
+   * reason to accept. When a transfer is in play the placement is issued as a
+   * follow-up write instead, once the workflow is where it belongs.
+   */
+  private placementIsDeferred(workflow: Workflow): boolean {
+    const declaresFolder = workflow.folderId !== undefined || workflow.folderPath !== undefined;
+    return declaresFolder && !!this.opts.projectID;
+  }
+
+  /**
+   * Issues the deferred placement, returning the workflow as it now stands.
+   *
+   * Returns the input untouched when the definition turned out to declare no
+   * folder after all, so the caller can use the result unconditionally.
+   */
+  private async placeIntoFolder(
+    written: Workflow,
+    local: Workflow,
+    op: ApplyOperation,
+  ): Promise<Workflow> {
+    const placement = await this.folderPlacement(local, written, op);
+    if (placement.parentFolderId === undefined || !written.id) return written;
+
+    return await this.workflowService.updateWorkflow(
+      written.id,
+      { ...this.writePayload(local), ...placement },
+      // The revision this write is based on is the one the write immediately
+      // before it produced, not the local file's stamp — that is what a
+      // stale-write guard needs to see for a follow-up call it did not expect.
+      written.updatedAt,
+    );
+  }
+
+  /** The workflow fields every create and update sends. */
+  private writePayload(workflow: Workflow): WorkflowInput {
+    return {
       name: workflow.name,
-      ...(workflow.description !== undefined ? { description: workflow.description } : {}),
+      // `null` is treated as absent: it means the workflow has no description,
+      // and the write schema types the field as a string.
+      ...(workflow.description != null ? { description: workflow.description } : {}),
       nodes: workflow.nodes,
       connections: workflow.connections,
       settings: this.stripWriteUnsupportedSettings(workflow.settings as Record<string, unknown>),
       staticData: workflow.staticData,
-      ...(await this.folderPlacement(workflow, undefined, op)),
+    };
+  }
+
+  /** Performs the actual create operation. */
+  private async executeCreate(wf: WorkflowFile, op: ApplyOperation): Promise<void> {
+    const workflow = wf.workflow!;
+    const deferred = this.placementIsDeferred(workflow);
+    const input: WorkflowInput = {
+      ...this.writePayload(workflow),
+      ...(deferred ? {} : await this.folderPlacement(workflow, undefined, op)),
     };
 
-    const created = await this.workflowService.createWorkflow(input);
-    await this.applyTagsAndProject(created, workflow, op);
-    await updateLocalWorkflowFile(wf.path, await this.settledWorkflow(created, op));
+    let written = await this.workflowService.createWorkflow(input);
+    await this.applyTagsAndProject(written, workflow, op);
+    if (deferred) written = await this.placeIntoFolder(written, workflow, op);
+    await updateLocalWorkflowFile(wf.path, await this.settledWorkflow(written, op));
   }
 
   /** Performs the actual update operation. */
@@ -565,19 +621,16 @@ export class Executor {
     baseUpdatedAt: string | undefined = wf.workflow?.updatedAt,
   ): Promise<void> {
     const workflow = wf.workflow!;
+    const deferred = this.placementIsDeferred(workflow);
     // Note: pinData is intentionally excluded - n8n API rejects it as additional property
     const input: WorkflowInput = {
-      name: workflow.name,
-      ...(workflow.description !== undefined ? { description: workflow.description } : {}),
-      nodes: workflow.nodes,
-      connections: workflow.connections,
-      settings: this.stripWriteUnsupportedSettings(workflow.settings as Record<string, unknown>),
-      staticData: workflow.staticData,
-      ...(await this.folderPlacement(workflow, _remote, op)),
+      ...this.writePayload(workflow),
+      ...(deferred ? {} : await this.folderPlacement(workflow, _remote, op)),
     };
 
-    const updated = await this.workflowService.updateWorkflow(workflow.id!, input, baseUpdatedAt);
+    let updated = await this.workflowService.updateWorkflow(workflow.id!, input, baseUpdatedAt);
     await this.applyTagsAndProject(updated, workflow, op);
+    if (deferred) updated = await this.placeIntoFolder(updated, workflow, op);
     await updateLocalWorkflowFile(wf.path, await this.settledWorkflow(updated, op));
   }
 

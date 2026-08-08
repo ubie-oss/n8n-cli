@@ -112,6 +112,8 @@ n8n-cli apply [options]
 | `--lint-disable-rule <rules>` | Comma-separated rule names to disable during the pre-write lint check |
 | `--no-create-folders` | Fail instead of creating a folder named by a definition's `folderPath` that does not exist upstream (folders are created by default) |
 
+> **n8n version requirement:** `description`, `parentFolderId` and the folder endpoints are recent additions to the public API, and its workflow write schema rejects unknown properties. Against an older instance, a definition carrying `description` will be refused — omit the field and nothing changes, which is why it is only sent when a definition has it. These features were verified against the public-API specification in n8n's repository, not against a live instance.
+
 #### Workflow description
 
 A definition may carry a `description`, which is the description n8n itself stores and shows next to the workflow — not the `description.md` that `import` writes into `_subfiles/`, which is a local document the server never sees.
@@ -145,10 +147,12 @@ On `apply`, the path is resolved against the target project and any missing leve
 - An empty `folderPath` (`""`, `/`) moves the workflow to the project root.
 - Omitting both leaves the workflow wherever it is.
 
-Two caveats worth knowing before you adopt this:
+Caveats worth knowing before you adopt this, all of them consequences of `parentFolderId` being a write-only field:
 
 - **Folders are a licensed n8n feature.** An instance without the entitlement answers every folder endpoint with 403; `apply` reports that against the workflow that asked to be placed, and leaves every other workflow alone.
-- **Placement is write-only.** The public API accepts `parentFolderId` on write but does not report a workflow's folder back, so `import` cannot discover where a workflow lives. `folderPath` is a local declaration, and the repository is its only record.
+- **Placement is write-only.** The API does not report a workflow's folder back, so `import` cannot discover where a workflow lives. `folderPath` is a local declaration, and the repository is its only record.
+- **Placement rides along with a workflow write.** Because it cannot be diffed, adding `folderPath` to a definition that is otherwise unchanged produces a `skip` — apply reports the declaration and says it was not applied. Edit the workflow, or move it directly with `n8n-cli folder`.
+- **With `--project`, placement is a second write.** A folder belongs to a project, and the project transfer happens after the workflow is written, so the placement is issued as a follow-up update once the workflow is where it belongs.
 
 #### Conflict detection
 

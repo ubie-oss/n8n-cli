@@ -2,6 +2,11 @@ import type { Node, NodeConn, Workflow, WorkflowSettings } from "../../api/types
 import { normalizeForComparison } from "../differ.ts";
 import type { ConflictResult, DiffVector } from "./types.ts";
 
+/** A workflow's description, with the three "has none" spellings collapsed. */
+function describedAs(workflow: Workflow): string {
+  return workflow.description ?? "";
+}
+
 /** Performs 3-way conflict detection between Base, Local, and Remote workflow states. */
 export class ThreeWayDetector {
   /**
@@ -91,6 +96,15 @@ export class ThreeWayDetector {
 
     if (a.active !== b.active) {
       diff.changedFields.push("active");
+      diff.hasChanges = true;
+    }
+
+    // Normalised the same way `differ.compare` does: absent, null and empty all
+    // describe a workflow with no description, and a version of a file written
+    // before the field existed must not read as a change against one written
+    // after it.
+    if (describedAs(a) !== describedAs(b)) {
+      diff.changedFields.push("description");
       diff.hasChanges = true;
     }
 

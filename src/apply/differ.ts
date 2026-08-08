@@ -16,11 +16,17 @@ export function compare(local: Workflow, remote: Workflow): WorkflowDiff {
   // that as "clear it" would wipe descriptions written in the n8n UI the first
   // time an old definition was applied. An explicit empty string still clears,
   // which is how a definition asks for that deliberately.
-  if (local.description !== undefined && local.description !== (remote.description ?? "")) {
+  //
+  // `null` counts as absent on both sides. A server that reports a description-
+  // less workflow as `description: null` would otherwise have that null written
+  // into every imported file, which would then read as "managed" and send a
+  // null the write schema rejects — one apply failure per workflow, forever.
+  const localDescription = local.description ?? undefined;
+  if (localDescription !== undefined && localDescription !== (remote.description ?? "")) {
     diff.fields.push({
       field: "description",
       oldValue: remote.description ?? "",
-      newValue: local.description,
+      newValue: localDescription,
     });
     diff.hasChanges = true;
   }
