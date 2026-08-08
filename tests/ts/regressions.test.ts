@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { Command } from "commander";
 import type { Workflow } from "@/api/types.ts";
+import { nodesEqual } from "@/apply/differ.ts";
 import { registerImportCommand } from "@/cli/commands/import.ts";
 import {
   detectWorkflowFormat,
@@ -10,7 +11,7 @@ import {
   WORKFLOW_EXTENSIONS_WITH_TS,
 } from "@/common/extensions.ts";
 import { scanDirectoryWithOrphans } from "@/importer/scanner.ts";
-import { writeWorkflowTS } from "@/importer/writer.ts";
+import { alignSynthesisedNodeIDs, writeWorkflowTS } from "@/importer/writer.ts";
 import { generateTsWorkflow } from "@/ts/generator.ts";
 import { parseTsWorkflow } from "@/ts/loader.ts";
 import { preprocessTsWorkflow, TsPreprocessError } from "@/ts/preprocess.ts";
@@ -304,21 +305,53 @@ describe("an unparseable .ts is only claimed as a workflow in ts mode", () => {
   });
 });
 
-describe("empty-string node IDs", () => {
-  test("count as absent on both sides of the comparison", () => {
-    // Otherwise the source's `id: ""` and the loader's derived ID read as a
-    // difference and the workflow could never be written.
+describe("alignSynthesisedNodeIDs", () => {
+  // The round-trip check compares node IDs, but the loader has to invent one for
+  // any node whose source had none. These cases pin exactly how far that
+  // allowance reaches — a relaxation that went further would let a genuinely
+  // lost ID through unnoticed.
+  function aNode(overrides: Partial<Workflow["nodes"][number]>): Workflow["nodes"][number] {
+    return {
+      id: "aaa",
+      name: "A",
+      type: "n8n-nodes-base.noOp",
+      typeVersion: 1,
+      position: [0, 0],
+      ...overrides,
+    };
+  }
+
+  function equalAfterAlign(parsed: Workflow["nodes"], source: Workflow["nodes"]): boolean {
+    const aligned = alignSynthesisedNodeIDs(parsed, source);
+    return nodesEqual(aligned.parsed, aligned.source);
+  }
+
+  test("a derived ID is ignored when the source had none", () => {
+    const source = [aNode({ id: undefined as unknown as string })];
+    const parsed = [aNode({ id: "derived-uuid" })];
+
+    expect(equalAfterAlign(parsed, source)).toBe(true);
+  });
+
+  test("an empty-string ID counts as none", () => {
+    expect(equalAfterAlign([aNode({ id: "derived-uuid" })], [aNode({ id: "" })])).toBe(true);
+  });
+
+  test("a changed ID is still a mismatch when the source had one", () => {
+    expect(equalAfterAlign([aNode({ id: "changed" })], [aNode({ id: "aaa" })])).toBe(false);
+  });
+
+  test("the allowance is per node, not workflow-wide", () => {
+    const source = [aNode({ name: "A", id: "" }), aNode({ name: "B", id: "bbb" })];
+    const parsed = [aNode({ name: "A", id: "derived" }), aNode({ name: "B", id: "changed" })];
+
+    expect(equalAfterAlign(parsed, source)).toBe(false);
+  });
+
+  test("a workflow whose nodes all lack IDs can still be written", () => {
     const wf = workflow();
     const nodes = wf.nodes.map((n) => ({ ...n, id: "" }));
 
     expect(() => writeWorkflowTS(path.join(dir, "empty-ids.ts"), { ...wf, nodes })).not.toThrow();
-  });
-
-  test("a node whose real ID changed still fails", () => {
-    // The relaxation above must not swallow a genuine ID mismatch.
-    const wf = workflow();
-    const code = generateTsWorkflow(wf).replace('"bbb"', '"tampered"');
-
-    expect(parseTsWorkflow(code, "wf-1").nodes[1]?.id).toBe("tampered");
   });
 });

@@ -204,7 +204,7 @@ function orUndefined<T extends object>(value: T | undefined): T | undefined {
  * have an ID is still compared. An empty-string `id` counts as absent, so that
  * `""` and a derived ID do not read as a difference either.
  */
-function alignSynthesisedNodeIDs(
+export function alignSynthesisedNodeIDs(
   parsedNodes: Workflow["nodes"] | undefined,
   sourceNodes: Workflow["nodes"] | undefined,
 ): { parsed: Workflow["nodes"]; source: Workflow["nodes"] } {
