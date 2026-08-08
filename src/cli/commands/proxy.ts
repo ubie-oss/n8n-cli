@@ -349,7 +349,8 @@ export function registerProxyCommand(program: Command): void {
  * how to read. Keeping the projection explicit prevents commander
  * artifacts (`_optionValues`, etc.) from leaking into factory inputs.
  */
-function extractMiddlewareCliOpts(opts: ProxyOptions): Record<string, unknown> {
+/** Exported for unit tests that assert declared flags actually reach a factory. */
+export function extractMiddlewareCliOpts(opts: ProxyOptions): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   const copy = (k: keyof ProxyOptions) => {
     if (opts[k] !== undefined) out[k] = opts[k];
