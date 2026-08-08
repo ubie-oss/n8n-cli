@@ -170,8 +170,9 @@ describe("proxy: MCP header split", () => {
   });
 });
 
-describe("proxy: transparent forwarding without a client-middleware chain", () => {
-  test("keeps the caller's Authorization — nothing in front of it consumed one", async () => {
+describe("proxy: chains that claim no credential header", () => {
+  function startWithout(chain: string[]): void {
+    registerClientFactory(apiKeyInjectFactory);
     proxy = startProxy({
       listen: "127.0.0.1:0",
       upstream: `http://127.0.0.1:${upstream.port}`,
@@ -179,13 +180,58 @@ describe("proxy: transparent forwarding without a client-middleware chain", () =
       disableRules: [],
       logFormat: "json",
       allowDuplicates: true,
-      clientMiddlewares: [],
+      clientMiddlewares: chain,
+      clientMiddlewareCliOptions: { apiKeyInjectKeyEnvVar: "TEST_N8N_API_KEY" },
     });
+  }
+
+  test("no chain at all keeps the caller's Authorization", async () => {
+    startWithout([]);
     await fetch(`http://127.0.0.1:${proxy.port}/webhook/basic-auth-node`, {
       method: "POST",
       headers: { authorization: "Basic dXNlcjpwYXNz" },
       body: "{}",
     });
     expect(upstream.captured[0]!.headers.authorization).toBe("Basic dXNlcjpwYXNz");
+  });
+
+  test("api-key-inject alone keeps it too — it never claimed that header", async () => {
+    // Regression guard for deployments that proxy webhook URLs whose nodes use
+    // header or basic auth: dropping Authorization for them would turn every
+    // such webhook into a 401 on upgrade.
+    startWithout(["api-key-inject"]);
+    await fetch(`http://127.0.0.1:${proxy.port}/webhook/basic-auth-node`, {
+      method: "POST",
+      headers: { authorization: "Basic dXNlcjpwYXNz" },
+      body: "{}",
+    });
+    const cap = upstream.captured[0]!;
+    expect(cap.headers.authorization).toBe("Basic dXNlcjpwYXNz");
+    expect(cap.headers["x-n8n-api-key"]).toBe("api-key-value");
+  });
+});
+
+describe("proxy: chains that would fight over one header", () => {
+  test("iap-auth in its default mode plus bearer-token-inject is refused at startup", () => {
+    registerClientFactory(iapAuthFactory);
+    registerClientFactory(bearerTokenInjectFactory);
+    expect(() =>
+      startProxy({
+        listen: "127.0.0.1:0",
+        upstream: `http://127.0.0.1:${upstream.port}`,
+        enforce: "off",
+        disableRules: [],
+        logFormat: "json",
+        allowDuplicates: true,
+        clientMiddlewares: ["bearer-token-inject", "iap-auth"],
+        clientMiddlewareCliOptions: {
+          iapAuthAudience: "https://example.com/gateway",
+          iapAuthTokenSource: "env",
+          iapAuthTokenEnvVar: "TEST_IAP_ID_TOKEN",
+          // headerName left at its default, so both want `authorization`.
+          bearerTokenInjectRules: MCP_RULES,
+        },
+      }),
+    ).toThrow(/both write the "authorization" header/);
   });
 });

@@ -50,13 +50,15 @@ export interface BearerTokenInjectOptions {
  *
  * Only ever sets its header, never deletes: the client's own `Authorization`
  * is discarded before the pipeline runs (see `forwardRequest`), so this
- * middleware's position in the chain does not change the outcome. The one
- * ordering constraint left is a self-inflicted one — running this alongside
- * `iap-auth` in its default `authorization` mode has the two fight over the
- * same header, which is a misconfiguration rather than a supported setup.
+ * middleware's position in the chain does not change the outcome. Running it
+ * alongside `iap-auth` in its default `authorization` mode would have the two
+ * fight over one header; both declare it in `ownedHeaders`, so that
+ * combination is refused when the chain is built rather than deciding a
+ * runtime 401 by declaration order.
  */
 export class BearerTokenInjectMiddleware implements ClientMiddleware {
   readonly name = "bearer-token-inject";
+  readonly ownedHeaders = ["authorization"] as const;
 
   constructor(private readonly options: BearerTokenInjectOptions) {}
 

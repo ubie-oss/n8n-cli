@@ -39,8 +39,11 @@ export interface IapAuthOptions {
  */
 export class IapAuthMiddleware implements ClientMiddleware {
   readonly name = "iap-auth";
+  readonly ownedHeaders: readonly string[];
 
-  constructor(private readonly options: IapAuthOptions) {}
+  constructor(private readonly options: IapAuthOptions) {
+    this.ownedHeaders = [options.headerName ?? "authorization"];
+  }
 
   async apply(headers: Headers, _ctx: ClientMiddlewareContext): Promise<void> {
     const token = await this.options.tokenSource.getToken(this.options.audience);

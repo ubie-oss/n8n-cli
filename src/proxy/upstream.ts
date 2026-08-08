@@ -9,12 +9,13 @@
  * recomputes it from the actual body, and so are the proxy's own control
  * headers (see `@/api/headers.ts`), which n8n has no use for.
  *
- * Preserves auth headers (`X-N8N-API-KEY`, `Authorization`) when forwarding
- * transparently — the client is expected to supply them and the upstream needs
- * them to authenticate. Once a client-middleware chain is configured, the
- * client's `Authorization` is dropped instead (the proxy, not the caller, then
- * holds upstream credentials); client middlewares (see `ClientMiddleware`) run
- * after that and can set whatever the upstream expects.
+ * Preserves auth headers (`X-N8N-API-KEY`, `Authorization`) by default — the
+ * client is expected to supply them and the upstream needs them to
+ * authenticate. The exception is a chain containing a middleware that claims
+ * the credential headers (see `ownedHeaders`): there the proxy holds the
+ * upstream credentials, so the client's `Authorization` is dropped before the
+ * chain runs. Client middlewares (see `ClientMiddleware`) execute after the
+ * strip step and before fetch.
  *
  * On the way back, `Content-Encoding` (and the now-stale `Content-Length`) are
  * dropped from the upstream response — see `normalizeResponseEncoding`.
@@ -98,6 +99,25 @@ function normalizeResponseEncoding(response: Response): Response {
   });
 }
 
+/**
+ * Headers that carry the credential for one hop of the chain. When a
+ * middleware claims either of them, the proxy — not the caller — is the one
+ * holding upstream credentials, and the caller's `Authorization` is dropped.
+ */
+const CREDENTIAL_HEADERS = new Set(["authorization", "proxy-authorization"]);
+
+/**
+ * Whether anything in the chain has claimed a credential header.
+ *
+ * A chain that claims none is a transparent forwarder as far as auth goes: its
+ * callers may legitimately be authenticating to n8n itself (webhook nodes using
+ * header or basic auth), nothing in front of them consumed that header, and
+ * discarding it would break them.
+ */
+function chainOwnsCredentials(chain: ClientMiddleware[]): boolean {
+  return chain.some((m) => m.ownedHeaders?.some((h) => CREDENTIAL_HEADERS.has(h.toLowerCase())));
+}
+
 export interface ForwardOptions {
   /** Total request timeout in milliseconds; 0 disables timeout. */
   timeoutMs?: number;
@@ -126,26 +146,22 @@ export async function forwardRequest(
 
   const clientMiddlewares = options?.clientMiddlewares ?? [];
   if (clientMiddlewares.length > 0) {
-    // The client's `Authorization` addresses *this* hop, not the upstream, so
-    // it is dropped for the same reason hop-by-hop headers are — and before the
-    // pipeline, so a middleware that sets it still wins.
-    //
-    // Two reasons it must not travel on. It is a credential for reaching the
-    // proxy and stays replayable until it expires, so letting it land in the
-    // upstream's logs leaks the right to call this proxy. And where the proxy
-    // fronts an IAP-protected backend, the client's token carries a different
-    // `aud` than the backend's IAP expects, so forwarding it only produces
-    // audience-mismatch 401s at the second hop.
-    //
-    // Doing this here rather than inside a middleware keeps the outcome
-    // independent of chain order: middlewares only ever add.
-    //
-    // Scoped to "a chain is configured" on purpose. A proxy running no client
-    // middleware is a transparent forwarder whose callers may legitimately be
-    // authenticating to n8n itself (webhook nodes with header or basic auth,
-    // say); nothing in front of it consumed that header, so nothing here should
-    // discard it.
-    headers.delete("authorization");
+    if (chainOwnsCredentials(clientMiddlewares)) {
+      // The client's `Authorization` addresses *this* hop, not the upstream, so
+      // it is dropped for the same reason hop-by-hop headers are — and before
+      // the pipeline, so a middleware that sets it still wins.
+      //
+      // Two reasons it must not travel on. It is a credential for reaching the
+      // proxy and stays replayable until it expires, so letting it land in the
+      // upstream's logs leaks the right to call this proxy. And where the proxy
+      // fronts an IAP-protected backend, the client's token carries a different
+      // `aud` than the backend's IAP expects, so forwarding it only produces
+      // audience-mismatch 401s at the second hop.
+      //
+      // Doing this here rather than inside a middleware keeps the outcome
+      // independent of chain order: middlewares only ever add.
+      headers.delete("authorization");
+    }
     await runClientPipeline(clientMiddlewares, headers, {
       request: req,
       method: req.method,

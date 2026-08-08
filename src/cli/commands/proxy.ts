@@ -23,6 +23,7 @@ interface ProxyOptions {
   iapAuthAudience?: string;
   iapAuthTokenSource?: string;
   iapAuthTokenEnvVar?: string;
+  iapAuthHeaderName?: string;
   iapAuthCacheTtlMs?: string;
   iapAuthTimeoutMs?: string;
   iapAuthMetadataBaseUrl?: string;
@@ -37,6 +38,9 @@ interface ProxyOptions {
   // token values inside them should be env-var references rather than literals
   // for the same reason api-key-inject refuses a raw key here.
   webhookTokenInjectRules?: string;
+  // bearer-token-inject client-middleware options. Same shape and same
+  // reasoning as webhook-token-inject's rules.
+  bearerTokenInjectRules?: string;
   // impersonator-token client-middleware options. Attaches the user's own
   // Google id_token as a side header so the server can attribute the call
   // to the human running the CLI (instead of the impersonated SA).
@@ -403,7 +407,7 @@ export function extractMiddlewareCliOpts(opts: ProxyOptions): Record<string, unk
  * read. Keeping the projection explicit prevents commander artifacts
  * (`_optionValues`, etc.) from leaking into factory inputs.
  */
-function extractClientMiddlewareCliOpts(opts: ProxyOptions): Record<string, unknown> {
+export function extractClientMiddlewareCliOpts(opts: ProxyOptions): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   const copy = (k: keyof ProxyOptions) => {
     if (opts[k] !== undefined) out[k] = opts[k];
@@ -411,6 +415,7 @@ function extractClientMiddlewareCliOpts(opts: ProxyOptions): Record<string, unkn
   copy("iapAuthAudience");
   copy("iapAuthTokenSource");
   copy("iapAuthTokenEnvVar");
+  copy("iapAuthHeaderName");
   copy("iapAuthCacheTtlMs");
   copy("iapAuthTimeoutMs");
   copy("iapAuthMetadataBaseUrl");
@@ -420,6 +425,7 @@ function extractClientMiddlewareCliOpts(opts: ProxyOptions): Record<string, unkn
   copy("apiKeyInjectHeader");
   copy("apiKeyInjectConflictPolicy");
   copy("webhookTokenInjectRules");
+  copy("bearerTokenInjectRules");
   copy("impersonatorTokenAudience");
   copy("impersonatorTokenSource");
   copy("impersonatorTokenEnvVar");

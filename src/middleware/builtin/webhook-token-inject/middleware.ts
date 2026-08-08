@@ -26,6 +26,12 @@ export interface WebhookTokenRule {
    *   - "set-if-absent": leave it intact. Default — a caller that still brings
    *     its own token keeps working while a deployment migrates.
    *   - "replace": overwrite, making the proxy the single token holder.
+   *
+   * One caveat for a rule whose `header` is `Authorization`: when the chain
+   * also contains a middleware that claims the credential headers (see
+   * `ownedHeaders`), the caller's value is already gone by the time this runs,
+   * so "set-if-absent" behaves like "replace". Webhook tokens normally live in
+   * their own header, where this does not arise.
    */
   conflictPolicy: "replace" | "set-if-absent";
 }

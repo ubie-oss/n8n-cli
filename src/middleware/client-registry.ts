@@ -63,7 +63,36 @@ export function buildClientMiddlewares(input: BuildClientMiddlewaresInput): Clie
     );
     built.push(factory.build(merged));
   }
+  assertNoHeaderConflict(built);
   return built;
+}
+
+/**
+ * Refuses a chain in which two middlewares claim the same header.
+ *
+ * Both would write it and the later one would win, so the chain's declaration
+ * order — a deployment detail nothing else depends on — would silently decide
+ * which credential reaches the upstream. The failure that produces is a 401
+ * from a service that never sees the header it wanted; failing at startup with
+ * both names in hand costs an operator minutes instead of hours.
+ */
+function assertNoHeaderConflict(chain: ClientMiddleware[]): void {
+  const claimedBy = new Map<string, string>();
+  for (const mw of chain) {
+    for (const header of mw.ownedHeaders ?? []) {
+      const key = header.toLowerCase();
+      const owner = claimedBy.get(key);
+      if (owner) {
+        throw new Error(
+          `Client middlewares "${owner}" and "${mw.name}" both write the ` +
+            `"${key}" header, so which one reaches the upstream would depend on ` +
+            "chain order. Configure them onto different headers " +
+            "(e.g. N8N_IAP_AUTH_HEADER_NAME=proxy-authorization) or drop one.",
+        );
+      }
+      claimedBy.set(key, mw.name);
+    }
+  }
 }
 
 function mergeOptions(

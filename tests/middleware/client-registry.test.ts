@@ -90,6 +90,32 @@ describe("buildClientMiddlewares", () => {
     });
   });
 
+  test("two middlewares claiming one header are refused, naming both", () => {
+    const owner = (name: string, header: string): ClientMiddlewareFactory<FakeOptions> => ({
+      name,
+      loadFromEnv: () => ({}),
+      loadFromCLI: () => ({}),
+      build: () => ({ name, ownedHeaders: [header], apply: () => {} }),
+    });
+    registerClientFactory(owner("first", "Authorization"));
+    registerClientFactory(owner("second", "authorization"));
+    expect(() => buildClientMiddlewares({ enabled: ["first", "second"] })).toThrow(
+      /"first" and "second" both write the "authorization" header/,
+    );
+  });
+
+  test("claims on different headers coexist", () => {
+    const owner = (name: string, header: string): ClientMiddlewareFactory<FakeOptions> => ({
+      name,
+      loadFromEnv: () => ({}),
+      loadFromCLI: () => ({}),
+      build: () => ({ name, ownedHeaders: [header], apply: () => {} }),
+    });
+    registerClientFactory(owner("gate", "proxy-authorization"));
+    registerClientFactory(owner("app", "authorization"));
+    expect(buildClientMiddlewares({ enabled: ["gate", "app"] })).toHaveLength(2);
+  });
+
   test("preserves middleware order", () => {
     registerClientFactory(fakeFactory("a"));
     registerClientFactory(fakeFactory("b"));
