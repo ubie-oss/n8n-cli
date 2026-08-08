@@ -112,7 +112,16 @@ n8n-cli apply [options]
 | `--lint-disable-rule <rules>` | Comma-separated rule names to disable during the pre-write lint check |
 | `--no-create-folders` | Fail instead of creating a folder named by a definition's `folderPath` that does not exist upstream (folders are created by default) |
 
-> **n8n version requirement:** `description`, `parentFolderId` and the folder endpoints are recent additions to the public API, and its workflow write schema rejects unknown properties. Against an older instance, a definition carrying `description` will be refused — omit the field and nothing changes, which is why it is only sent when a definition has it. These features were verified against the public-API specification in n8n's repository, not against a live instance.
+> **n8n version requirements.** These are recent additions to the public API, and its workflow write schema rejects unknown properties — so against an older instance a definition carrying one of these fields is refused outright. Omit the field and nothing changes, which is why each is only sent when a definition actually has it.
+>
+> | Feature | Minimum n8n |
+> |---------|-------------|
+> | Workflow `description` over the public API | 2.16.0 |
+> | Folder endpoints (`n8n-cli folder`) — **Enterprise licence** | 2.19.0 |
+> | Placing a workflow in a folder (`folderPath`) | 2.32.0 |
+> | `PATCH /credentials/{id}` (`credential apply` updates) | 2.3.0 |
+>
+> Verified against the public-API specification and changelog in n8n's repository, not against a live instance.
 
 #### Workflow description
 
@@ -149,7 +158,7 @@ On `apply`, the path is resolved against the target project and any missing leve
 
 Caveats worth knowing before you adopt this, all of them consequences of `parentFolderId` being a write-only field:
 
-- **Folders are a licensed n8n feature.** An instance without the entitlement answers every folder endpoint with 403; `apply` reports that against the workflow that asked to be placed, and leaves every other workflow alone.
+- **Folders are Enterprise-licensed.** An instance without the entitlement answers every folder endpoint with 403; `apply` reports that against the workflow that asked to be placed, and leaves every other workflow alone.
 - **Placement is write-only.** The API does not report a workflow's folder back, so `import` cannot discover where a workflow lives. `folderPath` is a local declaration, and the repository is its only record.
 - **Placement rides along with a workflow write.** Because it cannot be diffed, adding `folderPath` to a definition that is otherwise unchanged produces a `skip` — apply reports the declaration and says it was not applied. Edit the workflow, or move it directly with `n8n-cli folder`.
 - **With `--project`, placement is a second write.** A folder belongs to a project, and the project transfer happens after the workflow is written, so the placement is issued as a follow-up update once the workflow is where it belongs.
@@ -815,7 +824,7 @@ Resolved values are never written back to the file, never printed, and never put
 
 ### `folder`
 
-Manage workflow folders inside a project. Folders are a **licensed n8n feature**; an instance without the entitlement answers with 403.
+Manage workflow folders inside a project. Requires n8n 2.19.0 or later, and folders are an **Enterprise-licensed feature** — an instance without the entitlement answers every folder endpoint with 403.
 
 ```bash
 n8n-cli folder <subcommand>
