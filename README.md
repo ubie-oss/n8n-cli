@@ -116,6 +116,8 @@ A definition records the upstream `updatedAt` it was written from. Before updati
 After a successful write the local file is re-stamped with the server's new timestamp, so the next edit is not mistaken for a conflict. In a CI-driven setup this happens on the runner, which means the stamp in version control stays behind until something writes it back — either commit the re-stamped files from the apply job, or run `import` on a schedule. Until it catches up, a second change to the same workflow will report a conflict that `--force` can push through.
 
 > **Behaviour change (YAML):** YAML definitions written before this feature carry no `updatedAt`, and applies against them were unconditional. Once `import` re-writes them with a stamp, those same applies start reporting conflicts — which is the point, but it is a change in behaviour for existing repositories. JSON and `.ts` definitions already carried the stamp.
+>
+> A second consequence, on the machine that ran the apply: `import` skips a workflow whose local stamp is already current, so anything the server normalised during the write (defaulted parameters, ids it assigned) does not come back down until the workflow changes again upstream. YAML now matches what JSON has always done, and what `.ts` does deliberately. The skip is by timestamp, not by selection, so `--ids` does not override it — delete the local file, or restore the committed version whose stamp is older, and import again.
 
 For enforcement that does not depend on the client (any working copy can pass `--force`, and other tools do not run this check at all), see the proxy's [stale-write guard](#stale-write-guard).
 

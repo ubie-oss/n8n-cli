@@ -157,6 +157,19 @@ describe("proxy + stale-write", () => {
     expect(forwardedWrites()).toHaveLength(1);
   });
 
+  test("a stale-write warning is not counted as a lint failure", async () => {
+    // A CI step gating on x-n8n-lint-errors is the documented lint rollout
+    // path. Folding stale writes into it would fail builds for writes warn mode
+    // deliberately let through, and blame lint for them.
+    startProxyWithGuard({ staleWriteEnforce: "warn" });
+
+    const res = await put(OLDER);
+
+    expect(res.headers.get(STALE_WRITE_WARNING_HEADER)).not.toBeNull();
+    expect(res.headers.get("x-n8n-lint-violations")).toBeNull();
+    expect(res.headers.get("x-n8n-lint-errors")).toBeNull();
+  });
+
   test("a write with no base header passes by default", async () => {
     startProxyWithGuard();
 

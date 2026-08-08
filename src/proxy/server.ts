@@ -375,11 +375,15 @@ async function handleWorkflowMutation(
       timeoutMs: deps.config.upstreamTimeoutMs,
       clientMiddlewares: deps.clientMiddlewares,
     });
-    if (verdict.violations.length > 0) {
-      const errCount = verdict.violations.filter(
-        (v) => v.severity === "error" || !v.severity,
-      ).length;
-      response.headers.set("x-n8n-lint-violations", String(verdict.violations.length));
+    // Counted over lint's own violations only. A stale write is reported on its
+    // own header below, and folding it in here would make it indistinguishable
+    // from a lint failure — a CI step gating on `x-n8n-lint-errors`, which is
+    // the documented way to roll lint out, would start failing builds for
+    // writes that warn mode deliberately chose not to block, and blame lint.
+    const lintViolations = verdict.violations.filter((v) => !v.rule.startsWith(STALE_WRITE_RULE));
+    if (lintViolations.length > 0) {
+      const errCount = lintViolations.filter((v) => v.severity === "error" || !v.severity).length;
+      response.headers.set("x-n8n-lint-violations", String(lintViolations.length));
       response.headers.set("x-n8n-lint-errors", String(errCount));
     }
     if (duplicateMatches.length > 0) {

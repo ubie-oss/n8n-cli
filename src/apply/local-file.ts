@@ -120,7 +120,11 @@ export function patchYamlStamp(text: string, updatedAt: string | undefined): str
     const match = yamlKeyPattern(anchor).exec(text);
     if (!match) continue;
     const end = match.index + match[0].length;
-    return `${text.slice(0, end)}\n${line}${text.slice(end)}`;
+    // Match the terminator already in use. `$` stops before a `\r`, so a bare
+    // `\n` here would leave one CRLF file with one LF line — enough to show up
+    // as churn in a repository that stores CRLF.
+    const eol = text.startsWith("\r\n", end) ? "\r\n" : "\n";
+    return `${text.slice(0, end)}${eol}${line}${text.slice(end)}`;
   }
 
   // No anchor at all: not a shape this writer recognises, so leave it be

@@ -356,7 +356,9 @@ export function buildYamlObject(
   // is based on the current upstream state" from "someone edited this workflow
   // in the n8n UI after I last imported it", which is the difference between an
   // update and an accidental revert. Only emitted when the source carries one,
-  // so hand-written files and `convert` output stay untouched.
+  // so a hand-written workflow does not acquire a revision it never had.
+  // `convert` goes through here too, and carries the stamp across when the
+  // source format already had one.
   //
   // js-yaml quotes the ISO string on dump, which matters: an unquoted timestamp
   // is parsed back as a `Date`, not a `string`.

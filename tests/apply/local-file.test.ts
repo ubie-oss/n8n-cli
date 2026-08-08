@@ -288,3 +288,19 @@ describe("quoted keys do not become duplicate properties", () => {
     expect((yaml.load(out as string) as Record<string, unknown>).updatedAt).toBe(STAMP);
   });
 });
+
+describe("line endings", () => {
+  test("an insert into a CRLF file uses CRLF", () => {
+    const out = patchYamlStamp("id: wf1\r\nname: x\r\nactive: false\r\nnodes: []\r\n", STAMP);
+    expect(out).toBe(
+      `id: wf1\r\nname: x\r\nactive: false\r\nupdatedAt: '${STAMP}'\r\nnodes: []\r\n`,
+    );
+    // No lone LF anywhere: a mixed-terminator file is pure diff churn.
+    expect(/[^\r]\n/.test(out as string)).toBe(false);
+  });
+
+  test("an insert into an LF file stays LF", () => {
+    const out = patchYamlStamp("id: wf1\nactive: false\nnodes: []\n", STAMP);
+    expect(out).toBe(`id: wf1\nactive: false\nupdatedAt: '${STAMP}'\nnodes: []\n`);
+  });
+});
