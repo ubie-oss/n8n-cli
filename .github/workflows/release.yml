@@ -4,6 +4,16 @@ on:
   push:
     tags:
       - 'v*'
+  # Also callable from auto-tag.yml, which creates the tag itself. A tag pushed
+  # with GITHUB_TOKEN does not fire the `push: tags` trigger above (GitHub
+  # suppresses it to avoid workflow loops), so the tagging workflow has to
+  # invoke this one directly instead of relying on the tag event.
+  workflow_call:
+    inputs:
+      version:
+        description: 'Tag to release, e.g. v2.10.1. Must already exist.'
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -14,6 +24,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # ratchet:actions/checkout@v4
+        with:
+          # On a tag push this is the tag being released; when called from
+          # auto-tag.yml the caller's ref is a branch, so check out the tag
+          # explicitly to build exactly what was tagged.
+          ref: ${{ inputs.version || github.ref }}
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # ratchet:oven-sh/setup-bun@v2
@@ -68,6 +83,11 @@ jobs:
             runner: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # ratchet:actions/checkout@v4
+        with:
+          # On a tag push this is the tag being released; when called from
+          # auto-tag.yml the caller's ref is a branch, so check out the tag
+          # explicitly to build exactly what was tagged.
+          ref: ${{ inputs.version || github.ref }}
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # ratchet:oven-sh/setup-bun@v2
@@ -82,8 +102,10 @@ jobs:
 
       - name: Determine version info
         id: version
+        env:
+          VERSION: ${{ inputs.version || github.ref_name }}
         run: |
-          echo "version=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "commit=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
           echo "date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
 
@@ -131,6 +153,11 @@ jobs:
     needs: [build]
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # ratchet:actions/checkout@v4
+        with:
+          # On a tag push this is the tag being released; when called from
+          # auto-tag.yml the caller's ref is a branch, so check out the tag
+          # explicitly to build exactly what was tagged.
+          ref: ${{ inputs.version || github.ref }}
 
       - name: Download all artifacts
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # ratchet:actions/download-artifact@v4
@@ -151,6 +178,9 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # ratchet:softprops/action-gh-release@v2
         with:
+          # Explicit because the action can only infer the tag from a tag push,
+          # and workflow_call runs on the caller's branch ref.
+          tag_name: ${{ inputs.version || github.ref_name }}
           generate_release_notes: true
           files: |
             dist/n8n-cli-darwin-arm64
