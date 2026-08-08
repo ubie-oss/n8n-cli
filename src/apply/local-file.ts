@@ -85,6 +85,19 @@ function updateJSONFile(filePath: string, workflow: Workflow): void {
 const YAML_STAMP_ANCHORS = ["active", "name", "id"];
 
 /**
+ * Matches a top-level mapping key, quoted or not.
+ *
+ * YAML lets a key be written `updatedAt:`, `'updatedAt':` or `"updatedAt":`,
+ * and all three mean the same key. Recognising only the bare form would make
+ * the writer *add* a second one, and a duplicate mapping key is a parse error
+ * — the file would stop loading entirely, in every command, from one silent
+ * write.
+ */
+function yamlKeyPattern(key: string): RegExp {
+  return new RegExp(`^(['"]?)${key}\\1[ \\t]*:.*$`, "m");
+}
+
+/**
  * Replaces the top-level `updatedAt:` line, or inserts one after the first
  * anchor key present.
  *
@@ -98,13 +111,13 @@ export function patchYamlStamp(text: string, updatedAt: string | undefined): str
 
   const line = `updatedAt: '${updatedAt.replaceAll("'", "''")}'`;
 
-  const existing = /^updatedAt:.*$/m.exec(text);
+  const existing = yamlKeyPattern("updatedAt").exec(text);
   if (existing) {
     return `${text.slice(0, existing.index)}${line}${text.slice(existing.index + existing[0].length)}`;
   }
 
   for (const anchor of YAML_STAMP_ANCHORS) {
-    const match = new RegExp(`^${anchor}:.*$`, "m").exec(text);
+    const match = yamlKeyPattern(anchor).exec(text);
     if (!match) continue;
     const end = match.index + match[0].length;
     return `${text.slice(0, end)}\n${line}${text.slice(end)}`;
@@ -198,6 +211,11 @@ export function patchTsStamp(text: string, updatedAt: string | undefined): strin
   if (!meta) return null;
 
   const value = findStampValue(text, meta);
+  // The key is there but its value is not a plain string literal. Inserting
+  // would produce a duplicate property, and in an object literal the *last*
+  // one wins — so the file would keep reporting its old revision forever while
+  // looking like it had been updated. Leave it untouched instead.
+  if (value === "unparseable") return null;
   if (value) {
     return `${text.slice(0, value.start)}${JSON.stringify(updatedAt)}${text.slice(value.end)}`;
   }
@@ -206,8 +224,11 @@ export function patchTsStamp(text: string, updatedAt: string | undefined): strin
 }
 
 /**
- * Finds the string literal assigned to `meta.updatedAt`, or null when the block
- * does not declare one.
+ * Finds the string literal assigned to `meta.updatedAt`.
+ *
+ * Returns null when the block declares no such property, and `"unparseable"`
+ * when it declares one whose value this writer will not touch. The caller must
+ * treat those two differently: only the first is safe to insert into.
  *
  * Only properties of `meta` itself count. `nodeIds` is keyed by node name, and
  * a node called "updatedAt" would otherwise have its ID overwritten with a
@@ -217,15 +238,23 @@ export function patchTsStamp(text: string, updatedAt: string | undefined): strin
 function findStampValue(
   text: string,
   meta: { start: number; end: number },
-): { start: number; end: number } | null {
+): { start: number; end: number } | "unparseable" | null {
   let depth = 0;
 
   for (let i = meta.start; i < meta.end; i++) {
     const ch = text[i];
 
     if (ch === '"' || ch === "'" || ch === "`") {
-      i = skipString(text, i);
-      continue;
+      const close = skipString(text, i);
+      // A quoted key is still a key: `"updatedAt": "..."` declares exactly the
+      // same property as the bare form, and skipping past it would make the
+      // caller add a second one.
+      const keyEnd = depth === 0 ? matchQuotedKey(text, i, close) : null;
+      if (keyEnd === null) {
+        i = close;
+        continue;
+      }
+      return readStampValue(text, keyEnd);
     }
     if (ch === "/" && text[i + 1] === "/") {
       const nl = text.indexOf("\n", i);
@@ -254,12 +283,28 @@ function findStampValue(
     const colon = /^\s*:\s*/.exec(text.slice(i + "updatedAt".length));
     if (!colon) continue;
 
-    const valueStart = i + "updatedAt".length + colon[0].length;
-    const quote = text[valueStart];
-    if (quote !== '"' && quote !== "'") return null;
-
-    return { start: valueStart, end: skipString(text, valueStart) + 1 };
+    return readStampValue(text, i + "updatedAt".length + colon[0].length);
   }
 
   return null;
+}
+
+/**
+ * When the string spanning `[open, close]` is the quoted key `"updatedAt"`,
+ * returns the offset just past its colon. Otherwise null.
+ */
+function matchQuotedKey(text: string, open: number, close: number): number | null {
+  if (text.slice(open + 1, close) !== "updatedAt") return null;
+  const colon = /^\s*:\s*/.exec(text.slice(close + 1));
+  return colon ? close + 1 + colon[0].length : null;
+}
+
+/** Reads the string literal at `start`, or reports that it is not one. */
+function readStampValue(
+  text: string,
+  start: number,
+): { start: number; end: number } | "unparseable" {
+  const quote = text[start];
+  if (quote !== '"' && quote !== "'") return "unparseable";
+  return { start, end: skipString(text, start) + 1 };
 }

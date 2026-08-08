@@ -226,6 +226,19 @@ function handleProbe(method: string, pathname: string, deps: HandlerDeps): Respo
   });
 }
 
+/**
+ * Makes a message safe to carry in a response header.
+ *
+ * The text quotes a timestamp that came from an upstream JSON document, so it
+ * is not this proxy's to trust. A control character in it would make
+ * `Headers.set` throw, and the throw would land in the forwarding try/catch and
+ * turn a write that upstream already accepted into a 502 for the client.
+ */
+function headerSafe(message: string): string {
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: stripping them is the point.
+  return message.replace(/[\u0000-\u001F\u007F]/g, " ").slice(0, 512);
+}
+
 async function handleTransparentForward(
   req: Request,
   pathname: string,
@@ -376,7 +389,7 @@ async function handleWorkflowMutation(
     if (staleWrites.length > 0) {
       response.headers.set(
         STALE_WRITE_WARNING_HEADER.toLowerCase(),
-        staleWrites[0]?.message ?? "stale write",
+        headerSafe(staleWrites[0]?.message ?? "stale write"),
       );
     }
     const action = verdict.violations.length > 0 || duplicateMatches.length > 0 ? "warn" : "pass";

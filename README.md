@@ -1015,6 +1015,8 @@ Under `--stale-write-enforce warn` the write is forwarded with an `X-N8n-Stale-W
 
 > Like every other check here, this is only an enforcement boundary if direct access to the n8n API is blocked at the network level. A caller that can reach n8n directly bypasses the proxy entirely.
 
+> **Do not combine this with `--tags`.** The tag filter reads tags from the request body, and the body `apply` sends carries `name`, `nodes`, `connections`, `settings` and `staticData` — no tags. Every write from `n8n-cli` therefore falls outside any tag scope and is forwarded without running middleware at all. Since `n8n-cli` is the only client that sends a base revision, `--tags` and `--stale-write-enforce error` together leave the guard doing nothing. The same is true of lint; see the note under [Scoping by tags](#proxy).
+
 **Scoping by tags:** pass `--tags managed,prod` (or set `PROXY_FILTER_BY_TAGS`) to constrain middleware enforcement to workflow saves whose `tags` contain every listed name. Saves outside that scope are forwarded transparently — no lint, no duplicate-name check, no authz. Useful when only a subset of workflows on the upstream is under policy. Filtering is AND across the listed names.
 
 > **Scope is advisory, not an enforcement boundary.** The filter reads tags from the request body the client sent, not from the existing upstream workflow, so a caller can bypass middleware by stripping the tag from the JSON they submit. Use it to opt subsets of workflows into policy (organizational scoping), not to defend against a hostile client; for hard enforcement keep the filter empty so every save is checked, or pair the filter with API-key / network-level access controls.

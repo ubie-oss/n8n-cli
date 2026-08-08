@@ -29,7 +29,7 @@ interface MockUpstream {
   captured: Captured[];
 }
 
-function startMockUpstream(): MockUpstream {
+function startMockUpstream(storedStamp: string = STORED): MockUpstream {
   const captured: Captured[] = [];
   const server = Bun.serve({
     port: 0,
@@ -48,7 +48,7 @@ function startMockUpstream(): MockUpstream {
           name: "stored",
           nodes: [],
           connections: {},
-          updatedAt: STORED,
+          updatedAt: storedStamp,
         });
       }
       return Response.json({ ok: true });
@@ -136,6 +136,22 @@ describe("proxy + stale-write", () => {
 
     expect(res.status).toBe(200);
     expect(res.headers.get(STALE_WRITE_WARNING_HEADER)).toContain(STORED);
+    expect(forwardedWrites()).toHaveLength(1);
+  });
+
+  test("warn mode survives an upstream timestamp that cannot go in a header", async () => {
+    // The message quotes the upstream `updatedAt` verbatim. A control
+    // character in it used to make `Headers.set` throw, and the throw landed in
+    // the forwarding catch — turning a write upstream had already accepted into
+    // a 502 for the client.
+    upstream.server.stop(true);
+    upstream = startMockUpstream("2026-03-01T10:00:00.000Z\r\ninjected: yes");
+    startProxyWithGuard({ staleWriteEnforce: "warn" });
+
+    const res = await put(OLDER);
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get("injected")).toBeNull();
     expect(forwardedWrites()).toHaveLength(1);
   });
 

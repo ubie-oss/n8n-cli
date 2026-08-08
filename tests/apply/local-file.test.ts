@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import yaml from "js-yaml";
 import type { Workflow } from "@/api/types.ts";
 import { patchTsStamp, patchYamlStamp, updateLocalWorkflowFile } from "@/apply/local-file.ts";
 import { parseTsWorkflow } from "@/ts/loader.ts";
@@ -249,5 +250,41 @@ describe("a patched .ts file still parses", () => {
     const patched = patchTsStamp(`${header}${meta}${workflowTail}`, STAMP);
     expect(patched).not.toBeNull();
     expect(parseTsWorkflow(patched as string, "wf1").updatedAt).toBe(STAMP);
+  });
+});
+
+describe("quoted keys do not become duplicate properties", () => {
+  /**
+   * A quoted key declares the same property as the bare form. Skipping past it
+   * and inserting another is not a cosmetic problem: in an object literal the
+   * last one wins, so the file would keep reporting its old revision forever,
+   * and in YAML a duplicate mapping key stops the file loading at all.
+   */
+  test.each([
+    ['"updatedAt": "old"', 'export const meta = {\n  active: true,\n  "updatedAt": "old",\n};\n'],
+    ["'updatedAt': 'old'", "export const meta = {\n  active: true,\n  'updatedAt': 'old',\n};\n"],
+  ])(".ts with %s is replaced in place", (_label, text) => {
+    const out = patchTsStamp(text, STAMP);
+    expect(out?.match(/updatedAt/g)).toHaveLength(1);
+    expect(out).toContain(STAMP);
+  });
+
+  test(".ts whose stamp is not a plain string literal is left untouched", () => {
+    // Inserting here would duplicate the key, and the stale value would win.
+    expect(patchTsStamp("export const meta = {\n  updatedAt: `old`,\n};\n", STAMP)).toBeNull();
+  });
+
+  test.each([
+    ["single-quoted", "id: wf1\nname: x\nactive: false\n'updatedAt': 'old'\nnodes: []\n"],
+    ["double-quoted", 'id: wf1\nname: x\nactive: false\n"updatedAt": "old"\nnodes: []\n'],
+  ])("YAML with a %s key stays loadable", (_label, text) => {
+    const out = patchYamlStamp(text, STAMP) as string;
+    expect(out.match(/updatedAt/g)).toHaveLength(1);
+    expect((yaml.load(out) as Record<string, unknown>).updatedAt).toBe(STAMP);
+  });
+
+  test("YAML anchors are found even when quoted", () => {
+    const out = patchYamlStamp("'id': wf1\n'name': x\n'active': false\nnodes: []\n", STAMP);
+    expect((yaml.load(out as string) as Record<string, unknown>).updatedAt).toBe(STAMP);
   });
 });
