@@ -133,4 +133,45 @@ describe("apply against a YAML definition with a stamp", () => {
     expect(result.updateCount).toBe(1);
     expect(recorded.updates[0]?.baseUpdatedAt).toBeUndefined();
   });
+
+  test("a created workflow is stamped with the state that survived auto-tagging", async () => {
+    // Auto-tagging runs after the create call and bumps `updatedAt` again.
+    // Stamping the file with the create response would leave it one revision
+    // behind, and the author's very first edit would read as a conflict.
+    const file = writeLocalYaml(undefined);
+    fs.writeFileSync(
+      file,
+      ["name: brand new", "active: false", "nodes: []", "connections: {}", ""].join("\n"),
+    );
+
+    const created = {
+      id: "wf-new",
+      name: "brand new",
+      active: false,
+      nodes: [],
+      connections: {},
+      updatedAt: "2026-05-01T00:00:00.000Z",
+    } as Workflow;
+    const settled = { ...created, updatedAt: "2026-05-01T00:00:05.000Z" } as Workflow;
+
+    const service = {
+      listAllWorkflows: async () => [],
+      getWorkflow: async () => settled,
+      createWorkflow: async () => created,
+      getWorkflowCurrentProjectID: () => "",
+    } as unknown as WorkflowService;
+
+    const exec = executor(service, { autoTags: ["managed"] });
+    exec.setTagService({
+      listTags: async () => [],
+      findOrCreateTag: async (name: string) => ({ id: `tag-${name}`, name }),
+      updateWorkflowTags: async () => {},
+    } as never);
+
+    const result = await exec.execute();
+
+    expect(result.createCount).toBe(1);
+    expect(result.operations[0]?.tagsAdded.length).toBeGreaterThan(0);
+    expect(loadYamlWorkflow(file).updatedAt).toBe("2026-05-01T00:00:05.000Z");
+  });
 });

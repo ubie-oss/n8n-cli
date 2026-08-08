@@ -477,7 +477,7 @@ export class Executor {
 
     const created = await this.workflowService.createWorkflow(input);
     await this.applyTagsAndProject(created, workflow, op);
-    await updateLocalWorkflowFile(wf.path, created);
+    await updateLocalWorkflowFile(wf.path, await this.settledWorkflow(created, op));
   }
 
   /** Performs the actual update operation. */
