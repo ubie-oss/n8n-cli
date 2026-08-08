@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { IncludeRef } from "@/yaml/include-schema.ts";
 import { loadYamlWorkflow } from "@/yaml/loader.ts";
@@ -93,5 +95,47 @@ describe("loadYamlWorkflow", () => {
     const jsCode = codeNode.parameters?.jsCode as string;
     expect(typeof jsCode).toBe("string");
     expect(jsCode).toContain("const items = $input.all();");
+  });
+});
+
+describe("workflow timestamps", () => {
+  /**
+   * YAML's implicit typing turns an unquoted ISO timestamp into a `Date`, which
+   * `resolveIncludeRefs` then flattens to `{}` while walking the document. That
+   * silently destroyed the value — conflict detection saw an unparseable stamp
+   * and stopped detecting anything, and `apply` sent `[object Object]` upstream
+   * as its base revision.
+   */
+  test("an unquoted updatedAt survives as an ISO string", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "yaml-ts-"));
+    try {
+      const file = path.join(dir, "wf.yaml");
+      fs.writeFileSync(
+        file,
+        "id: wf1\nname: x\nactive: false\nupdatedAt: 2026-03-01T10:00:00.000Z\nnodes: []\nconnections: {}\n",
+      );
+
+      const workflow = loadYamlWorkflow(file);
+
+      expect(typeof workflow.updatedAt).toBe("string");
+      expect(workflow.updatedAt).toBe("2026-03-01T10:00:00.000Z");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a quoted updatedAt is left exactly as written", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "yaml-ts-"));
+    try {
+      const file = path.join(dir, "wf.yaml");
+      fs.writeFileSync(
+        file,
+        "id: wf1\nname: x\nactive: false\nupdatedAt: '2026-03-01T10:00:00.000Z'\nnodes: []\nconnections: {}\n",
+      );
+
+      expect(loadYamlWorkflow(file).updatedAt).toBe("2026-03-01T10:00:00.000Z");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

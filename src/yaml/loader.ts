@@ -43,10 +43,33 @@ export function loadYamlWorkflow(filePath: string, options?: LoadYamlOptions): W
     throw new Error(`YAML file "${filePath}" did not produce a valid object`);
   }
 
+  normalizeTimestamps(parsed as Record<string, unknown>);
+
   if (resolveIncludes) {
     const stripHeaders = options?.stripFileHeaders ?? false;
     parsed = resolveIncludeRefs(parsed, baseDir, { stripFileHeaders: stripHeaders });
   }
 
   return parsed as Workflow;
+}
+
+/**
+ * Forces the workflow-level timestamps back to strings, in place.
+ *
+ * YAML's implicit typing turns an unquoted ISO timestamp into a `Date`, and
+ * `Workflow.updatedAt` is declared — and consumed — as a string: conflict
+ * detection compares it, and `apply` sends it upstream as a header. It must run
+ * before `resolveIncludeRefs`, which walks objects with `Object.entries` and so
+ * flattens any `Date` it meets into `{}`, destroying the value outright.
+ *
+ * Files written by `import` quote the value and are unaffected. This is for the
+ * hand-edited ones.
+ */
+function normalizeTimestamps(parsed: Record<string, unknown>): void {
+  for (const key of ["createdAt", "updatedAt"]) {
+    const value = parsed[key];
+    if (value instanceof Date) {
+      parsed[key] = value.toISOString();
+    }
+  }
 }
