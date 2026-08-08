@@ -139,6 +139,23 @@ describe("bearerTokenInjectFactory", () => {
     expect(resolved[0]?.token).toBe("from-env");
   });
 
+  test("a secret mounted with a trailing newline is trimmed, not left to 502", () => {
+    const resolved = resolveBearerTokenRules(
+      [{ pathPrefix: "/mcp-server/", tokenEnvVar: "MCP_TOKEN", scheme: "Bearer" }],
+      { MCP_TOKEN: "from-file\n" },
+    );
+    expect(resolved[0]?.token).toBe("from-file");
+  });
+
+  test("a token carrying a line break fails at startup", () => {
+    expect(() =>
+      resolveBearerTokenRules(
+        [{ pathPrefix: "/mcp-server/", tokenEnvVar: "MCP_TOKEN", scheme: "Bearer" }],
+        { MCP_TOKEN: "abc\ndef" },
+      ),
+    ).toThrow(/rule for \/mcp-server\/: token contains a character/);
+  });
+
   test("an unset tokenEnvVar fails loudly instead of injecting nothing", () => {
     expect(() =>
       resolveBearerTokenRules(

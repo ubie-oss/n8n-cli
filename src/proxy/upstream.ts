@@ -22,6 +22,7 @@
  */
 import { BASE_UPDATED_AT_HEADER } from "@/api/headers.ts";
 import { runClientPipeline } from "@/middleware/client-pipeline.ts";
+import { claimCoversPath } from "@/middleware/header-claims.ts";
 import type { ClientMiddleware } from "@/middleware/types.ts";
 
 /**
@@ -107,15 +108,21 @@ function normalizeResponseEncoding(response: Response): Response {
 const CREDENTIAL_HEADERS = new Set(["authorization", "proxy-authorization"]);
 
 /**
- * Whether anything in the chain has claimed a credential header.
+ * Whether the chain supplies a credential header for this particular path.
  *
- * A chain that claims none is a transparent forwarder as far as auth goes: its
- * callers may legitimately be authenticating to n8n itself (webhook nodes using
- * header or basic auth), nothing in front of them consumed that header, and
- * discarding it would break them.
+ * Where nothing claims one, the proxy is a transparent forwarder as far as auth
+ * goes: the caller may legitimately be authenticating to n8n itself (webhook
+ * nodes using header or basic auth), nothing in front of it consumed that
+ * header, and discarding it would break the request. The check is per-path
+ * because claims are — a rule scoped to `/mcp-server/` says nothing about what
+ * should happen to `/webhook/`.
  */
-function chainOwnsCredentials(chain: ClientMiddleware[]): boolean {
-  return chain.some((m) => m.ownedHeaders?.some((h) => CREDENTIAL_HEADERS.has(h.toLowerCase())));
+function chainSuppliesCredentials(chain: ClientMiddleware[], pathname: string): boolean {
+  return chain.some((m) =>
+    m.headerClaims?.some(
+      (c) => CREDENTIAL_HEADERS.has(c.header.toLowerCase()) && claimCoversPath(c, pathname),
+    ),
+  );
 }
 
 export interface ForwardOptions {
@@ -146,7 +153,7 @@ export async function forwardRequest(
 
   const clientMiddlewares = options?.clientMiddlewares ?? [];
   if (clientMiddlewares.length > 0) {
-    if (chainOwnsCredentials(clientMiddlewares)) {
+    if (chainSuppliesCredentials(clientMiddlewares, incomingUrl.pathname)) {
       // The client's `Authorization` addresses *this* hop, not the upstream, so
       // it is dropped for the same reason hop-by-hop headers are — and before
       // the pipeline, so a middleware that sets it still wins.

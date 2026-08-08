@@ -29,27 +29,17 @@ const testRule = {
   conflictPolicy: "set-if-absent" as const,
 };
 
-describe("WebhookTokenInjectMiddleware ownedHeaders", () => {
-  test("a replace rule claims its header, so a second writer is detectable", () => {
+describe("WebhookTokenInjectMiddleware headerClaims", () => {
+  test("a replace rule claims its header over its own prefix only", () => {
     const mw = new WebhookTokenInjectMiddleware({
       rules: [{ ...agentRule, header: "Authorization", conflictPolicy: "replace" }],
     });
-    expect(mw.ownedHeaders).toEqual(["authorization"]);
+    expect(mw.headerClaims).toEqual([{ header: "Authorization", pathPrefix: "/webhook/agent/" }]);
   });
 
   test("a set-if-absent rule claims nothing — it defers to the caller by design", () => {
     const mw = new WebhookTokenInjectMiddleware({ rules: [agentRule, testRule] });
-    expect(mw.ownedHeaders).toEqual([]);
-  });
-
-  test("two replace rules on one header claim it once", () => {
-    const mw = new WebhookTokenInjectMiddleware({
-      rules: [
-        { ...agentRule, conflictPolicy: "replace" },
-        { ...agentRule, pathPrefix: "/webhook/agent/sub/", conflictPolicy: "replace" },
-      ],
-    });
-    expect(mw.ownedHeaders).toEqual(["x-agent-token"]);
+    expect(mw.headerClaims).toEqual([]);
   });
 });
 

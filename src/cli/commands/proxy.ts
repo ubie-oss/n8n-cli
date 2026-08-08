@@ -131,7 +131,7 @@ export function registerProxyCommand(program: Command): void {
     )
     .option(
       "--iap-auth-header-name <name>",
-      "Header the id_token is written to: authorization (default) or proxy-authorization. Use proxy-authorization when the upstream application needs Authorization for its own bearer token — IAP accepts the id_token there and forwards Authorization untouched. env: N8N_IAP_AUTH_HEADER_NAME",
+      "Header the id_token is written to: authorization (default) or proxy-authorization. Use proxy-authorization when the upstream application needs a bearer token of its own in Authorization — IAP then reads the id_token from Proxy-Authorization and forwards Authorization to the backend unread. The proxy, not the caller, must supply that token (see --bearer-token-inject-rules): a caller's own Authorization is still discarded. env: N8N_IAP_AUTH_HEADER_NAME",
     )
     .option(
       "--iap-auth-cache-ttl-ms <ms>",

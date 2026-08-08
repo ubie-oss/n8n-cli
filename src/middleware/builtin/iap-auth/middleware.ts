@@ -1,3 +1,4 @@
+import type { HeaderClaim } from "@/middleware/header-claims.ts";
 import type { ClientMiddleware, ClientMiddlewareContext } from "@/middleware/types.ts";
 import type { TokenSource } from "./token-source.ts";
 
@@ -39,10 +40,11 @@ export interface IapAuthOptions {
  */
 export class IapAuthMiddleware implements ClientMiddleware {
   readonly name = "iap-auth";
-  readonly ownedHeaders: readonly string[];
+  /** Written on every upstream call, so the claim carries no path scope. */
+  readonly headerClaims: readonly HeaderClaim[];
 
   constructor(private readonly options: IapAuthOptions) {
-    this.ownedHeaders = [options.headerName ?? "authorization"];
+    this.headerClaims = [{ header: options.headerName ?? "authorization" }];
   }
 
   async apply(headers: Headers, _ctx: ClientMiddlewareContext): Promise<void> {

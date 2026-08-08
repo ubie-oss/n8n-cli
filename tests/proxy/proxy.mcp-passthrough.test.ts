@@ -195,6 +195,37 @@ describe("proxy: chains that claim no credential header", () => {
     expect(upstream.captured[0]!.headers.authorization).toBe("Basic dXNlcjpwYXNz");
   });
 
+  test("a path-scoped claim leaves Authorization alone off its own paths", async () => {
+    // bearer-token-inject claims `/mcp-server/` and nothing else. A webhook node
+    // authenticating on Authorization lives outside that scope, and the proxy
+    // supplies nothing there, so the caller's credential has to survive.
+    registerClientFactory(bearerTokenInjectFactory);
+    proxy = startProxy({
+      listen: "127.0.0.1:0",
+      upstream: `http://127.0.0.1:${upstream.port}`,
+      enforce: "off",
+      disableRules: [],
+      logFormat: "json",
+      allowDuplicates: true,
+      clientMiddlewares: ["bearer-token-inject"],
+      clientMiddlewareCliOptions: { bearerTokenInjectRules: MCP_RULES },
+    });
+
+    await fetch(`http://127.0.0.1:${proxy.port}/webhook/basic-auth-node`, {
+      method: "POST",
+      headers: { authorization: "Basic dXNlcjpwYXNz" },
+      body: "{}",
+    });
+    expect(upstream.captured[0]!.headers.authorization).toBe("Basic dXNlcjpwYXNz");
+
+    await fetch(`http://127.0.0.1:${proxy.port}/mcp-server/http`, {
+      method: "POST",
+      headers: { authorization: "Bearer caller-token-for-this-hop" },
+      body: "{}",
+    });
+    expect(upstream.captured[1]!.headers.authorization).toBe("Bearer mcp-secret");
+  });
+
   test("api-key-inject alone keeps it too — it never claimed that header", async () => {
     // Regression guard for deployments that proxy webhook URLs whose nodes use
     // header or basic auth: dropping Authorization for them would turn every

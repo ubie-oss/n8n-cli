@@ -1238,21 +1238,27 @@ Available egress middlewares: `iap-auth` (Bearer id_token; sources `metadata`,
 (`X-Impersonator-Id-Token`; sources `adc`, `env`, `static`), `api-key-inject`,
 `webhook-token-inject`, `bearer-token-inject`.
 
-When the chain contains a middleware that supplies the upstream's credential —
-`iap-auth` or `bearer-token-inject` — the `Authorization` the caller sent is
-dropped before the chain runs. That header addresses the proxy hop, not n8n: it
-is a credential for reaching the proxy, replayable until it expires, and
-forwarding it would leak the right to call the proxy into the upstream's logs.
-Where the upstream sits behind its own identity-aware proxy it would also carry
-the wrong `aud` and only produce 401s at the second hop. Middlewares run after
-the drop and only ever add headers, so the result does not depend on chain order.
+Each middleware declares the headers it supplies, and on which paths. Where the
+chain supplies a credential header for the request at hand, the `Authorization`
+the caller sent is dropped before the chain runs. That header addresses the
+proxy hop, not n8n: it is a credential for reaching the proxy, replayable until
+it expires, and forwarding it would leak the right to call the proxy into the
+upstream's logs. Where the upstream sits behind its own identity-aware proxy it
+would also carry the wrong `aud` and only produce 401s at the second hop.
+Middlewares run after the drop and only ever add headers, so the result does not
+depend on chain order.
 
-Chains without such a middleware — `api-key-inject` alone, or no chain at all —
-keep forwarding `Authorization` untouched: nothing in front of them consumed
-one, and webhook nodes using header or basic auth rely on it arriving. Two
-middlewares wanting the same header (`iap-auth` in its default mode alongside
-`bearer-token-inject`) is refused when the proxy starts, rather than letting
-chain order decide which credential reaches n8n.
+Everything else keeps forwarding `Authorization` untouched — a chain of
+`api-key-inject` alone, no chain at all, or a path outside the reach of a
+path-scoped rule. Nothing in front of those consumed the header, and webhook
+nodes using header or basic auth rely on it arriving. `iap-auth` supplies its
+header on every path; `bearer-token-inject` and `webhook-token-inject` only
+where their rules match.
+
+Two middlewares wanting the same header on paths that can overlap — `iap-auth`
+in its default mode alongside `bearer-token-inject`, say — is refused when the
+proxy starts, rather than letting chain order decide which credential reaches
+n8n. Claims over prefixes that cannot both match one request are fine.
 
 #### webhook-token-inject
 

@@ -1,3 +1,4 @@
+import type { HeaderClaim } from "@/middleware/header-claims.ts";
 import type { ClientMiddleware, ClientMiddlewareContext } from "@/middleware/types.ts";
 
 export interface ApiKeyInjectOptions {
@@ -23,8 +24,16 @@ export interface ApiKeyInjectOptions {
  */
 export class ApiKeyInjectMiddleware implements ClientMiddleware {
   readonly name = "api-key-inject";
+  readonly headerClaims: readonly HeaderClaim[];
 
-  constructor(private readonly options: ApiKeyInjectOptions) {}
+  constructor(private readonly options: ApiKeyInjectOptions) {
+    // `header` is configurable, so this middleware can be pointed at
+    // `Authorization` like any other. Claiming it keeps that configuration
+    // inside the same conflict check as everything else instead of letting
+    // chain order decide. Under "set-if-absent" it defers to the caller and so
+    // claims nothing.
+    this.headerClaims = options.conflictPolicy === "replace" ? [{ header: options.header }] : [];
+  }
 
   apply(headers: Headers, _ctx: ClientMiddlewareContext): void {
     if (this.options.conflictPolicy === "set-if-absent" && headers.has(this.options.header)) {

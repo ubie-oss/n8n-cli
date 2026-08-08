@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { sanitizeHeaderValue } from "@/middleware/header-value.ts";
 import type { ClientMiddlewareFactory } from "@/middleware/types.ts";
 import { BearerTokenInjectMiddleware } from "./middleware.ts";
 
@@ -114,7 +115,14 @@ function resolveTokens(
     }
     // `token` is present here: the schema refinement guarantees exactly one of
     // the two sources, and the env branch above either assigned or threw.
-    return { pathPrefix: rule.pathPrefix, token: token as string, scheme: rule.scheme };
+    return {
+      pathPrefix: rule.pathPrefix,
+      token: sanitizeHeaderValue(
+        token as string,
+        `bearer-token-inject: rule for ${rule.pathPrefix}`,
+      ),
+      scheme: rule.scheme,
+    };
   });
 }
 

@@ -1,5 +1,6 @@
 import type { Workflow } from "@/api/types.ts";
 import type { Violation } from "@/lint/rules/violation.ts";
+import type { HeaderClaim } from "./header-claims.ts";
 
 /** Where the pipeline is running. Middlewares can adapt to context. */
 export type PipelineMode = "proxy" | "apply" | "single";
@@ -226,22 +227,14 @@ export interface ClientMiddlewareContext {
 export interface ClientMiddleware {
   readonly name: string;
   /**
-   * Headers this middleware claims as the proxy's own, lowercase.
+   * Headers this middleware supplies, and on which paths. See `HeaderClaim`.
    *
-   * Declaring one means "the proxy supplies this header's value; whatever the
-   * caller sent for it is not the upstream's business". Two things read it:
-   * the registry rejects a chain where two middlewares claim the same header
-   * (which would make the outcome depend on chain order), and `forwardRequest`
-   * discards the caller's `Authorization` when — and only when — something in
-   * the chain has claimed the credential headers. A chain that claims none
-   * (say, `api-key-inject` alone) leaves the caller's headers alone, which is
-   * what a proxy fronting webhook nodes with header or basic auth needs.
-   *
-   * Path-scoped middlewares still claim: `bearer-token-inject` owns
-   * `Authorization` wherever its rules reach, and the caller's value must not
-   * survive on the paths it does not.
+   * A middleware that only reads, or that defers to a value the caller brought,
+   * claims nothing — a chain claiming no credential header leaves the caller's
+   * `Authorization` alone, which is what a proxy fronting webhook nodes with
+   * header or basic auth needs.
    */
-  readonly ownedHeaders?: readonly string[];
+  readonly headerClaims?: readonly HeaderClaim[];
   /**
    * Mutate `headers` in place. The proxy has already stripped hop-by-hop
    * headers, so callers can freely add/remove without re-checking that

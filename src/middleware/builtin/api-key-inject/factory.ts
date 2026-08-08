@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { sanitizeHeaderValue } from "@/middleware/header-value.ts";
 import type { ClientMiddlewareFactory } from "@/middleware/types.ts";
 import { ApiKeyInjectMiddleware } from "./middleware.ts";
 
@@ -63,7 +64,12 @@ export const apiKeyInjectFactory: ClientMiddlewareFactory<ApiKeyInjectRawOptions
   loadFromCLI: fromCLI,
   build(merged) {
     const parsed = optionsSchema.parse(merged);
-    return new ApiKeyInjectMiddleware(parsed);
+    return new ApiKeyInjectMiddleware({
+      ...parsed,
+      // Same failure as the token-injecting middlewares: a key mounted from a
+      // file carries a trailing newline, which `Headers.set` rejects mid-request.
+      apiKey: sanitizeHeaderValue(parsed.apiKey, "api-key-inject: apiKey"),
+    });
   },
 };
 

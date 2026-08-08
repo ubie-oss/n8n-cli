@@ -1,3 +1,4 @@
+import type { HeaderClaim } from "@/middleware/header-claims.ts";
 import type { ClientMiddleware, ClientMiddlewareContext } from "@/middleware/types.ts";
 
 /**
@@ -62,21 +63,17 @@ export interface WebhookTokenInjectOptions {
  */
 export class WebhookTokenInjectMiddleware implements ClientMiddleware {
   readonly name = "webhook-token-inject";
-  readonly ownedHeaders: readonly string[];
+  readonly headerClaims: readonly HeaderClaim[];
 
   constructor(private readonly options: WebhookTokenInjectOptions) {
-    // Only the "replace" rules claim their header — those are the ones that
-    // make the proxy the single holder of that value. A "set-if-absent" rule
-    // says the opposite by design: the caller's own value wins, so it neither
-    // conflicts with another writer nor licenses discarding what the caller
-    // sent.
-    this.ownedHeaders = [
-      ...new Set(
-        options.rules
-          .filter((r) => r.conflictPolicy === "replace")
-          .map((r) => r.header.toLowerCase()),
-      ),
-    ];
+    // Only the "replace" rules claim, and only over their own prefix. Those are
+    // the ones that make the proxy the single holder of that value; a
+    // "set-if-absent" rule says the opposite by design — the caller's value
+    // wins — so it neither conflicts with another writer nor licenses
+    // discarding what the caller sent.
+    this.headerClaims = options.rules
+      .filter((r) => r.conflictPolicy === "replace")
+      .map((r) => ({ header: r.header, pathPrefix: r.pathPrefix }));
   }
 
   apply(headers: Headers, ctx: ClientMiddlewareContext): void {

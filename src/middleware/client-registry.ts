@@ -1,3 +1,4 @@
+import { claimsCollide, type HeaderClaim } from "./header-claims.ts";
 import type { ClientMiddleware, ClientMiddlewareFactory } from "./types.ts";
 
 /**
@@ -68,29 +69,35 @@ export function buildClientMiddlewares(input: BuildClientMiddlewaresInput): Clie
 }
 
 /**
- * Refuses a chain in which two middlewares claim the same header.
+ * Refuses a chain in which two middlewares claim one header on paths that can
+ * overlap.
  *
  * Both would write it and the later one would win, so the chain's declaration
  * order — a deployment detail nothing else depends on — would silently decide
  * which credential reaches the upstream. The failure that produces is a 401
  * from a service that never sees the header it wanted; failing at startup with
  * both names in hand costs an operator minutes instead of hours.
+ *
+ * Claims whose prefixes cannot both match one request are left alone: two
+ * middlewares writing `Authorization` on `/webhook/a/` and `/mcp-server/` never
+ * meet, and rejecting that would block a legitimate deployment.
  */
 function assertNoHeaderConflict(chain: ClientMiddleware[]): void {
-  const claimedBy = new Map<string, string>();
+  const seen: { claim: HeaderClaim; owner: string }[] = [];
   for (const mw of chain) {
-    for (const header of mw.ownedHeaders ?? []) {
-      const key = header.toLowerCase();
-      const owner = claimedBy.get(key);
-      if (owner) {
+    for (const claim of mw.headerClaims ?? []) {
+      const clash = seen.find((s) => s.owner !== mw.name && claimsCollide(s.claim, claim));
+      if (clash) {
+        const where = claim.pathPrefix ? ` on paths under "${claim.pathPrefix}"` : "";
         throw new Error(
-          `Client middlewares "${owner}" and "${mw.name}" both write the ` +
-            `"${key}" header, so which one reaches the upstream would depend on ` +
-            "chain order. Configure them onto different headers " +
-            "(e.g. N8N_IAP_AUTH_HEADER_NAME=proxy-authorization) or drop one.",
+          `Client middlewares "${clash.owner}" and "${mw.name}" both write the ` +
+            `"${claim.header.toLowerCase()}" header${where}, so which one reaches ` +
+            "the upstream would depend on chain order. Configure them onto " +
+            "different headers (e.g. N8N_IAP_AUTH_HEADER_NAME=proxy-authorization), " +
+            "scope them to non-overlapping paths, or drop one.",
         );
       }
-      claimedBy.set(key, mw.name);
+      seen.push({ claim, owner: mw.name });
     }
   }
 }

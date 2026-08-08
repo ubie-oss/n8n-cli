@@ -1,3 +1,4 @@
+import type { HeaderClaim } from "@/middleware/header-claims.ts";
 import type { ClientMiddleware, ClientMiddlewareContext } from "@/middleware/types.ts";
 
 /**
@@ -58,9 +59,17 @@ export interface BearerTokenInjectOptions {
  */
 export class BearerTokenInjectMiddleware implements ClientMiddleware {
   readonly name = "bearer-token-inject";
-  readonly ownedHeaders = ["authorization"] as const;
+  readonly headerClaims: readonly HeaderClaim[];
 
-  constructor(private readonly options: BearerTokenInjectOptions) {}
+  constructor(private readonly options: BearerTokenInjectOptions) {
+    // Claimed only where the rules reach: on every other path the proxy
+    // supplies nothing, and deleting the caller's header there would break a
+    // request this middleware has no opinion about.
+    this.headerClaims = options.rules.map((r) => ({
+      header: "authorization",
+      pathPrefix: r.pathPrefix,
+    }));
+  }
 
   apply(headers: Headers, ctx: ClientMiddlewareContext): void {
     for (const rule of this.options.rules) {
