@@ -12,7 +12,7 @@
  * Preserves auth headers (`X-N8N-API-KEY`, `Authorization`) by default — the
  * client is expected to supply them and the upstream needs them to
  * authenticate. The exception is a chain containing a middleware that claims
- * the credential headers (see `ownedHeaders`): there the proxy holds the
+ * the credential headers (see `headerClaims`): there the proxy holds the
  * upstream credentials, so the client's `Authorization` is dropped before the
  * chain runs. Client middlewares (see `ClientMiddleware`) execute after the
  * strip step and before fetch.

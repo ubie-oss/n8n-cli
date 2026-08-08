@@ -53,7 +53,7 @@ export interface BearerTokenInjectOptions {
  * is discarded before the pipeline runs (see `forwardRequest`), so this
  * middleware's position in the chain does not change the outcome. Running it
  * alongside `iap-auth` in its default `authorization` mode would have the two
- * fight over one header; both declare it in `ownedHeaders`, so that
+ * fight over one header; both declare it in `headerClaims`, so that
  * combination is refused when the chain is built rather than deciding a
  * runtime 401 by declaration order.
  */

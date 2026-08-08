@@ -25,6 +25,13 @@ describe("sanitizeHeaderValue", () => {
     );
   });
 
+  test("rejects a non-Latin-1 character, which is what Headers.set actually refuses", () => {
+    // The failure mode a trailing newline does *not* produce: Bun trims that,
+    // but a smart quote pasted into a secret makes every request throw.
+    expect(() => sanitizeHeaderValue("Bearer “token”", "ctx")).toThrow(/smart quote/);
+    expect(() => sanitizeHeaderValue("トークン", "ctx")).toThrow(/cannot appear in an HTTP/);
+  });
+
   test("keeps interior spaces — scheme-and-value is a legal header", () => {
     expect(sanitizeHeaderValue("Basic dXNlcjpwYXNz", "ctx")).toBe("Basic dXNlcjpwYXNz");
   });

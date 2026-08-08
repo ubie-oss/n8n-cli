@@ -30,7 +30,7 @@ export interface WebhookTokenRule {
    *
    * One caveat for a rule whose `header` is `Authorization`: when the chain
    * also contains a middleware that claims the credential headers (see
-   * `ownedHeaders`), the caller's value is already gone by the time this runs,
+   * `headerClaims`), the caller's value is already gone by the time this runs,
    * so "set-if-absent" behaves like "replace". Webhook tokens normally live in
    * their own header, where this does not arise.
    */

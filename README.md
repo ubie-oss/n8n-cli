@@ -1248,12 +1248,14 @@ would also carry the wrong `aud` and only produce 401s at the second hop.
 Middlewares run after the drop and only ever add headers, so the result does not
 depend on chain order.
 
-Everything else keeps forwarding `Authorization` untouched — a chain of
-`api-key-inject` alone, no chain at all, or a path outside the reach of a
-path-scoped rule. Nothing in front of those consumed the header, and webhook
-nodes using header or basic auth rely on it arriving. `iap-auth` supplies its
-header on every path; `bearer-token-inject` and `webhook-token-inject` only
-where their rules match.
+Everything else keeps forwarding `Authorization` untouched, because nothing in
+front of it consumed the header and webhook nodes using header or basic auth
+rely on it arriving: a chain of `api-key-inject` alone, no chain at all, or —
+when the chain's only credential claims are path-scoped — a path none of those
+rules covers. Note the scope of each: `iap-auth` claims its header on **every**
+path, so a chain containing it drops the caller's `Authorization` everywhere;
+`bearer-token-inject` and `webhook-token-inject` claim only where their rules
+match.
 
 Two middlewares wanting the same header on paths that can overlap — `iap-auth`
 in its default mode alongside `bearer-token-inject`, say — is refused when the
@@ -1344,7 +1346,11 @@ export N8N_MCP_TOKEN="..."   # typically mounted from a secret store
 
 Rules are path-scoped because the token is one application surface's credential,
 not a gateway credential: injected everywhere, it would be handed to every
-endpoint the proxy can reach. Paths no rule covers get no `Authorization` at all.
+endpoint the proxy can reach. This middleware writes nothing on paths no rule
+covers — in the configuration above `iap-auth` still clears the caller's
+`Authorization` there, so those requests reach n8n without one; run
+`bearer-token-inject` on its own and a path outside its rules keeps whatever the
+caller sent.
 
 `Proxy-Authorization` remains on the hop-by-hop strip list (RFC 7230 §6.1), so a
 caller cannot smuggle its own gateway token through — only the token the proxy
