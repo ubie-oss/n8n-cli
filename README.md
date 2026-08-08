@@ -936,7 +936,7 @@ n8n-cli proxy [options]
 | `--allow-duplicates` | Skip the upstream duplicate-name check (the check is on by default) |
 | `--duplicate-ttl <ms>` | TTL for the cached upstream workflow-name index (default: 60000) |
 | `--upstream-timeout <ms>` | Per-request upstream timeout in milliseconds (default: 30000, 0 disables) |
-| `--middleware <list>` | Comma-separated middleware chain (default: `lint`; env: `N8N_MIDDLEWARES`). Example: `lint,authz` |
+| `--server-middleware <list>` | Comma-separated server-middleware chain (default: `lint`; env: `N8N_SERVER_MIDDLEWARES`). Example: `lint,authz` |
 | `--tags <tags>` | Only run middleware against workflow saves whose tags contain ALL of the listed names (AND condition; env: `PROXY_FILTER_BY_TAGS`). Non-matching saves are forwarded transparently |
 | `--stale-write-enforce <level>` | Stale-write guard: `off` (default), `warn`, or `error`. Requires `stale-write` in the middleware chain |
 | `--stale-write-on-missing-base <mode>` | Callers that declare no base revision: `allow` (default) or `deny` |
@@ -991,12 +991,12 @@ Lint asks whether a workflow is any good. The stale-write guard asks a different
 
 The failure it exists for is not a bad workflow. Someone edits a workflow in the n8n UI, nobody imports the change back into the repository, and the next `apply` from any working copy silently reverts it. That write is well-formed, authorized and in scope, so every other check waves it through.
 
-Add `stale-write` to the middleware chain to turn it on:
+Add `stale-write` to the server-middleware chain to turn it on:
 
 ```bash
 n8n-cli proxy \
   --upstream https://n8n.example.com \
-  --middleware lint,stale-write \
+  --server-middleware lint,stale-write \
   --stale-write-enforce error
 ```
 

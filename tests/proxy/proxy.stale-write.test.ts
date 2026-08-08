@@ -145,13 +145,15 @@ describe("proxy + stale-write", () => {
     // the forwarding catch — turning a write upstream had already accepted into
     // a 502 for the client.
     upstream.server.stop(true);
-    upstream = startMockUpstream("2026-03-01T10:00:00.000Z\r\ninjected: yes");
+    upstream = startMockUpstream("2026-03-01T10:00:00.000Z\r\ninjected: yes \u65e5");
     startProxyWithGuard({ staleWriteEnforce: "warn" });
 
     const res = await put(OLDER);
 
     expect(res.status).toBe(200);
     expect(res.headers.get("injected")).toBeNull();
+    // Non-Latin-1 is rejected by `Headers.set` just as control characters are.
+    expect(res.headers.get(STALE_WRITE_WARNING_HEADER)).not.toContain("\u65e5");
     expect(forwardedWrites()).toHaveLength(1);
   });
 

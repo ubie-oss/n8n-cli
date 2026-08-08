@@ -229,14 +229,17 @@ function handleProbe(method: string, pathname: string, deps: HandlerDeps): Respo
 /**
  * Makes a message safe to carry in a response header.
  *
- * The text quotes a timestamp that came from an upstream JSON document, so it
- * is not this proxy's to trust. A control character in it would make
- * `Headers.set` throw, and the throw would land in the forwarding try/catch and
- * turn a write that upstream already accepted into a 502 for the client.
+ * The text quotes a timestamp and a workflow id that came from upstream and
+ * from the request path, so neither is this proxy's to trust. `Headers.set`
+ * rejects control characters *and* anything outside Latin-1 — a workflow id of
+ * `%E6%97%A5` is enough — and the throw would land in the forwarding try/catch,
+ * turning a write upstream had already accepted into a 502 for the client.
+ *
+ * So the value is reduced to printable ASCII. It is a human-readable hint, not
+ * a payload; the full message is in the proxy's own log either way.
  */
 function headerSafe(message: string): string {
-  // biome-ignore lint/suspicious/noControlCharactersInRegex: stripping them is the point.
-  return message.replace(/[\u0000-\u001F\u007F]/g, " ").slice(0, 512);
+  return message.replace(/[^\x20-\x7e]/g, " ").slice(0, 512);
 }
 
 async function handleTransparentForward(

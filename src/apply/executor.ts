@@ -524,6 +524,14 @@ export class Executor {
    * stale by the time they finish. Stamping a local file with it would leave
    * the file permanently one step behind upstream, and the next edit would read
    * as a conflict. Re-fetch only when one of those calls actually ran.
+   *
+   * The re-fetched revision is adopted only if it still describes what this
+   * apply wrote. Someone editing the same workflow in the n8n UI during that
+   * window would otherwise have their revision stamped onto a local file that
+   * does not contain their change — and the next apply would then declare a
+   * base the guard accepts, reverting them with every check satisfied. Falling
+   * back leaves the file a revision behind, which surfaces as a conflict: the
+   * safe direction to be wrong in.
    */
   private async settledWorkflow(updated: Workflow, op: ApplyOperation): Promise<Workflow> {
     const mutatedAfterWrite =
@@ -531,12 +539,26 @@ export class Executor {
     if (!mutatedAfterWrite || !updated.id) return updated;
 
     try {
-      return await this.workflowService.getWorkflow(updated.id);
+      const settled = await this.workflowService.getWorkflow(updated.id);
+      return this.describesSameWrite(updated, settled, op) ? settled : updated;
     } catch {
       // Non-fatal: the write succeeded, and a stamp that is one step behind is
       // better than failing an apply that already did its job.
       return updated;
     }
+  }
+
+  /**
+   * Whether a re-fetched workflow still holds the content this apply wrote.
+   *
+   * Both sides come from the server, so server-side normalisation cancels out
+   * and any remaining difference was made by someone else. `active` is exempt
+   * when this apply is what changed it, and tags are not compared at all —
+   * assigning them is one of the calls being accounted for here.
+   */
+  private describesSameWrite(written: Workflow, settled: Workflow, op: ApplyOperation): boolean {
+    const diff = compare(written, settled);
+    return diff.fields.every((f) => f.field === "active" && op.activated !== undefined);
   }
 
   /** Applies tags and transfers workflow to target project. */

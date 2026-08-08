@@ -175,3 +175,65 @@ describe("apply against a YAML definition with a stamp", () => {
     expect(loadYamlWorkflow(file).updatedAt).toBe("2026-05-01T00:00:05.000Z");
   });
 });
+
+describe("the post-write re-fetch", () => {
+  /** A create that also applies auto-tags, so `settledWorkflow` re-fetches. */
+  function createScenario(settled: Workflow, created: Workflow) {
+    const file = path.join(dir, "wf__new.yaml");
+    fs.writeFileSync(
+      file,
+      ["name: brand new", "active: false", "nodes: []", "connections: {}", ""].join("\n"),
+    );
+
+    const service = {
+      listAllWorkflows: async () => [],
+      getWorkflow: async () => settled,
+      createWorkflow: async () => created,
+      getWorkflowCurrentProjectID: () => "",
+    } as unknown as WorkflowService;
+
+    const exec = executor(service, { autoTags: ["managed"] });
+    exec.setTagService({
+      listTags: async () => [],
+      findOrCreateTag: async (name: string) => ({ id: `tag-${name}`, name }),
+      updateWorkflowTags: async () => {},
+    } as never);
+
+    return { file, exec };
+  }
+
+  const created = {
+    id: "wf-new",
+    name: "brand new",
+    active: false,
+    nodes: [],
+    connections: {},
+    updatedAt: "2026-05-01T00:00:00.000Z",
+  } as Workflow;
+
+  test("adopts the settled revision when the content is still ours", async () => {
+    const settled = { ...created, updatedAt: "2026-05-01T00:00:05.000Z" } as Workflow;
+    const { file, exec } = createScenario(settled, created);
+
+    await exec.execute();
+
+    expect(loadYamlWorkflow(file).updatedAt).toBe("2026-05-01T00:00:05.000Z");
+  });
+
+  test("refuses a revision that belongs to somebody else's edit", async () => {
+    // Someone edited the workflow in the n8n UI between the tag call and the
+    // re-fetch. Stamping their revision onto a file that does not contain their
+    // change would make the next apply declare a base the guard accepts, and
+    // revert them with every check satisfied.
+    const hijacked = {
+      ...created,
+      name: "edited in the UI",
+      updatedAt: "2026-05-01T00:00:05.000Z",
+    } as Workflow;
+    const { file, exec } = createScenario(hijacked, created);
+
+    await exec.execute();
+
+    expect(loadYamlWorkflow(file).updatedAt).toBe("2026-05-01T00:00:00.000Z");
+  });
+});
