@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import type { Workflow } from "@/api/types.ts";
 import { patchTsStamp, patchYamlStamp, updateLocalWorkflowFile } from "@/apply/local-file.ts";
+import { parseTsWorkflow } from "@/ts/loader.ts";
 import { loadYamlWorkflow } from "@/yaml/loader.ts";
 
 /**
@@ -153,5 +154,100 @@ describe("updateLocalWorkflowFile", () => {
     fs.writeFileSync(file, "# notes\n");
     await updateLocalWorkflowFile(file, workflow(STAMP));
     expect(fs.readFileSync(file, "utf-8")).toBe("# notes\n");
+  });
+});
+
+describe("patchTsStamp on hand-authored shapes", () => {
+  test("finds a meta export carrying a type annotation", () => {
+    const text =
+      'export const meta: TsWorkflowMeta = {\n  active: true,\n  updatedAt: "old",\n};\n';
+    expect(patchTsStamp(text, STAMP)).toBe(
+      `export const meta: TsWorkflowMeta = {\n  active: true,\n  updatedAt: "${STAMP}",\n};\n`,
+    );
+  });
+
+  test("replaces the stamp in a single-line meta instead of duplicating the key", () => {
+    const text = 'export const meta = { active: true, updatedAt: "old" };\nconst x = 1;\n';
+    const out = patchTsStamp(text, STAMP);
+    expect(out).toBe(
+      `export const meta = { active: true, updatedAt: "${STAMP}" };\nconst x = 1;\n`,
+    );
+    expect(out?.match(/updatedAt:/g)).toHaveLength(1);
+  });
+
+  test("does not reach past a single-line meta into the workflow below it", () => {
+    const text = [
+      "export const meta = { active: true };",
+      "const node = wf.add({",
+      '  parameters: { updatedAt: "not-the-stamp" },',
+      "});",
+      "",
+    ].join("\n");
+
+    const out = patchTsStamp(text, STAMP);
+
+    expect(out).toContain('updatedAt: "not-the-stamp"');
+    expect(out).toContain(`{\n  updatedAt: "${STAMP}", active: true }`);
+  });
+
+  test("ignores a node named updatedAt inside nodeIds", () => {
+    const text = [
+      "export const meta = {",
+      "  active: true,",
+      '  nodeIds: { "updatedAt": "node-1" },',
+      "};",
+      "",
+    ].join("\n");
+
+    const out = patchTsStamp(text, STAMP);
+
+    expect(out).toContain('nodeIds: { "updatedAt": "node-1" }');
+    expect(out).toContain(`updatedAt: "${STAMP}",\n  active: true`);
+  });
+
+  test("is not confused by a brace inside a string or comment", () => {
+    const text = [
+      "export const meta = {",
+      "  // a { brace in a comment",
+      '  tags: ["has { brace"],',
+      '  updatedAt: "old",',
+      "};",
+      "",
+    ].join("\n");
+
+    expect(patchTsStamp(text, STAMP)).toContain(`updatedAt: "${STAMP}"`);
+  });
+
+  test("leaves a file with unbalanced braces alone", () => {
+    expect(patchTsStamp("export const meta = {\n  active: true,\n", STAMP)).toBeNull();
+  });
+});
+
+describe("a patched .ts file still parses", () => {
+  const workflowTail = [
+    "",
+    "const t = trigger({",
+    "  type: 'n8n-nodes-base.manualTrigger',",
+    "  version: 1,",
+    "  config: { name: 'T' }",
+    "});",
+    "",
+    "export default workflow('wf1', 'W').add(t)",
+    "",
+  ].join("\n");
+  const header = 'import { workflow, trigger } from "@n8n/workflow-sdk";\n';
+
+  test.each([
+    ['export const meta = {\n  active: true,\n  updatedAt: "old",\n};', "multi-line"],
+    [
+      'export const meta: TsWorkflowMeta = {\n  active: true,\n  updatedAt: "old",\n};',
+      "annotated",
+    ],
+    ['export const meta = { active: true, updatedAt: "old" };', "single-line"],
+    ["export const meta = {\n  active: true,\n};", "no existing stamp"],
+  ])("%s (%s)", (meta) => {
+    const patched = patchTsStamp(`${header}${meta}${workflowTail}`, STAMP);
+    expect(patched).not.toBeNull();
+    expect(parseTsWorkflow(patched as string, "wf1").updatedAt).toBe(STAMP);
   });
 });

@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import path from "node:path";
 import { isAlreadyOwnedError, isNotFoundError } from "../api/errors.ts";
 import type { TagService } from "../api/tag-service.ts";
@@ -378,7 +377,14 @@ export class Executor {
             op.operation = "update";
             if (!this.opts.dryRun) {
               try {
-                await this.executeUpdate(wf, remoteWorkflow, op);
+                // 3-way cleared this write by comparing the local change
+                // against the state just fetched, not against the file's own
+                // stamp — which is exactly the point of the format, since the
+                // stamp may be behind whenever the last apply's re-stamp was
+                // never committed. Declare the revision that was actually
+                // checked, otherwise a stale-write guard upstream would refuse
+                // a write that has been verified against current state.
+                await this.executeUpdate(wf, remoteWorkflow, op, remoteWorkflow.updatedAt);
               } catch (err) {
                 op.operation = "error";
                 op.error = err instanceof Error ? err : new Error(String(err));
@@ -485,6 +491,15 @@ export class Executor {
     wf: WorkflowFile,
     _remote: Workflow,
     op: ApplyOperation,
+    /**
+     * Upstream revision this write was verified against, declared to any
+     * stale-write guard in front of n8n. Defaults to the local definition's own
+     * stamp, which is what the 2-way path compared. A caller that checked
+     * against something else passes that instead — but never a value it did not
+     * actually check, and never one that lets `--force` talk its way past a
+     * guard whose entire job is to be independent of the client.
+     */
+    baseUpdatedAt: string | undefined = wf.workflow?.updatedAt,
   ): Promise<void> {
     const workflow = wf.workflow!;
     // Note: pinData is intentionally excluded - n8n API rejects it as additional property
@@ -496,14 +511,7 @@ export class Executor {
       staticData: workflow.staticData,
     };
 
-    // The local timestamp, not the one just fetched from upstream: the claim
-    // being made is "my definition is based on this state", and a freshly
-    // fetched value would always match and assert nothing.
-    const updated = await this.workflowService.updateWorkflow(
-      workflow.id!,
-      input,
-      workflow.updatedAt,
-    );
+    const updated = await this.workflowService.updateWorkflow(workflow.id!, input, baseUpdatedAt);
     await this.applyTagsAndProject(updated, workflow, op);
     await updateLocalWorkflowFile(wf.path, await this.settledWorkflow(updated, op));
   }

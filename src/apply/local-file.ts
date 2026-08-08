@@ -116,6 +116,74 @@ export function patchYamlStamp(text: string, updatedAt: string | undefined): str
 }
 
 /**
+ * Locates the body of the first `meta` object literal: the offsets just inside
+ * its braces, or null when the file has no such export.
+ *
+ * The end is found by matching braces rather than by looking for a closing
+ * line, because `.ts` workflows are hand-authored and `meta` is not always
+ * spread over multiple lines. Scanning for the first `\n};` would run past a
+ * single-line `meta` and swallow the workflow code after it, putting an
+ * `updatedAt:` in some node's parameters within reach of the rewrite below.
+ *
+ * Strings and comments are skipped so a brace inside either cannot end the
+ * literal early.
+ */
+function findMetaBody(text: string): { start: number; end: number } | null {
+  // The type annotation is optional: `export const meta: TsWorkflowMeta = {`
+  // is as valid an input as the unannotated form `import` writes.
+  const opening = new RegExp(`export\\s+const\\s+${META_EXPORT_NAME}\\s*(?::[^=]+)?=\\s*\\{`).exec(
+    text,
+  );
+  if (!opening) return null;
+
+  const start = opening.index + opening[0].length;
+  let depth = 1;
+
+  for (let i = start; i < text.length; i++) {
+    const ch = text[i];
+
+    if (ch === '"' || ch === "'" || ch === "`") {
+      i = skipString(text, i);
+      continue;
+    }
+    if (ch === "/" && text[i + 1] === "/") {
+      const nl = text.indexOf("\n", i);
+      if (nl === -1) return null;
+      i = nl;
+      continue;
+    }
+    if (ch === "/" && text[i + 1] === "*") {
+      const close = text.indexOf("*/", i + 2);
+      if (close === -1) return null;
+      i = close + 1;
+      continue;
+    }
+
+    if (ch === "{") depth++;
+    else if (ch === "}") {
+      depth--;
+      if (depth === 0) return { start, end: i };
+    }
+  }
+
+  // Unbalanced braces: the file does not parse anyway, so leave it alone.
+  return null;
+}
+
+/** Returns the index of the closing quote of the string starting at `open`. */
+function skipString(text: string, open: number): number {
+  const quote = text[open];
+  for (let i = open + 1; i < text.length; i++) {
+    if (text[i] === "\\") {
+      i++;
+      continue;
+    }
+    if (text[i] === quote) return i;
+  }
+  return text.length;
+}
+
+/**
  * Replaces `updatedAt` inside the `meta` export, or inserts it as the first
  * entry when the file has a `meta` block without one.
  *
@@ -126,20 +194,72 @@ export function patchYamlStamp(text: string, updatedAt: string | undefined): str
 export function patchTsStamp(text: string, updatedAt: string | undefined): string | null {
   if (!updatedAt) return null;
 
-  const metaStart = new RegExp(`export\\s+const\\s+${META_EXPORT_NAME}\\s*=\\s*\\{`).exec(text);
-  if (!metaStart) return null;
+  const meta = findMetaBody(text);
+  if (!meta) return null;
 
-  const bodyStart = metaStart.index + metaStart[0].length;
-  const bodyEnd = text.indexOf("\n};", bodyStart);
-  if (bodyEnd === -1) return null;
-
-  const body = text.slice(bodyStart, bodyEnd);
-  const existing = /^([ \t]*)updatedAt:.*$/m.exec(body);
-  if (existing) {
-    const replaced = `${existing[1]}updatedAt: ${JSON.stringify(updatedAt)},`;
-    const patchedBody = `${body.slice(0, existing.index)}${replaced}${body.slice(existing.index + existing[0].length)}`;
-    return `${text.slice(0, bodyStart)}${patchedBody}${text.slice(bodyEnd)}`;
+  const value = findStampValue(text, meta);
+  if (value) {
+    return `${text.slice(0, value.start)}${JSON.stringify(updatedAt)}${text.slice(value.end)}`;
   }
 
-  return `${text.slice(0, bodyStart)}\n  updatedAt: ${JSON.stringify(updatedAt)},${text.slice(bodyStart)}`;
+  return `${text.slice(0, meta.start)}\n  updatedAt: ${JSON.stringify(updatedAt)},${text.slice(meta.start)}`;
+}
+
+/**
+ * Finds the string literal assigned to `meta.updatedAt`, or null when the block
+ * does not declare one.
+ *
+ * Only properties of `meta` itself count. `nodeIds` is keyed by node name, and
+ * a node called "updatedAt" would otherwise have its ID overwritten with a
+ * timestamp. Replacing just the value also means the author's key spelling,
+ * indentation and quote style survive.
+ */
+function findStampValue(
+  text: string,
+  meta: { start: number; end: number },
+): { start: number; end: number } | null {
+  let depth = 0;
+
+  for (let i = meta.start; i < meta.end; i++) {
+    const ch = text[i];
+
+    if (ch === '"' || ch === "'" || ch === "`") {
+      i = skipString(text, i);
+      continue;
+    }
+    if (ch === "/" && text[i + 1] === "/") {
+      const nl = text.indexOf("\n", i);
+      i = nl === -1 ? meta.end : nl;
+      continue;
+    }
+    if (ch === "/" && text[i + 1] === "*") {
+      const close = text.indexOf("*/", i + 2);
+      i = close === -1 ? meta.end : close + 1;
+      continue;
+    }
+    if (ch === "{" || ch === "[") {
+      depth++;
+      continue;
+    }
+    if (ch === "}" || ch === "]") {
+      depth--;
+      continue;
+    }
+    if (depth !== 0) continue;
+
+    if (!text.startsWith("updatedAt", i)) continue;
+    // Must be a whole word, so `lastUpdatedAt` does not match.
+    if (i > meta.start && /[\w$]/.test(text[i - 1] ?? "")) continue;
+
+    const colon = /^\s*:\s*/.exec(text.slice(i + "updatedAt".length));
+    if (!colon) continue;
+
+    const valueStart = i + "updatedAt".length + colon[0].length;
+    const quote = text[valueStart];
+    if (quote !== '"' && quote !== "'") return null;
+
+    return { start: valueStart, end: skipString(text, valueStart) + 1 };
+  }
+
+  return null;
 }
