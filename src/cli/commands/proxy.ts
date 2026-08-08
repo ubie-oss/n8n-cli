@@ -126,6 +126,10 @@ export function registerProxyCommand(program: Command): void {
       "Env var holding a pre-minted id_token (token-source=env)",
     )
     .option(
+      "--iap-auth-header-name <name>",
+      "Header the id_token is written to: authorization (default) or proxy-authorization. Use proxy-authorization when the upstream application needs Authorization for its own bearer token — IAP accepts the id_token there and forwards Authorization untouched. env: N8N_IAP_AUTH_HEADER_NAME",
+    )
+    .option(
       "--iap-auth-cache-ttl-ms <ms>",
       "Id-token cache lifetime in milliseconds (default: 3000000, i.e. 50 min)",
     )
@@ -164,6 +168,17 @@ export function registerProxyCommand(program: Command): void {
         "Each rule needs exactly one of tokenEnvVar (preferred) or token, and an " +
         "optional conflictPolicy of set-if-absent (default) or replace. " +
         "env: N8N_WEBHOOK_TOKEN_INJECT_RULES",
+    )
+    // bearer-token-inject options — only meaningful when "bearer-token-inject"
+    // is in the client-middleware chain.
+    .option(
+      "--bearer-token-inject-rules <json>",
+      "JSON array of path-scoped Authorization rules: " +
+        '[{"pathPrefix":"/mcp-server/","tokenEnvVar":"MCP_TOKEN"}]. ' +
+        "Each rule needs exactly one of tokenEnvVar (preferred) or token, and an " +
+        'optional scheme (default "Bearer"). Requires --iap-auth-header-name=' +
+        "proxy-authorization when the upstream sits behind IAP. " +
+        "env: N8N_BEARER_TOKEN_INJECT_RULES",
     )
     .option(
       "--tags <tags>",

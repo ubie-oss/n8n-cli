@@ -37,6 +37,23 @@ const optionsSchema = z.object({
   tokenEnvVar: z.string().optional(),
   /** Inline token value when tokenSourceKind=static (tests only). */
   staticToken: z.string().optional(),
+  /**
+   * Header the id_token is written to.
+   *
+   * Default `authorization` — the historical behavior, kept so enabling this
+   * middleware never changes an existing deployment. Switch to
+   * `proxy-authorization` when the upstream application also wants
+   * `Authorization` for itself: IAP accepts the id_token there and then passes
+   * `Authorization` through to the backend unread. One env var flips it, and
+   * one env var flips it back if the gateway turns out not to honour it.
+   */
+  headerName: z
+    .union([z.literal("authorization"), z.literal("proxy-authorization")], {
+      message:
+        "iap-auth: headerName must be authorization or proxy-authorization " +
+        "(set N8N_IAP_AUTH_HEADER_NAME / --iap-auth-header-name)",
+    })
+    .default("authorization"),
   /** Cache TTL in ms (metadata source). Default 50 min — id_tokens live ~1h. */
   cacheTtlMs: z
     .number()
@@ -119,6 +136,9 @@ function fromEnv(env: NodeJS.ProcessEnv): Partial<IapAuthRawOptions> {
     out.tokenSourceKind = env.N8N_IAP_AUTH_TOKEN_SOURCE as IapAuthRawOptions["tokenSourceKind"];
   }
   if (env.N8N_IAP_AUTH_TOKEN_ENV_VAR) out.tokenEnvVar = env.N8N_IAP_AUTH_TOKEN_ENV_VAR;
+  if (env.N8N_IAP_AUTH_HEADER_NAME) {
+    out.headerName = env.N8N_IAP_AUTH_HEADER_NAME.toLowerCase() as IapAuthRawOptions["headerName"];
+  }
   if (env.N8N_IAP_AUTH_CACHE_TTL_MS) {
     out.cacheTtlMs = Number.parseInt(env.N8N_IAP_AUTH_CACHE_TTL_MS, 10);
   }
@@ -149,6 +169,8 @@ function fromCLI(opts: Record<string, unknown>): Partial<IapAuthRawOptions> {
     out.tokenSourceKind = s("iapAuthTokenSource") as IapAuthRawOptions["tokenSourceKind"];
   }
   if (s("iapAuthTokenEnvVar")) out.tokenEnvVar = s("iapAuthTokenEnvVar");
+  const headerName = s("iapAuthHeaderName");
+  if (headerName) out.headerName = headerName.toLowerCase() as IapAuthRawOptions["headerName"];
   const ttl = n("iapAuthCacheTtlMs");
   if (ttl !== undefined) out.cacheTtlMs = ttl;
   const t = n("iapAuthTimeoutMs");
@@ -170,7 +192,11 @@ export const iapAuthFactory: ClientMiddlewareFactory<IapAuthRawOptions> = {
   build(merged) {
     const parsed = optionsSchema.parse(merged);
     const tokenSource = buildTokenSource(parsed);
-    return new IapAuthMiddleware({ audience: parsed.audience, tokenSource });
+    return new IapAuthMiddleware({
+      audience: parsed.audience,
+      tokenSource,
+      headerName: parsed.headerName,
+    });
   },
 };
 

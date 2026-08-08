@@ -1236,7 +1236,18 @@ no external refresh step is involved.
 Available egress middlewares: `iap-auth` (Bearer id_token; sources `metadata`,
 `adc-impersonate`, `env`, `static`), `impersonator-token`
 (`X-Impersonator-Id-Token`; sources `adc`, `env`, `static`), `api-key-inject`,
-`webhook-token-inject`.
+`webhook-token-inject`, `bearer-token-inject`.
+
+Whenever a client-middleware chain is configured, the `Authorization` the caller
+sent is dropped before the chain runs. That header addresses the proxy hop, not
+n8n: it is a credential for reaching the proxy, replayable until it expires, and
+forwarding it would leak the right to call the proxy into the upstream's logs.
+Where the upstream sits behind its own identity-aware proxy it would also carry
+the wrong `aud` and only produce 401s at the second hop. Middlewares run after
+the drop and only ever add headers, so the result does not depend on chain order.
+A proxy running no client middleware keeps forwarding `Authorization` untouched —
+nothing in front of it consumed one, and webhook nodes using header or basic auth
+rely on it arriving.
 
 #### webhook-token-inject
 
@@ -1273,6 +1284,61 @@ Every matching rule is applied, not just the first, so a broad rule can be
 combined with narrower ones; when two matching rules share a header the later
 one decides. A rule naming an unset `tokenEnvVar` fails at startup rather than
 silently injecting nothing.
+
+#### bearer-token-inject — reaching an app that wants `Authorization` for itself
+
+n8n's instance-level MCP server (`POST /mcp-server/http`) authenticates with
+`Authorization: Bearer <token>`. Behind Google IAP that header is already taken:
+IAP authenticates with `Authorization`, consumes it, and never passes it to the
+backend — so the application sees no token and answers
+`401 Unauthorized: Authorization header not sent`.
+
+IAP documents the way out. When a valid id_token arrives in
+`Proxy-Authorization`, IAP authorizes on that header instead and forwards
+`Authorization` to the backend without reading it
+([Authenticating from a proxy-authorization header](https://docs.cloud.google.com/iap/docs/authentication-howto#authenticating_from_proxy-authorization_header)).
+So set `iap-auth` to write its id_token to `Proxy-Authorization`, and let
+`bearer-token-inject` put the application's token in `Authorization`:
+
+| Header | Carries | Consumed by |
+| --- | --- | --- |
+| `Proxy-Authorization` | the gateway id_token | IAP |
+| `Authorization` | the application token | n8n |
+
+The switch is deployment-wide rather than path-scoped: n8n's public API
+authenticates on `X-N8N-API-KEY` and never reads `Authorization`, so freeing that
+header up costs it nothing, and one setting is easier to reason about — and to
+revert — than a per-path rule.
+
+```bash
+export N8N_CLIENT_MIDDLEWARES="iap-auth,api-key-inject,bearer-token-inject"
+export N8N_IAP_AUTH_HEADER_NAME="proxy-authorization"
+export N8N_BEARER_TOKEN_INJECT_RULES='[
+  {"pathPrefix":"/mcp-server/","tokenEnvVar":"N8N_MCP_TOKEN"}
+]'
+export N8N_MCP_TOKEN="..."   # typically mounted from a secret store
+```
+
+| Env | CLI | Notes |
+| --- | --- | --- |
+| `N8N_IAP_AUTH_HEADER_NAME` | `--iap-auth-header-name` | `authorization` (default, unchanged behavior) or `proxy-authorization`. |
+| `N8N_BEARER_TOKEN_INJECT_RULES` | `--bearer-token-inject-rules` | JSON array of rules, see below. |
+
+| Field | Required | Notes |
+| --- | --- | --- |
+| `pathPrefix` | yes | Matched against the incoming pathname. Keep the trailing slash — `/mcp-server` would also match `/mcp-server-admin`. |
+| `tokenEnvVar` | either this | Name of an env var holding the token. Preferred, for the same reason as in `webhook-token-inject`. |
+| `token` | or this | Literal value, for deployments that already render config from a secret store. |
+| `scheme` | no | Auth scheme prefixed to the token, `Bearer` by default. An empty string writes the raw value. |
+
+Rules are path-scoped because the token is one application surface's credential,
+not a gateway credential: injected everywhere, it would be handed to every
+endpoint the proxy can reach. Paths no rule covers get no `Authorization` at all.
+
+`Proxy-Authorization` remains on the hop-by-hop strip list (RFC 7230 §6.1), so a
+caller cannot smuggle its own gateway token through — only the token the proxy
+mints reaches IAP. Reverting is one env var: unset `N8N_IAP_AUTH_HEADER_NAME`
+and the id_token goes back to `Authorization`.
 
 ### CLAUDE.md Integration
 
