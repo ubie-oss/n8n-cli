@@ -351,6 +351,23 @@ export function buildYamlObject(
     active: workflow.active,
   };
 
+  // Only emitted when the workflow has one: an unconditional `description: ""`
+  // would make every generated file clear the server's description on the next
+  // apply, since an explicit empty string is how a definition asks for that.
+  if (workflow.description) {
+    result.description = workflow.description;
+  }
+
+  // Local-only placement hints. `import` never sets them — the API does not
+  // report a workflow's folder — but `convert` passes a whole workflow through
+  // here, so a hand-authored `folderPath` must survive a format change.
+  if (workflow.folderPath !== undefined) {
+    result.folderPath = workflow.folderPath;
+  }
+  if (workflow.folderId !== undefined) {
+    result.folderId = workflow.folderId;
+  }
+
   // Server-assigned timestamp of the state this file was written from. It is
   // never sent back on a write — it exists so `apply` can tell "my definition
   // is based on the current upstream state" from "someone edited this workflow

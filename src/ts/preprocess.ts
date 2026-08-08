@@ -35,6 +35,18 @@ export interface TsWorkflowMeta {
   isArchived?: boolean;
   tags?: string[];
   /**
+   * Workflow description, as stored by n8n itself.
+   *
+   * Absent means "this file does not manage the description" — `apply` leaves
+   * whatever the server has alone. An empty string is a deliberate request to
+   * clear it.
+   */
+  description?: string;
+  /** Folder to place the workflow in, by path. See `Workflow.folderPath`. */
+  folderPath?: string;
+  /** Folder to place the workflow in, by ID. See `Workflow.folderId`. */
+  folderId?: string;
+  /**
    * Node IDs keyed by node name.
    *
    * The SDK's builder has no field for a node ID and mints a random UUID on
@@ -162,6 +174,13 @@ function coerceMeta(raw: unknown): TsWorkflowMeta {
       throw new TsPreprocessError(`${META_EXPORT_NAME}.tags must be an array of strings`);
     }
     meta.tags = obj.tags as string[];
+  }
+  for (const key of ["description", "folderPath", "folderId"] as const) {
+    if (obj[key] === undefined) continue;
+    if (typeof obj[key] !== "string") {
+      throw new TsPreprocessError(`${META_EXPORT_NAME}.${key} must be a string`);
+    }
+    meta[key] = obj[key];
   }
   if (obj.updatedAt !== undefined) {
     if (typeof obj.updatedAt !== "string") {

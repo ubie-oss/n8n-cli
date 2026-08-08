@@ -1,7 +1,9 @@
 import type { Command } from "commander";
+import { registerCredentialApplyCommand } from "./credential-apply.ts";
 import { registerCredentialCreateCommand } from "./credential-create.ts";
 import { registerCredentialDeleteCommand } from "./credential-delete.ts";
 import { registerCredentialGetCommand } from "./credential-get.ts";
+import { registerCredentialImportCommand } from "./credential-import.ts";
 import { registerCredentialListCommand } from "./credential-list.ts";
 import { registerCredentialSchemaCommand } from "./credential-schema.ts";
 import { registerCredentialTransferCommand } from "./credential-transfer.ts";
@@ -16,4 +18,6 @@ export function registerCredentialCommand(program: Command): void {
   registerCredentialDeleteCommand(credential);
   registerCredentialSchemaCommand(credential);
   registerCredentialTransferCommand(credential);
+  registerCredentialImportCommand(credential);
+  registerCredentialApplyCommand(credential);
 }

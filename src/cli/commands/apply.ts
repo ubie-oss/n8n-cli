@@ -40,6 +40,10 @@ export function registerApplyCommand(program: Command): void {
       "Skip the upstream duplicate-name check (the check is on by default; use --force to push through warnings without disabling the check)",
     )
     .option(
+      "--no-create-folders",
+      "Fail instead of creating a folder named by a definition's folderPath that does not exist upstream (folders are created by default)",
+    )
+    .option(
       "--no-lint",
       "Skip the pre-write lint check (the check is on by default; --force does NOT bypass it because lint failures are policy, not merge conflicts)",
     )
@@ -90,6 +94,9 @@ export function registerApplyCommand(program: Command): void {
       // commander's `--no-lint` flips `options.lint` to false. When the flag is
       // not passed, `options.lint` is undefined and the check stays ON.
       opts.noLint = options.lint === false;
+      // Same commander convention as --no-lint: the flag flips `createFolders`
+      // to false, and its absence leaves it undefined so creation stays ON.
+      opts.noCreateFolders = options.createFolders === false;
       if (typeof options.lintConfig === "string") {
         opts.lintConfigPath = options.lintConfig;
       }
@@ -221,6 +228,7 @@ export function registerApplyCommand(program: Command): void {
         throw err;
       }
       executor.setTagService(ctx.tagService);
+      executor.setFolderService(ctx.folderService);
 
       // Display Git diff mode message if enabled
       if (opts.fromGitChanges) {

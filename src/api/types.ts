@@ -2,6 +2,14 @@
 export interface Workflow {
   id?: string;
   name: string;
+  /**
+   * Free-text description shown next to the workflow in the n8n UI.
+   *
+   * A first-class field of the public API's workflow schema, readable on GET
+   * and writable on POST/PUT — unlike the `description.md` that `import` writes
+   * into `_subfiles/`, which is a local document n8n never sees.
+   */
+  description?: string;
   active: boolean;
   isArchived?: boolean;
   nodes: Node[];
@@ -13,6 +21,21 @@ export interface Workflow {
   shared?: SharedProject[];
   createdAt?: string;
   updatedAt?: string;
+  /**
+   * Folder the workflow lives in, declared locally.
+   *
+   * Local-only: the public API takes `parentFolderId` as a write-only field and
+   * does not report a workflow's folder back, so this is never populated from a
+   * server response. A definition names its folder by path (`"Ops/Billing"`) and
+   * `apply` resolves it against the target project — an ID would tie the file to
+   * one instance, which is exactly what workflows-as-code is trying to avoid.
+   */
+  folderPath?: string;
+  /**
+   * Folder the workflow lives in, by ID. Takes precedence over `folderPath`
+   * when both are present, for callers that already know the ID.
+   */
+  folderId?: string;
 }
 
 /** Node represents a node in a workflow */
@@ -100,10 +123,22 @@ export interface ListWorkflowsResponse {
  * as an additional property in PUT/POST requests. */
 export interface WorkflowInput {
   name: string;
+  /** See {@link Workflow.description}. Omitted entirely when not set locally. */
+  description?: string;
   nodes: Node[];
   connections: Record<string, NodeConn>;
   settings?: WorkflowSettings;
   staticData?: unknown;
+  /**
+   * Folder to place the workflow in.
+   *
+   * The API distinguishes three cases and so must this type: a string moves the
+   * workflow into that folder, `null` moves it to the project root, and an
+   * absent key leaves it where it is. Sending `undefined` through
+   * `JSON.stringify` drops the key, which is the "leave it alone" case — so the
+   * default behaviour is the non-destructive one.
+   */
+  parentFolderId?: string | null;
 }
 
 /** ListTagsResponse represents the response from listing tags */
@@ -137,6 +172,55 @@ export interface CLIConfig {
   defaultProjectId?: string;
   autoTags?: string[];
   externalizeThreshold?: number;
+}
+
+/**
+ * Folder represents an n8n workflow folder inside a project.
+ *
+ * Folders are a licensed feature (`feat:folders`): an instance without the
+ * entitlement answers every folder endpoint with 403, so callers must be
+ * prepared for the whole resource to be absent rather than empty.
+ */
+export interface Folder {
+  id: string;
+  name: string;
+  /** null or absent for a folder sitting at the project root. */
+  parentFolderId?: string | null;
+  /**
+   * Ancestor chain, innermost last, returned only when the caller asks for it
+   * via the `select` query parameter. Used to render a folder's full path
+   * without walking the tree one request at a time.
+   */
+  parentFolder?: FolderRef | null;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+/** FolderRef is the abbreviated folder shape nested inside another folder. */
+export interface FolderRef {
+  id: string;
+  name: string;
+  parentFolderId?: string | null;
+  parentFolder?: FolderRef | null;
+}
+
+/** ListFoldersResponse represents the response from listing folders */
+export interface ListFoldersResponse {
+  /** Total number of folders matching the query, not just this page. */
+  count: number;
+  data: Folder[];
+}
+
+/** FolderInput represents input for creating a folder */
+export interface FolderInput {
+  name: string;
+  parentFolderId?: string;
+}
+
+/** FolderUpdateInput represents input for renaming or re-parenting a folder */
+export interface FolderUpdateInput {
+  name?: string;
+  parentFolderId?: string;
 }
 
 /** Credential represents an n8n credential */

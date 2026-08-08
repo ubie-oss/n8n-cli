@@ -16,6 +16,8 @@ A command-line interface for managing [n8n](https://n8n.io/) workflows as code. 
 - **Execution management** - List executions, get execution details, delete, retry, and stop executions
 - **Tag management** - List, get, create, update, and delete tags
 - **Credential management** - List, get, create, update, delete credentials, get schema, and transfer between projects
+- **Credentials as code** - Keep credential definitions in files and apply them, with values written as references into Google Cloud Secret Manager or the environment instead of as literals
+- **Folder management** - List, get, create, rename, move and delete workflow folders, and declare a workflow's folder in its definition so `apply` places it
 - **Data table management** - List, get, create, update, delete data tables and manage rows (insert, update, upsert, delete)
 - **Node schema** - Inspect built-in node type schemas (list and dump)
 - **Trace** - Analyze data flow and item cardinality through workflow nodes
@@ -108,6 +110,45 @@ n8n-cli apply [options]
 | `--no-lint` | Skip the pre-write lint check (the check is on by default; an error-level violation marks the workflow as failed and prevents the API call. `--force` does NOT bypass lint failures — they represent policy, not merge conflicts) |
 | `--lint-config <path>` | Path to `.n8nlintrc.json` used by the pre-write lint check (auto-discovered if omitted) |
 | `--lint-disable-rule <rules>` | Comma-separated rule names to disable during the pre-write lint check |
+| `--no-create-folders` | Fail instead of creating a folder named by a definition's `folderPath` that does not exist upstream (folders are created by default) |
+
+#### Workflow description
+
+A definition may carry a `description`, which is the description n8n itself stores and shows next to the workflow — not the `description.md` that `import` writes into `_subfiles/`, which is a local document the server never sees.
+
+```yaml
+id: abc123
+name: Nightly billing sync
+description: Reconciles invoices against the ledger every night at 02:00 JST.
+```
+
+In `.ts` definitions it goes in the `meta` block (`description: "..."`).
+
+The field is only managed when the definition has it. A file that omits `description` leaves whatever the server has alone, so definitions written before this feature existed do not clear descriptions written in the n8n UI. To clear one deliberately, write an explicit empty string.
+
+`import` brings the description down into the local file, so an edit made in the UI round-trips.
+
+#### Folder placement
+
+A definition may declare which folder its workflow belongs in:
+
+```yaml
+id: abc123
+name: Nightly billing sync
+folderPath: Finance/Billing
+```
+
+On `apply`, the path is resolved against the target project and any missing level is created, so a fresh instance can be bootstrapped from the repository alone. Pass `--no-create-folders` to make a missing folder an error instead — useful when the folder tree is managed elsewhere and a typo should fail loudly.
+
+- The project is taken from `--project`, falling back to the workflow's current project, then to your personal project.
+- `folderId` may be used instead of `folderPath` when you already know the ID; it takes precedence.
+- An empty `folderPath` (`""`, `/`) moves the workflow to the project root.
+- Omitting both leaves the workflow wherever it is.
+
+Two caveats worth knowing before you adopt this:
+
+- **Folders are a licensed n8n feature.** An instance without the entitlement answers every folder endpoint with 403; `apply` reports that against the workflow that asked to be placed, and leaves every other workflow alone.
+- **Placement is write-only.** The public API accepts `parentFolderId` on write but does not report a workflow's folder back, so `import` cannot discover where a workflow lives. `folderPath` is a local declaration, and the repository is its only record.
 
 #### Conflict detection
 
@@ -622,6 +663,8 @@ n8n-cli credential <subcommand>
 | `delete <ids...>` | Delete one or more credentials |
 | `schema <typeName>` | Get the schema for a credential type |
 | `transfer <id>` | Transfer a credential to a different project |
+| `import` | Scaffold local credential definition files from the server |
+| `apply` | Apply local credential definitions, resolving secret references |
 
 #### `credential list`
 
@@ -700,6 +743,100 @@ n8n-cli credential transfer <id> [options]
 | Option | Description |
 |--------|-------------|
 | `-p, --project <projectId>` | Destination project ID (required) |
+
+#### `credential import`
+
+Scaffold local credential definition files from the server.
+
+```bash
+n8n-cli credential import [options]
+```
+
+| Option | Description |
+|--------|-------------|
+| `-d, --dir <path>` | Path to credential definitions directory (default: `./credentials`) |
+| `--ids <ids>` | Comma-separated credential IDs to import |
+| `--dry-run` | Report which files would be written without writing them |
+
+This is scaffolding, not a sync. The n8n public API marks credential data **write-only** and returns it from no endpoint, so an import can recover a credential's id, name and type — and nothing about its values. Files that already exist are never rewritten: they hold the secret references, and no server response could reproduce them.
+
+#### `credential apply`
+
+Apply local credential definitions to the server, resolving secret references.
+
+```bash
+n8n-cli credential apply [options]
+```
+
+| Option | Description |
+|--------|-------------|
+| `-d, --dir <path>` | Path to credential definitions directory (default: `./credentials`) |
+| `--ids <ids>` | Comma-separated credential IDs or file basenames to apply |
+| `--dry-run` | Report what would be written, and which secret references would be read, without doing either |
+| `--force` | Create a credential even when one with the same name already exists upstream |
+
+A definition looks like this:
+
+```yaml
+id: R2DjclaysHbqn778     # added automatically after the first apply
+name: Slack Bot
+type: slackApi
+data:
+  accessToken: gcp-sm://my-project/slack-bot-token
+```
+
+Behaviour that follows from values being write-only:
+
+- **There is no diff.** Nothing upstream can be compared against, so a definition carrying `data` is always written. `apply` cannot tell you whether the value changed.
+- **Omitting `data` updates only the name.** That is what an imported definition looks like, and it must not clear values the CLI cannot read back. Write `data: {}` to clear them deliberately.
+- **A new credential's ID is written back into the file.** Without it the next apply would create a duplicate — n8n allows two credentials to share a name, so there is no recovering by name.
+- **Creating a name that already exists is refused.** The error names the existing ID so you can adopt it; `--force` creates a second one anyway.
+
+##### Secret references
+
+Any value inside `data` may be written as a reference instead of a literal, and is resolved at apply time:
+
+| Reference | Resolves from |
+|-----------|---------------|
+| `gcp-sm://<project>/<secret>` | Google Cloud Secret Manager, latest version |
+| `gcp-sm://<project>/<secret>/<version>` | Google Cloud Secret Manager, that version |
+| `gcp-sm://projects/<p>/secrets/<s>/versions/<v>` | the same, spelled as a full resource name |
+| `env://<VARIABLE_NAME>` | the process environment |
+
+Only a value that is *entirely* a reference is treated as one, so an ordinary `https://...` or `postgres://...` value in the same object is left alone. A scheme no resolver claims is left alone too.
+
+Google Cloud access uses **Application Default Credentials** — `gcloud auth application-default login` locally, workload identity in CI — so the same file works in both places and no key path is committed. The principal needs `roles/secretmanager.secretAccessor` on each secret.
+
+Resolved values are never written back to the file, never printed, and never put into an error message. `--dry-run` reports which references *would* be read without reading any of them, which is also what keeps a preview free of vault access charges.
+
+### `folder`
+
+Manage workflow folders inside a project. Folders are a **licensed n8n feature**; an instance without the entitlement answers with 403.
+
+```bash
+n8n-cli folder <subcommand>
+```
+
+| Subcommand | Description |
+|------------|-------------|
+| `list` | List folders in a project |
+| `get <folderId>` | Get a folder by ID |
+| `create <name>` | Create a folder |
+| `update <folderId>` | Rename a folder or move it under a different parent |
+| `delete <folderId>` | Delete a folder |
+
+Every subcommand takes `-p, --project <id>`, which defaults to `personal` (your own project). Folders are project-scoped and acting on the wrong project is silent, so the project is never inferred from anything else.
+
+```bash
+n8n-cli folder list -p personal
+n8n-cli folder create Billing -p proj-123 --parent f-ops
+n8n-cli folder update f-billing --name Invoicing -p proj-123
+n8n-cli folder delete f-old -p proj-123 --transfer-to f-archive
+```
+
+`--transfer-to` moves the folder's workflows and sub-folders somewhere else before deleting it; without it the server decides what happens to the contents, so pass it whenever the folder is not empty.
+
+To place a workflow into a folder as part of a normal deploy, declare `folderPath` in its definition — see [Folder placement](#folder-placement).
 
 ### `data-tables`
 
@@ -1115,6 +1252,12 @@ import { workflow, trigger, node } from "@n8n/workflow-sdk";
 export const meta = {
   active: true,
   tags: ["managed-as-code"],
+  // The description n8n stores for the workflow. Omit the key to leave whatever
+  // the server has alone; an empty string clears it.
+  description: "Reconciles invoices against the ledger every night.",
+  // Local declaration of which folder the workflow belongs in. See
+  // "Folder placement" under `apply`.
+  folderPath: "Finance/Billing",
   // Written by n8n-cli when it generates the file; keeps node IDs and the
   // import skip-check stable. Optional in hand-written files.
   nodeIds: { Trigger: "a1b2c3d4-...", Set: "e5f6a7b8-..." },

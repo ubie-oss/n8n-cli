@@ -103,6 +103,19 @@ export function isAuthError(err: unknown): boolean {
   return err instanceof APIError && err.code === ErrorCode.AUTH_ERROR;
 }
 
+/**
+ * IsForbiddenError checks if the error is a 403.
+ *
+ * Matched on the status code rather than on an ErrorCode: 403 maps to
+ * `UNKNOWN_ERROR` and changing that would reclassify every existing caller's
+ * errors. It matters for the licensed resources — folders answer 403 on an
+ * instance without `feat:folders`, which is a "not available here", not a
+ * "your request was wrong".
+ */
+export function isForbiddenError(err: unknown): boolean {
+  return err instanceof APIError && err.statusCode === 403;
+}
+
 /** IsConflictError checks if the error is a conflict error (409) */
 export function isConflictError(err: unknown): boolean {
   return err instanceof APIError && err.code === ErrorCode.CONFLICT_ERROR;

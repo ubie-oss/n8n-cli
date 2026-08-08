@@ -121,6 +121,14 @@ function printTagsAndProjectInfo(op: ApplyOperation): void {
     }
   }
 
+  // Folder placement. Reported whenever the definition asked for one, because
+  // the folder may have been created by this very apply — a silent placement
+  // leaves the user with no record of what the run added upstream.
+  if (op.folderPlacedAt !== undefined) {
+    const where = op.folderPlacedAt === null ? "(project root)" : (op.folderPath ?? "");
+    console.log(`    -> folder: ${where || op.folderPlacedAt} (id: ${op.folderPlacedAt ?? "-"})`);
+  }
+
   // Activation info
   if (op.activated === true) {
     console.log("    ✓ Activated");
@@ -150,10 +158,26 @@ function printFieldDiff(field: FieldDiff): void {
     case "settings":
       console.log("    - settings: modified");
       break;
+    case "description":
+      // Truncated rather than printed whole: a description can run to
+      // paragraphs, and the apply summary is a list of what changed, not a
+      // place to reproduce the content.
+      console.log(
+        `    - description: "${truncate(String(field.oldValue))}" → "${truncate(
+          String(field.newValue),
+        )}"`,
+      );
+      break;
     default:
       console.log(`    - ${field.field}: ${field.oldValue} → ${field.newValue}`);
       break;
   }
+}
+
+/** Shortens a value to one readable line, collapsing the newlines in it. */
+function truncate(value: string, max = 60): string {
+  const single = value.replace(/\s+/g, " ").trim();
+  return single.length > max ? `${single.slice(0, max - 1)}…` : single;
 }
 
 function printSkipSection(ops: ApplyOperation[]): void {

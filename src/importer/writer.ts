@@ -171,6 +171,9 @@ function describeRoundTripMismatch(workflow: Workflow, code: string): string | n
   const nodes = alignSynthesisedNodeIDs(parsed.nodes, workflow.nodes);
 
   if (parsed.name !== workflow.name) return "name";
+  // Both sides normalise an absent description to "", because the generator
+  // omits an empty one from `meta` on purpose (see `extractMeta`).
+  if ((parsed.description ?? "") !== (workflow.description ?? "")) return "description";
   if (!nodesEqual(nodes.parsed, nodes.source)) {
     return describeNodeMismatch(nodes.parsed, nodes.source);
   }

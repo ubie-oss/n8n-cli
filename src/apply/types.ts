@@ -55,6 +55,17 @@ export interface ApplyOptions {
   lintConfigPath?: string;
   /** Rule names disabled via CLI flag, forwarded to the lint registry. */
   lintDisableRules: string[];
+  /**
+   * When true, a `folderPath` naming a folder that does not exist upstream is
+   * an error instead of being created.
+   *
+   * Default false (creation ON): a definition that names its folder is
+   * declaring where the workflow belongs, and an apply that refuses to create
+   * two levels of folder is not much use for bootstrapping a fresh instance.
+   * Set true when the folder tree is managed elsewhere and a typo should fail
+   * loudly rather than quietly grow a new folder.
+   */
+  noCreateFolders: boolean;
   filterByTags: string[];
   /**
    * Ordered list of server-middleware names to run before writing each
@@ -89,6 +100,7 @@ export function defaultApplyOptions(): ApplyOptions {
     noTs: false,
     allowDuplicates: false,
     noLint: false,
+    noCreateFolders: false,
     lintDisableRules: [],
     filterByTags: [],
     middlewares: [],
@@ -130,6 +142,14 @@ export interface ApplyOperation {
   baseToRemoteFields: string[];
   activated?: boolean; // true: activated, false: deactivated, undefined: no change
   activationError?: Error; // activation/deactivation error
+  /** Folder path the definition declared, when it declared one by path. */
+  folderPath?: string;
+  /**
+   * Folder ID the workflow was written into: a string for a folder, `null` for
+   * the project root, `undefined` when the definition said nothing about
+   * folders and the workflow was left where it was.
+   */
+  folderPlacedAt?: string | null;
   /**
    * Violations surfaced by the pre-write lint check, when one ran. Present on
    * both blocked (operation === "error") and passing operations so callers

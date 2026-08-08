@@ -1,5 +1,6 @@
 import path from "node:path";
 import { isAlreadyOwnedError, isNotFoundError } from "../api/errors.ts";
+import { type FolderService, PERSONAL_PROJECT } from "../api/folder-service.ts";
 import type { TagService } from "../api/tag-service.ts";
 import type { Workflow, WorkflowInput } from "../api/types.ts";
 import type { WorkflowService } from "../api/workflow-service.ts";
@@ -12,6 +13,7 @@ import type { ServerMiddleware } from "../middleware/types.ts";
 import { DEFAULT_SERVER_MIDDLEWARE_CHAIN, registerBuiltins } from "../middleware/wiring.ts";
 import { compare } from "./differ.ts";
 import { DuplicateChecker } from "./duplicate.ts";
+import { FolderResolver } from "./folders.ts";
 import { updateLocalWorkflowFile } from "./local-file.ts";
 import { Scanner } from "./scanner.ts";
 import { TagMerger } from "./tags.ts";
@@ -45,6 +47,9 @@ export class Executor {
   private diffSpec?: DiffSpec;
   private middlewares: ServerMiddleware[] = [];
   private preparedNames = new Set<string>();
+  private folderService?: FolderService;
+  /** One resolver per project, so the folder listing is paid for once. */
+  private folderResolvers = new Map<string, FolderResolver>();
 
   constructor(
     private readonly workflowService: WorkflowService,
@@ -123,6 +128,18 @@ export class Executor {
 
   setTagService(tagService: TagService): void {
     this.tagMerger = new TagMerger(tagService);
+  }
+
+  /**
+   * Supplies the service used to place workflows into folders.
+   *
+   * Optional, like the tag service: an Executor without one still applies every
+   * workflow that does not declare a folder, and only a definition that asks to
+   * be placed fails. Folders are a licensed n8n feature, so a caller talking to
+   * an instance without them has no service to give.
+   */
+  setFolderService(folderService: FolderService): void {
+    this.folderService = folderService;
   }
 
   setProgressCallback(cb: ProgressCallback): void {
@@ -459,6 +476,50 @@ export class Executor {
     return op;
   }
 
+  /**
+   * Resolves the declared folder into the `parentFolderId` fragment of a write
+   * payload, or `{}` when the definition says nothing about folders.
+   *
+   * Returning a fragment rather than a value is deliberate: the API reads an
+   * absent key as "leave the workflow where it is" and `null` as "move it to
+   * the project root", and only a fragment can express both.
+   */
+  private async folderPlacement(
+    workflow: Workflow,
+    remote: Workflow | undefined,
+    op: ApplyOperation,
+  ): Promise<{ parentFolderId?: string | null }> {
+    // An explicit ID wins: a caller that already knows it should not pay for a
+    // folder listing, and no path lookup could disagree with it usefully.
+    if (workflow.folderId) {
+      op.folderPlacedAt = workflow.folderId;
+      return { parentFolderId: workflow.folderId };
+    }
+    if (workflow.folderPath === undefined) return {};
+
+    if (!this.folderService) {
+      throw new Error(
+        `workflow declares folderPath "${workflow.folderPath}" but no folder service is available`,
+      );
+    }
+
+    const projectID =
+      this.opts.projectID ||
+      this.workflowService.getWorkflowCurrentProjectID(remote ?? null) ||
+      PERSONAL_PROJECT;
+
+    let resolver = this.folderResolvers.get(projectID);
+    if (!resolver) {
+      resolver = new FolderResolver(this.folderService, projectID, !this.opts.noCreateFolders);
+      this.folderResolvers.set(projectID, resolver);
+    }
+
+    const folderID = await resolver.resolve(workflow.folderPath);
+    op.folderPath = workflow.folderPath;
+    op.folderPlacedAt = folderID;
+    return { parentFolderId: folderID };
+  }
+
   /** Strip settings the n8n API exports but rejects on write. */
   private stripWriteUnsupportedSettings(
     settings?: Record<string, unknown>,
@@ -475,10 +536,12 @@ export class Executor {
     const workflow = wf.workflow!;
     const input: WorkflowInput = {
       name: workflow.name,
+      ...(workflow.description !== undefined ? { description: workflow.description } : {}),
       nodes: workflow.nodes,
       connections: workflow.connections,
       settings: this.stripWriteUnsupportedSettings(workflow.settings as Record<string, unknown>),
       staticData: workflow.staticData,
+      ...(await this.folderPlacement(workflow, undefined, op)),
     };
 
     const created = await this.workflowService.createWorkflow(input);
@@ -505,10 +568,12 @@ export class Executor {
     // Note: pinData is intentionally excluded - n8n API rejects it as additional property
     const input: WorkflowInput = {
       name: workflow.name,
+      ...(workflow.description !== undefined ? { description: workflow.description } : {}),
       nodes: workflow.nodes,
       connections: workflow.connections,
       settings: this.stripWriteUnsupportedSettings(workflow.settings as Record<string, unknown>),
       staticData: workflow.staticData,
+      ...(await this.folderPlacement(workflow, _remote, op)),
     };
 
     const updated = await this.workflowService.updateWorkflow(workflow.id!, input, baseUpdatedAt);

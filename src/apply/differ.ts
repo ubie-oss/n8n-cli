@@ -11,6 +11,20 @@ export function compare(local: Workflow, remote: Workflow): WorkflowDiff {
     diff.hasChanges = true;
   }
 
+  // Only a definition that *has* a description manages one. Every workflow file
+  // written before descriptions were supported omits the field, and treating
+  // that as "clear it" would wipe descriptions written in the n8n UI the first
+  // time an old definition was applied. An explicit empty string still clears,
+  // which is how a definition asks for that deliberately.
+  if (local.description !== undefined && local.description !== (remote.description ?? "")) {
+    diff.fields.push({
+      field: "description",
+      oldValue: remote.description ?? "",
+      newValue: local.description,
+    });
+    diff.hasChanges = true;
+  }
+
   if (local.active !== remote.active) {
     diff.fields.push({ field: "active", oldValue: remote.active, newValue: local.active });
     diff.hasChanges = true;

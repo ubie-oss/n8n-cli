@@ -168,6 +168,13 @@ function extractMeta(workflow: Workflow): string | null {
 
   if (workflow.isArchived) meta.isArchived = true;
 
+  // Written only when the workflow actually has one. Emitting `description: ""`
+  // for every workflow without a description would turn a generated file into
+  // one that actively clears the field on the next apply.
+  if (workflow.description) meta.description = workflow.description;
+  if (workflow.folderPath !== undefined) meta.folderPath = workflow.folderPath;
+  if (workflow.folderId !== undefined) meta.folderId = workflow.folderId;
+
   const tags = (workflow.tags ?? []).map((t) => t.name).filter((n): n is string => !!n);
   if (tags.length > 0) meta.tags = tags;
 
@@ -184,6 +191,13 @@ function extractMeta(workflow: Workflow): string | null {
   const lines = [`export const ${META_EXPORT_NAME} = {`];
   lines.push(`  active: ${meta.active},`);
   if (meta.isArchived !== undefined) lines.push(`  isArchived: ${meta.isArchived},`);
+  if (meta.description !== undefined) {
+    lines.push(`  description: ${JSON.stringify(meta.description)},`);
+  }
+  if (meta.folderPath !== undefined) {
+    lines.push(`  folderPath: ${JSON.stringify(meta.folderPath)},`);
+  }
+  if (meta.folderId !== undefined) lines.push(`  folderId: ${JSON.stringify(meta.folderId)},`);
   if (meta.tags) {
     lines.push(`  tags: [${meta.tags.map((t) => JSON.stringify(t)).join(", ")}],`);
   }
