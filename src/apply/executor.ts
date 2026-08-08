@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import path from "node:path";
 import { isAlreadyOwnedError, isNotFoundError } from "../api/errors.ts";
 import type { TagService } from "../api/tag-service.ts";
@@ -13,6 +12,7 @@ import type { ServerMiddleware } from "../middleware/types.ts";
 import { DEFAULT_SERVER_MIDDLEWARE_CHAIN, registerBuiltins } from "../middleware/wiring.ts";
 import { compare } from "./differ.ts";
 import { DuplicateChecker } from "./duplicate.ts";
+import { updateLocalWorkflowFile } from "./local-file.ts";
 import { Scanner } from "./scanner.ts";
 import { TagMerger } from "./tags.ts";
 import { ThreeWayDetector } from "./threeway/detector.ts";
@@ -377,7 +377,14 @@ export class Executor {
             op.operation = "update";
             if (!this.opts.dryRun) {
               try {
-                await this.executeUpdate(wf, remoteWorkflow, op);
+                // 3-way cleared this write by comparing the local change
+                // against the state just fetched, not against the file's own
+                // stamp — which is exactly the point of the format, since the
+                // stamp may be behind whenever the last apply's re-stamp was
+                // never committed. Declare the revision that was actually
+                // checked, otherwise a stale-write guard upstream would refuse
+                // a write that has been verified against current state.
+                await this.executeUpdate(wf, remoteWorkflow, op, remoteWorkflow.updatedAt);
               } catch (err) {
                 op.operation = "error";
                 op.error = err instanceof Error ? err : new Error(String(err));
@@ -476,7 +483,7 @@ export class Executor {
 
     const created = await this.workflowService.createWorkflow(input);
     await this.applyTagsAndProject(created, workflow, op);
-    await updateLocalWorkflowFile(wf.path, created);
+    await updateLocalWorkflowFile(wf.path, await this.settledWorkflow(created, op));
   }
 
   /** Performs the actual update operation. */
@@ -484,6 +491,15 @@ export class Executor {
     wf: WorkflowFile,
     _remote: Workflow,
     op: ApplyOperation,
+    /**
+     * Upstream revision this write was verified against, declared to any
+     * stale-write guard in front of n8n. Defaults to the local definition's own
+     * stamp, which is what the 2-way path compared. A caller that checked
+     * against something else passes that instead — but never a value it did not
+     * actually check, and never one that lets `--force` talk its way past a
+     * guard whose entire job is to be independent of the client.
+     */
+    baseUpdatedAt: string | undefined = wf.workflow?.updatedAt,
   ): Promise<void> {
     const workflow = wf.workflow!;
     // Note: pinData is intentionally excluded - n8n API rejects it as additional property
@@ -495,9 +511,54 @@ export class Executor {
       staticData: workflow.staticData,
     };
 
-    const updated = await this.workflowService.updateWorkflow(workflow.id!, input);
+    const updated = await this.workflowService.updateWorkflow(workflow.id!, input, baseUpdatedAt);
     await this.applyTagsAndProject(updated, workflow, op);
-    await updateLocalWorkflowFile(wf.path, updated);
+    await updateLocalWorkflowFile(wf.path, await this.settledWorkflow(updated, op));
+  }
+
+  /**
+   * Returns the workflow as it stands after every post-write operation.
+   *
+   * Tagging, project transfer and activation are separate API calls that each
+   * bump `updatedAt` again, so the response to the update itself is already
+   * stale by the time they finish. Stamping a local file with it would leave
+   * the file permanently one step behind upstream, and the next edit would read
+   * as a conflict. Re-fetch only when one of those calls actually ran.
+   *
+   * The re-fetched revision is adopted only if it still describes what this
+   * apply wrote. Someone editing the same workflow in the n8n UI during that
+   * window would otherwise have their revision stamped onto a local file that
+   * does not contain their change — and the next apply would then declare a
+   * base the guard accepts, reverting them with every check satisfied. Falling
+   * back leaves the file a revision behind, which surfaces as a conflict: the
+   * safe direction to be wrong in.
+   */
+  private async settledWorkflow(updated: Workflow, op: ApplyOperation): Promise<Workflow> {
+    const mutatedAfterWrite =
+      op.tagsAdded.length > 0 || op.projectMoved || op.activated !== undefined;
+    if (!mutatedAfterWrite || !updated.id) return updated;
+
+    try {
+      const settled = await this.workflowService.getWorkflow(updated.id);
+      return this.describesSameWrite(updated, settled, op) ? settled : updated;
+    } catch {
+      // Non-fatal: the write succeeded, and a stamp that is one step behind is
+      // better than failing an apply that already did its job.
+      return updated;
+    }
+  }
+
+  /**
+   * Whether a re-fetched workflow still holds the content this apply wrote.
+   *
+   * Both sides come from the server, so server-side normalisation cancels out
+   * and any remaining difference was made by someone else. `active` is exempt
+   * when this apply is what changed it, and tags are not compared at all —
+   * assigning them is one of the calls being accounted for here.
+   */
+  private describesSameWrite(written: Workflow, settled: Workflow, op: ApplyOperation): boolean {
+    const diff = compare(written, settled);
+    return diff.fields.every((f) => f.field === "active" && op.activated !== undefined);
   }
 
   /** Applies tags and transfers workflow to target project. */
@@ -605,36 +666,6 @@ function buildMiddlewareErrorMessage(
     errorOnly.length === 1 ? "" : "s"
   })${hint}`;
   return [summary, ...lines].join("\n  ");
-}
-
-/** Updates the local workflow file with server response data. */
-async function updateLocalWorkflowFile(filePath: string, workflow: Workflow): Promise<void> {
-  // Skip non-JSON files
-  const ext = path.extname(filePath).toLowerCase();
-  if (ext !== ".json") return;
-
-  let data: string;
-  try {
-    data = fs.readFileSync(filePath, "utf-8");
-  } catch {
-    return;
-  }
-
-  let existing: Record<string, unknown>;
-  try {
-    existing = JSON.parse(data);
-  } catch {
-    return;
-  }
-
-  existing.id = workflow.id;
-  existing.name = workflow.name;
-  existing.active = workflow.active;
-  if (workflow.updatedAt) existing.updatedAt = workflow.updatedAt;
-  if (workflow.createdAt) existing.createdAt = workflow.createdAt;
-
-  const output = JSON.stringify(existing, null, 2);
-  fs.writeFileSync(filePath, `${output}\n`);
 }
 
 /**

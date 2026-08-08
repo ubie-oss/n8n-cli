@@ -6,7 +6,8 @@
  * `Proxy-Authenticate`) plus any header named in the incoming `Connection:`
  * header, and the original `Host` header (it would carry the proxy's host into
  * the upstream call). `Content-Length` is also stripped because fetch
- * recomputes it from the actual body.
+ * recomputes it from the actual body, and so are the proxy's own control
+ * headers (see `@/api/headers.ts`), which n8n has no use for.
  *
  * Preserves auth headers (`X-N8N-API-KEY`, `Authorization`) by default — the
  * client is expected to supply them and the upstream needs them to
@@ -16,8 +17,15 @@
  * On the way back, `Content-Encoding` (and the now-stale `Content-Length`) are
  * dropped from the upstream response — see `normalizeResponseEncoding`.
  */
+import { BASE_UPDATED_AT_HEADER } from "@/api/headers.ts";
 import { runClientPipeline } from "@/middleware/client-pipeline.ts";
 import type { ClientMiddleware } from "@/middleware/types.ts";
+
+/**
+ * Headers the proxy consumes itself. They address this hop, not n8n, so they
+ * are dropped for the same reason hop-by-hop headers are.
+ */
+const PROXY_CONTROL_HEADERS = [BASE_UPDATED_AT_HEADER.toLowerCase()];
 
 const HOP_BY_HOP_HEADERS = new Set([
   "connection",
@@ -45,6 +53,9 @@ function buildUpstreamHeaders(req: Request): Headers {
   }
 
   for (const h of HOP_BY_HOP_HEADERS) {
+    headers.delete(h);
+  }
+  for (const h of PROXY_CONTROL_HEADERS) {
     headers.delete(h);
   }
   return headers;

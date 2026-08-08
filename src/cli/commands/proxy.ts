@@ -65,6 +65,11 @@ interface ProxyOptions {
   authzOnMissingAcl?: string;
   authzBootstrapGroups?: string;
   authzActions?: string;
+  // stale-write server middleware options.
+  staleWriteEnforce?: string;
+  staleWriteOnMissingBase?: string;
+  staleWriteOnError?: string;
+  staleWriteActions?: string;
   // oauth-verify server middleware options. Verifies the incoming
   // Authorization: Bearer against Google's tokeninfo endpoint.
   oauthVerifyEnforce?: string;
@@ -215,6 +220,24 @@ export function registerProxyCommand(program: Command): void {
       "--authz-actions <actions>",
       "Comma-separated route actions this middleware authorizes (default: all it sees)",
     )
+    // Stale-write options — only meaningful when "stale-write" is in the
+    // server-middleware chain.
+    .option(
+      "--stale-write-enforce <level>",
+      "Stale-write enforcement level: off (default), warn, error. Rejects an update whose X-N8n-Base-Updated-At does not match the stored workflow",
+    )
+    .option(
+      "--stale-write-on-missing-base <mode>",
+      "What to do when the caller sends no base revision: allow (default) or deny",
+    )
+    .option(
+      "--stale-write-on-error <mode>",
+      "Behavior when the stored workflow cannot be read: deny (default) or allow",
+    )
+    .option(
+      "--stale-write-actions <actions>",
+      "Comma-separated route actions the guard applies to (default: update)",
+    )
     // oauth-verify — verifies incoming Authorization: Bearer via Google tokeninfo.
     .option(
       "--oauth-verify-enforce <level>",
@@ -326,7 +349,8 @@ export function registerProxyCommand(program: Command): void {
  * how to read. Keeping the projection explicit prevents commander
  * artifacts (`_optionValues`, etc.) from leaking into factory inputs.
  */
-function extractMiddlewareCliOpts(opts: ProxyOptions): Record<string, unknown> {
+/** Exported for unit tests that assert declared flags actually reach a factory. */
+export function extractMiddlewareCliOpts(opts: ProxyOptions): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   const copy = (k: keyof ProxyOptions) => {
     if (opts[k] !== undefined) out[k] = opts[k];
@@ -346,6 +370,10 @@ function extractMiddlewareCliOpts(opts: ProxyOptions): Record<string, unknown> {
   copy("authzGroupsTimeoutMs");
   copy("authzWorkflowExtract");
   copy("authzWorkflowStripPrefix");
+  copy("staleWriteEnforce");
+  copy("staleWriteOnMissingBase");
+  copy("staleWriteOnError");
+  copy("staleWriteActions");
   copy("oauthVerifyEnforce");
   copy("oauthVerifyExpectedAudiences");
   copy("oauthVerifyTrustedPrincipals");

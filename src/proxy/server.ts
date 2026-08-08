@@ -1,5 +1,7 @@
+import { STALE_WRITE_WARNING_HEADER } from "@/api/headers.ts";
 import type { Workflow } from "@/api/types.ts";
 import { hasAllTags } from "@/common/tags.ts";
+import { STALE_WRITE_RULE } from "@/middleware/builtin/stale-write/middleware.ts";
 import { buildClientMiddlewares } from "@/middleware/client-registry.ts";
 import {
   DEFAULT_CLIENT_MIDDLEWARE_CHAIN,
@@ -224,6 +226,22 @@ function handleProbe(method: string, pathname: string, deps: HandlerDeps): Respo
   });
 }
 
+/**
+ * Makes a message safe to carry in a response header.
+ *
+ * The text quotes a timestamp and a workflow id that came from upstream and
+ * from the request path, so neither is this proxy's to trust. `Headers.set`
+ * rejects control characters *and* anything outside Latin-1 — a workflow id of
+ * `%E6%97%A5` is enough — and the throw would land in the forwarding try/catch,
+ * turning a write upstream had already accepted into a 502 for the client.
+ *
+ * So the value is reduced to printable ASCII. It is a human-readable hint, not
+ * a payload; the full message is in the proxy's own log either way.
+ */
+function headerSafe(message: string): string {
+  return message.replace(/[^\x20-\x7e]/g, " ").slice(0, 512);
+}
+
 async function handleTransparentForward(
   req: Request,
   pathname: string,
@@ -357,15 +375,29 @@ async function handleWorkflowMutation(
       timeoutMs: deps.config.upstreamTimeoutMs,
       clientMiddlewares: deps.clientMiddlewares,
     });
-    if (verdict.violations.length > 0) {
-      const errCount = verdict.violations.filter(
-        (v) => v.severity === "error" || !v.severity,
-      ).length;
-      response.headers.set("x-n8n-lint-violations", String(verdict.violations.length));
+    // Counted over lint's own violations only. A stale write is reported on its
+    // own header below, and folding it in here would make it indistinguishable
+    // from a lint failure — a CI step gating on `x-n8n-lint-errors`, which is
+    // the documented way to roll lint out, would start failing builds for
+    // writes that warn mode deliberately chose not to block, and blame lint.
+    const lintViolations = verdict.violations.filter((v) => !v.rule.startsWith(STALE_WRITE_RULE));
+    if (lintViolations.length > 0) {
+      const errCount = lintViolations.filter((v) => v.severity === "error" || !v.severity).length;
+      response.headers.set("x-n8n-lint-violations", String(lintViolations.length));
       response.headers.set("x-n8n-lint-errors", String(errCount));
     }
     if (duplicateMatches.length > 0) {
       response.headers.set("x-n8n-duplicate-warning", String(duplicateMatches.length));
+    }
+    // A stale write that reached this point ran under `enforce: warn`. Say so
+    // out of band, the way the duplicate check does, so a client can notice it
+    // reverted something without the write having been refused.
+    const staleWrites = verdict.violations.filter((v) => v.rule === STALE_WRITE_RULE);
+    if (staleWrites.length > 0) {
+      response.headers.set(
+        STALE_WRITE_WARNING_HEADER.toLowerCase(),
+        headerSafe(staleWrites[0]?.message ?? "stale write"),
+      );
     }
     const action = verdict.violations.length > 0 || duplicateMatches.length > 0 ? "warn" : "pass";
     deps.logger.log({

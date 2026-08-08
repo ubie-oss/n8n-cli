@@ -8,7 +8,7 @@ A command-line interface for managing [n8n](https://n8n.io/) workflows as code. 
 - **Convert** - Convert workflow files between JSON, YAML and TypeScript formats locally
 - **Import** - Pull workflows from an n8n server to local files, with optional YAML/TypeScript conversion and code externalization
 - **Lint** - Validate workflow definitions against configurable rules
-- **Proxy** - Transparent HTTP proxy that intercepts workflow saves to the n8n public API and runs lint server-side, blocking violations before they reach n8n
+- **Proxy** - Transparent HTTP proxy that intercepts workflow saves to the n8n public API and runs lint server-side, blocking violations before they reach n8n, and refusing writes built from an out-of-date copy of a workflow
 - **Format** - Auto-organize node positions for cleaner workflow layouts
 - **Test** - Execute CLI tests against workflows via webhook endpoints
 - **Webhook** - List and call a workflow's webhook nodes through the authenticated egress path
@@ -108,6 +108,18 @@ n8n-cli apply [options]
 | `--no-lint` | Skip the pre-write lint check (the check is on by default; an error-level violation marks the workflow as failed and prevents the API call. `--force` does NOT bypass lint failures — they represent policy, not merge conflicts) |
 | `--lint-config <path>` | Path to `.n8nlintrc.json` used by the pre-write lint check (auto-discovered if omitted) |
 | `--lint-disable-rule <rules>` | Comma-separated rule names to disable during the pre-write lint check |
+
+#### Conflict detection
+
+A definition records the upstream `updatedAt` it was written from. Before updating, `apply` compares that stamp against the live workflow: when upstream is newer *and* the content differs, the operation is reported as a conflict instead of being pushed, because applying it would revert a change nobody imported. `--force` overrides it; `import` resolves it properly.
+
+After a successful write the local file is re-stamped with the server's new timestamp, so the next edit is not mistaken for a conflict. In a CI-driven setup this happens on the runner, which means the stamp in version control stays behind until something writes it back — either commit the re-stamped files from the apply job, or run `import` on a schedule. Until it catches up, a second change to the same workflow will report a conflict that `--force` can push through.
+
+> **Behaviour change (YAML):** YAML definitions written before this feature carry no `updatedAt`, and applies against them were unconditional. Once `import` re-writes them with a stamp, those same applies start reporting conflicts — which is the point, but it is a change in behaviour for existing repositories. JSON and `.ts` definitions already carried the stamp.
+>
+> A second consequence, on the machine that ran the apply: `import` skips a workflow whose local stamp is already current, so anything the server normalised during the write (defaulted parameters, ids it assigned) does not come back down until the workflow changes again upstream. YAML now matches what JSON has always done, and what `.ts` does deliberately. The skip is by timestamp, not by selection, so `--ids` does not override it — delete the local file, or restore the committed version whose stamp is older, and import again.
+
+For enforcement that does not depend on the client (any working copy can pass `--force`, and other tools do not run this check at all), see the proxy's [stale-write guard](#stale-write-guard).
 
 #### Exit Codes
 
@@ -926,8 +938,12 @@ n8n-cli proxy [options]
 | `--allow-duplicates` | Skip the upstream duplicate-name check (the check is on by default) |
 | `--duplicate-ttl <ms>` | TTL for the cached upstream workflow-name index (default: 60000) |
 | `--upstream-timeout <ms>` | Per-request upstream timeout in milliseconds (default: 30000, 0 disables) |
-| `--middleware <list>` | Comma-separated middleware chain (default: `lint`; env: `N8N_MIDDLEWARES`). Example: `lint,authz` |
+| `--server-middleware <list>` | Comma-separated server-middleware chain (default: `lint`; env: `N8N_SERVER_MIDDLEWARES`). Example: `lint,authz` |
 | `--tags <tags>` | Only run middleware against workflow saves whose tags contain ALL of the listed names (AND condition; env: `PROXY_FILTER_BY_TAGS`). Non-matching saves are forwarded transparently |
+| `--stale-write-enforce <level>` | Stale-write guard: `off` (default), `warn`, or `error`. Requires `stale-write` in the middleware chain |
+| `--stale-write-on-missing-base <mode>` | Callers that declare no base revision: `allow` (default) or `deny` |
+| `--stale-write-on-error <mode>` | When the stored workflow cannot be read: `deny` (default) or `allow` |
+| `--stale-write-actions <actions>` | Route actions the guard applies to (default: `update`) |
 
 **Enforcement levels:**
 
@@ -970,6 +986,38 @@ Clients then point at `http://proxy-host:8080` instead of n8n directly. From the
 **Apply-style safety checks:** beyond lint, the proxy mirrors the same default-on duplicate-name safety that `apply` enforces. On every `POST /api/v1/workflows` the proxy fetches the upstream workflow list (cached for `--duplicate-ttl` milliseconds) and rejects creates that collide with an existing remote name. Under `--enforce error` this returns 409; under `--enforce warn` an `X-N8n-Duplicate-Warning` header is attached to the forwarded response. Pass `--allow-duplicates` to disable the check entirely (e.g. during a one-off bulk import). Lookups run under the caller's own `X-N8N-API-KEY` so duplicate detection never escalates privileges.
 
 **Rollout tip:** start with `--enforce warn` to audit the violation distribution in production logs, then flip to `--enforce error` once the team has cleaned up existing violations.
+
+#### Stale-write guard
+
+Lint asks whether a workflow is any good. The stale-write guard asks a different question: has the author seen the state they are about to overwrite?
+
+The failure it exists for is not a bad workflow. Someone edits a workflow in the n8n UI, nobody imports the change back into the repository, and the next `apply` from any working copy silently reverts it. That write is well-formed, authorized and in scope, so every other check waves it through.
+
+Add `stale-write` to the server-middleware chain to turn it on:
+
+```bash
+n8n-cli proxy \
+  --upstream https://n8n.example.com \
+  --server-middleware lint,stale-write \
+  --stale-write-enforce error
+```
+
+The client states which upstream revision its definition was based on, in an `X-N8n-Base-Updated-At` header — `n8n-cli apply` sends the `updatedAt` recorded in the local definition. The proxy reads the *stored* workflow (uncached: the whole point is that it reflects upstream right now, under the caller's own `X-N8N-API-KEY`) and compares. A mismatch in either direction is refused:
+
+```json
+{
+  "error": "workflow_stale_write",
+  "message": "Workflow abc123 was updated upstream at 2026-03-01T10:00:00.000Z, but this write is based on 2026-02-01T10:00:00.000Z. Applying it would revert changes the caller has never seen. Import the workflow and re-apply."
+}
+```
+
+Under `--stale-write-enforce warn` the write is forwarded with an `X-N8n-Stale-Write-Warning` response header instead, which is the way to measure how often this is happening before turning enforcement on.
+
+**Callers that declare no base** — the n8n UI itself, raw API calls, older `n8n-cli` versions, and any definition that predates timestamp persistence — cannot be judged. They are allowed by default so the guard can be switched on in front of a mixed fleet. Once every writer is known to send the header, `--stale-write-on-missing-base deny` closes the gap.
+
+> Like every other check here, this is only an enforcement boundary if direct access to the n8n API is blocked at the network level. A caller that can reach n8n directly bypasses the proxy entirely.
+
+> **Do not combine this with `--tags`.** The tag filter reads tags from the request body, and the body `apply` sends carries `name`, `nodes`, `connections`, `settings` and `staticData` — no tags. Every write from `n8n-cli` therefore falls outside any tag scope and is forwarded without running middleware at all. Since `n8n-cli` is the only client that sends a base revision, `--tags` and `--stale-write-enforce error` together leave the guard doing nothing. The same is true of lint; see the note under [Scoping by tags](#proxy).
 
 **Scoping by tags:** pass `--tags managed,prod` (or set `PROXY_FILTER_BY_TAGS`) to constrain middleware enforcement to workflow saves whose `tags` contain every listed name. Saves outside that scope are forwarded transparently — no lint, no duplicate-name check, no authz. Useful when only a subset of workflows on the upstream is under policy. Filtering is AND across the listed names.
 
@@ -1152,6 +1200,10 @@ meantime reports a conflict and needs `--force`.
 | `APPLY_FILTER_BY_TAGS` | Comma-separated tags to filter apply targets |
 | `CHECKS_FILTER_BY_TAGS` | Comma-separated tags to filter lint/fmt targets (AND condition) |
 | `PROXY_FILTER_BY_TAGS` | Comma-separated tags to scope proxy middleware enforcement (AND condition) |
+| `N8N_STALE_WRITE_ENFORCE` | Stale-write guard level: `off` (default), `warn`, `error` |
+| `N8N_STALE_WRITE_ON_MISSING_BASE` | Callers that declare no base revision: `allow` (default) or `deny` |
+| `N8N_STALE_WRITE_ON_ERROR` | When the stored workflow cannot be read: `deny` (default) or `allow` |
+| `N8N_STALE_WRITE_ACTIONS` | Comma-separated route actions the guard applies to (default: `update`) |
 
 ### Talking to an authenticating gateway
 

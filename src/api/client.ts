@@ -42,7 +42,17 @@ export class Client {
   }
 
   /** doRequest performs an HTTP request with authentication */
-  private async doRequest(method: string, path: string, body?: unknown): Promise<string> {
+  private async doRequest(
+    method: string,
+    path: string,
+    body?: unknown,
+    /**
+     * Extra headers for this one call, set before the client middlewares run
+     * so a middleware can still override them. Used for proxy control headers
+     * that only apply to specific operations (see `@/api/headers.ts`).
+     */
+    extraHeaders?: Record<string, string>,
+  ): Promise<string> {
     const url = `${this.baseURL}${path}`;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
@@ -60,6 +70,10 @@ export class Client {
         // responses is not.
         "Accept-Encoding": "identity",
       });
+
+      for (const [name, value] of Object.entries(extraHeaders ?? {})) {
+        headers.set(name, value);
+      }
 
       if (this.clientMiddlewares.length > 0) {
         await runClientPipeline(this.clientMiddlewares, headers, {
@@ -109,8 +123,8 @@ export class Client {
   }
 
   /** Put performs a PUT request */
-  async put(path: string, body?: unknown): Promise<string> {
-    return this.doRequest("PUT", path, body);
+  async put(path: string, body?: unknown, extraHeaders?: Record<string, string>): Promise<string> {
+    return this.doRequest("PUT", path, body, extraHeaders);
   }
 
   /** Patch performs a PATCH request */
