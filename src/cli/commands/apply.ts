@@ -6,6 +6,7 @@ import { defaultApplyOptions } from "../../apply/types.ts";
 import {
   getEffectiveAutoTags,
   getEffectiveProjectID,
+  getEffectiveTsEnabled,
   getEffectiveYamlEnabled,
   loadCLIConfig,
 } from "../../config/claude-md.ts";
@@ -28,6 +29,8 @@ export function registerApplyCommand(program: Command): void {
     .option("--no-auto-tag", "Disable automatic tagging")
     .option("--yaml", "Enable YAML file processing")
     .option("--no-yaml", "Disable YAML processing")
+    .option("--ts", "Enable .ts file processing (@n8n/workflow-sdk format)")
+    .option("--no-ts", "Disable .ts processing")
     .option(
       "--dangerously-apply-all",
       "Apply ALL workflows in the directory, overwriting remote state (required when no scope filter is specified)",
@@ -131,6 +134,8 @@ export function registerApplyCommand(program: Command): void {
 
       if (options.yaml === true) opts.yamlEnabled = true;
       if (options.yaml === false) opts.noYaml = true;
+      if (options.ts === true) opts.tsEnabled = true;
+      if (options.ts === false) opts.noTs = true;
 
       if (options.ids) {
         opts.ids = (options.ids as string).split(",").map((s: string) => s.trim());
@@ -144,6 +149,10 @@ export function registerApplyCommand(program: Command): void {
       // Validate mutually exclusive flags
       if (opts.yamlEnabled && opts.noYaml) {
         console.error("Error: --yaml and --no-yaml cannot be used together");
+        process.exit(1);
+      }
+      if (opts.tsEnabled && opts.noTs) {
+        console.error("Error: --ts and --no-ts cannot be used together");
         process.exit(1);
       }
       if (opts.fromGitChanges && opts.ids.length > 0) {
@@ -194,6 +203,7 @@ export function registerApplyCommand(program: Command): void {
 
       // Apply YAML settings
       opts.yamlEnabled = getEffectiveYamlEnabled(opts.yamlEnabled, opts.noYaml, cliConfig);
+      opts.tsEnabled = getEffectiveTsEnabled(opts.tsEnabled, opts.noTs, cliConfig);
 
       // Create executor. The constructor may throw `LintConfigLoadError` when
       // `.n8nlintrc.json` is malformed; surface it with a friendly message

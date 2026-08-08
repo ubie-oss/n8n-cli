@@ -2,10 +2,19 @@ import fs from "node:fs";
 import path from "node:path";
 import type { Workflow } from "@/api/types.ts";
 import {
+  connectionsEqual,
+  deepEqual,
+  nodesEqual,
+  pinDataEqual,
+  settingsEqual,
+} from "@/apply/differ.ts";
+import {
   extractWorkflowIDFromDirname,
   generateDirnameWithID,
   generateFilenameWithID,
 } from "@/naming/naming.ts";
+import { generateTsWorkflow } from "@/ts/generator.ts";
+import { parseTsWorkflow } from "@/ts/loader.ts";
 import { generateYamlWorkflow, SubfilesDir, sanitizeNodeName } from "@/yaml/generator.ts";
 
 /** Maximum filename length in bytes. */
@@ -67,6 +76,17 @@ export function generateFilePath(
   return path.join(directory, filename);
 }
 
+/** Generates the file path for a new TypeScript workflow file. */
+export function generateTsFilePath(
+  directory: string,
+  workflowID: string,
+  workflowName: string,
+): string {
+  const sanitized = sanitizeFilename(workflowName);
+  const filename = generateFilenameWithID(sanitized, workflowID, ".ts");
+  return path.join(directory, filename);
+}
+
 /** Generates the file path for a new YAML workflow file. */
 export function generateYamlFilePath(
   directory: string,
@@ -108,6 +128,136 @@ export function writeWorkflowJSON(filePath: string, workflow: Workflow): void {
   ensureDirectory(path.dirname(filePath));
   const data = `${JSON.stringify(workflow, null, 2)}\n`;
   writeFileAtomic(filePath, data);
+}
+
+/**
+ * Writes a workflow as a `.ts` file written against `@n8n/workflow-sdk`.
+ *
+ * The generated file is parsed back and compared against the source before it is
+ * written. `.ts` is a lossier format than JSON — the SDK models workflows as a
+ * builder graph, not as arbitrary JSON — so a workflow it cannot represent
+ * faithfully must fail loudly here rather than silently become the wrong file.
+ */
+export function writeWorkflowTS(filePath: string, workflow: Workflow): void {
+  const code = generateTsWorkflow(workflow);
+
+  const mismatch = describeRoundTripMismatch(workflow, code);
+  if (mismatch) {
+    throw new Error(
+      `workflow cannot be represented as TypeScript without loss (${mismatch}). ` +
+        "Import this workflow as JSON or YAML instead.",
+    );
+  }
+
+  ensureDirectory(path.dirname(filePath));
+  writeFileAtomic(filePath, code);
+}
+
+/**
+ * Parses generated code back and reports the first field that does not survive
+ * the round trip, or null when the workflow round-trips cleanly.
+ *
+ * Node IDs are included: they round-trip through `meta.nodeIds`, so a generated
+ * file is an exact representation of the workflow it came from.
+ */
+function describeRoundTripMismatch(workflow: Workflow, code: string): string | null {
+  let parsed: Workflow;
+  try {
+    parsed = parseTsWorkflow(code, workflow.id ?? "");
+  } catch (err) {
+    return err instanceof Error ? err.message : String(err);
+  }
+
+  const nodes = alignSynthesisedNodeIDs(parsed.nodes, workflow.nodes);
+
+  if (parsed.name !== workflow.name) return "name";
+  if (!nodesEqual(nodes.parsed, nodes.source)) {
+    return describeNodeMismatch(nodes.parsed, nodes.source);
+  }
+  if (!connectionsEqual(parsed.connections, workflow.connections)) return "connections";
+  if (!pinDataEqual(parsed.pinData, workflow.pinData)) return "pinData";
+  // An absent settings object and an empty one mean the same thing here — the
+  // loader drops empty settings so apply does not send `settings: {}` — but
+  // `settingsEqual` treats them as different.
+  if (!settingsEqual(orUndefined(parsed.settings), orUndefined(workflow.settings))) {
+    return "settings";
+  }
+  // `staticData` has no representation in the SDK at all, so it silently
+  // disappears rather than coming back wrong. Catch it here.
+  if (!deepEqual(parsed.staticData ?? null, workflow.staticData ?? null)) return "staticData";
+
+  return null;
+}
+
+/** Collapses an empty object to undefined so the two compare as equal. */
+function orUndefined<T extends object>(value: T | undefined): T | undefined {
+  if (value == null) return undefined;
+  return Object.keys(value).length === 0 ? undefined : value;
+}
+
+/**
+ * Drops node IDs the loader had to invent, from both sides of the comparison.
+ *
+ * A workflow whose nodes carry no `id` — hand-written JSON, typically — has
+ * nothing to record in `meta.nodeIds`, so the loader derives one. That is not a
+ * loss of information and must not fail the round-trip check; a node that *did*
+ * have an ID is still compared. An empty-string `id` counts as absent, so that
+ * `""` and a derived ID do not read as a difference either.
+ */
+export function alignSynthesisedNodeIDs(
+  parsedNodes: Workflow["nodes"] | undefined,
+  sourceNodes: Workflow["nodes"] | undefined,
+): { parsed: Workflow["nodes"]; source: Workflow["nodes"] } {
+  const sourceHasID = new Map((sourceNodes ?? []).map((n) => [n.name, !!n.id]));
+
+  const withoutID = (node: Workflow["nodes"][number]) => {
+    const { id: _id, ...rest } = node;
+    return rest as Workflow["nodes"][number];
+  };
+
+  return {
+    parsed: (parsedNodes ?? []).map((n) => (sourceHasID.get(n.name) === false ? withoutID(n) : n)),
+    source: (sourceNodes ?? []).map((n) => (n.id ? n : withoutID(n))),
+  };
+}
+
+/**
+ * Names the nodes and fields that changed, so the error tells the user what to
+ * look at instead of just "nodes".
+ */
+function describeNodeMismatch(
+  parsedNodes: Workflow["nodes"],
+  sourceNodes: Workflow["nodes"],
+): string {
+  const parsedByName = new Map(parsedNodes.map((n) => [n.name, n]));
+  const details: string[] = [];
+
+  for (const node of sourceNodes) {
+    const other = parsedByName.get(node.name);
+    if (!other) {
+      details.push(`node "${node.name}" is missing`);
+      continue;
+    }
+    // Union of both sides' keys: a field the round trip *added* is as much of a
+    // mismatch as one it changed, and looking at the source alone would miss it.
+    const keys = new Set([...Object.keys(node), ...Object.keys(other)]);
+    const fields = [...keys].filter(
+      (key) =>
+        !deepEqual(
+          (node as unknown as Record<string, unknown>)[key],
+          (other as unknown as Record<string, unknown>)[key],
+        ),
+    );
+    if (fields.length > 0) {
+      details.push(`node "${node.name}": ${fields.join(", ")}`);
+    }
+  }
+
+  if (parsedNodes.length !== sourceNodes.length) {
+    details.push(`node count ${sourceNodes.length} → ${parsedNodes.length}`);
+  }
+
+  return details.length > 0 ? `nodes — ${details.join("; ")}` : "nodes";
 }
 
 /**

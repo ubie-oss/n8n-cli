@@ -1,6 +1,7 @@
 import type { Command } from "commander";
 import {
   getEffectiveExternalizeThreshold,
+  getEffectiveTsEnabled,
   getEffectiveYamlEnabled,
   loadCLIConfig,
 } from "../../config/claude-md.ts";
@@ -17,8 +18,13 @@ export function registerImportCommand(parent: Command): void {
     .option("-d, --dir <directory>", "Target directory for workflow files", "./definitions")
     .option("--ids <ids>", "Comma-separated workflow IDs to import (empty = all)")
     .option("--include-archived", "Include archived workflows", false)
-    .option("--yaml", "Output as YAML format with external files", false)
+    // Neither format flag carries a default value. With one, commander reports
+    // `false` even when the flag was never passed, which is indistinguishable
+    // from `--no-yaml` / `--no-ts` and makes the CLAUDE.md setting unreachable.
+    .option("--yaml", "Output as YAML format with external files")
     .option("--no-yaml", "Force JSON format output")
+    .option("--ts", "Output new workflows as .ts (@n8n/workflow-sdk format)")
+    .option("--no-ts", "Do not write .ts output")
     .option("-t, --threshold <n>", "Minimum lines for code externalization", "0")
     .option("--cleanup-orphans", "Delete local files without matching remote workflow", false)
     .option("--cleanup-subfiles", "Delete orphan external files in _subfiles directories", false)
@@ -27,8 +33,20 @@ export function registerImportCommand(parent: Command): void {
       const ctx = resolveContext(command.parent!);
       const cliConfig = loadCLIConfig();
 
+      // The flags carry no default, so `undefined` means "not passed" and the
+      // CLAUDE.md setting decides.
       const yamlFlag = options.yaml === true;
-      const noYamlFlag = options.yaml === false && "yaml" in options;
+      const noYamlFlag = options.yaml === false;
+      const tsFlag = options.ts === true;
+      const noTsFlag = options.ts === false;
+
+      // Unlike apply — which scans every enabled format — import writes one
+      // format per new workflow, so asking for two is a mistake worth catching
+      // rather than resolving by an invisible precedence rule.
+      if (yamlFlag && tsFlag) {
+        console.error("Error: --yaml and --ts cannot be used together");
+        process.exit(1);
+      }
 
       const importOpts: ImportOptions = {
         ...defaultImportOptions(),
@@ -36,6 +54,7 @@ export function registerImportCommand(parent: Command): void {
         dryRun: options.dryRun as boolean,
         includeArchived: options.includeArchived as boolean,
         yamlEnabled: getEffectiveYamlEnabled(yamlFlag, noYamlFlag, cliConfig),
+        tsEnabled: getEffectiveTsEnabled(tsFlag, noTsFlag, cliConfig),
         externalizeThreshold: getEffectiveExternalizeThreshold(
           Number.parseInt(options.threshold as string, 10) || 0,
           cliConfig,

@@ -40,6 +40,9 @@ jobs:
       - name: Run tests
         run: bun test
 
+      - name: Verify THIRD_PARTY_LICENSES.md is up to date
+        run: bun run check-third-party-licenses
+
   build:
     name: Build (${{ matrix.target }})
     # macOS targets run on a macOS runner so codesign is available; see the
@@ -135,6 +138,12 @@ jobs:
           path: dist/
           merge-multiple: true
 
+      # The binary links dependencies under the n8n Sustainable Use License,
+      # whose Notices clause requires that recipients also receive its terms.
+      # Ship the notice next to the binaries it describes.
+      - name: Stage third-party license notice
+        run: cp THIRD_PARTY_LICENSES.md dist/
+
       - name: Generate checksums
         working-directory: dist
         run: sha256sum * > checksums.txt
@@ -148,4 +157,5 @@ jobs:
             dist/n8n-cli-darwin-x64
             dist/n8n-cli-linux-x64
             dist/n8n-cli-windows-x64.exe
+            dist/THIRD_PARTY_LICENSES.md
             dist/checksums.txt

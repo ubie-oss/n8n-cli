@@ -1,17 +1,20 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { Workflow } from "@/api/types.ts";
+import { detectWorkflowFormat } from "@/common/extensions.ts";
 import { parseWorkflowFile } from "@/importer/scanner.ts";
 import {
   findExistingSubfilesDirs,
   generateFilePath,
+  generateTsFilePath,
   generateYamlFilePath,
   writeWorkflowJSON,
+  writeWorkflowTS,
   writeWorkflowYAML,
 } from "@/importer/writer.ts";
 
 /** Supported target formats for conversion. */
-export type TargetFormat = "json" | "yaml";
+export type TargetFormat = "json" | "yaml" | "ts";
 
 /** Options for converting a workflow file. */
 export interface ConvertOptions {
@@ -37,10 +40,7 @@ export interface ConvertResult {
 
 /** Detects the format of a file based on its extension. */
 export function detectFormat(filePath: string): TargetFormat | null {
-  const ext = path.extname(filePath).toLowerCase();
-  if (ext === ".json") return "json";
-  if (ext === ".yaml" || ext === ".yml") return "yaml";
-  return null;
+  return detectWorkflowFormat(filePath);
 }
 
 /** Converts a single workflow file to the target format. */
@@ -97,6 +97,13 @@ export function convertWorkflowFile(filePath: string, options: ConvertOptions): 
         if (written.length > 0) {
           result.outputPath = written[0]!;
         }
+      }
+    } else if (options.targetFormat === "ts") {
+      result.outputPath = generateTsFilePath(options.directory, workflowID, workflow.name);
+
+      if (!options.dryRun) {
+        writeWorkflowTS(result.outputPath, workflow);
+        result.writtenFiles = [result.outputPath];
       }
     } else {
       result.outputPath = generateFilePath(options.directory, workflowID, workflow.name);

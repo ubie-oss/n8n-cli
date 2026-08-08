@@ -1,7 +1,7 @@
 import { readdirSync, statSync } from "node:fs";
 import path from "node:path";
 import type { Command } from "commander";
-import { WORKFLOW_EXTENSIONS } from "@/common/extensions.ts";
+import { WORKFLOW_EXTENSIONS, WORKFLOW_EXTENSIONS_WITH_TS } from "@/common/extensions.ts";
 import { hasAllTags, parseTagFilter } from "@/common/tags.ts";
 import { getEffectiveExternalizeThreshold, loadCLIConfig } from "@/config/claude-md.ts";
 import { convertWorkflowFile, type TargetFormat } from "@/convert/converter.ts";
@@ -11,14 +11,15 @@ import { parseWorkflowFile } from "@/importer/scanner.ts";
 export function registerConvertCommand(program: Command): void {
   program
     .command("convert")
-    .description("Convert workflow files between formats (JSON ↔ YAML)")
-    .requiredOption("--format <format>", "Target format: json, yaml")
+    .description("Convert workflow files between formats (JSON / YAML / TS)")
+    .requiredOption("--format <format>", "Target format: json, yaml, ts")
     .option("-d, --directory <dir>", "Directory to scan for workflow files")
     .option("--ids <ids>", "Comma-separated workflow IDs to convert")
     .option("--tags <tags>", "Filter by tags (comma-separated, AND condition)")
     .option("-t, --threshold <n>", "Minimum lines for code externalization (JSON→YAML)", "0")
     .option("--dry-run", "Preview conversions without writing files", false)
     .option("--keep", "Keep original files after conversion", false)
+    .option("--ts", "Include .ts files when scanning a directory", false)
     .argument("[files...]", "Specific workflow files to convert")
     .action(
       async (
@@ -31,12 +32,13 @@ export function registerConvertCommand(program: Command): void {
           threshold: string;
           dryRun: boolean;
           keep: boolean;
+          ts: boolean;
         },
       ) => {
         // Validate target format
         const targetFormat = opts.format as TargetFormat;
-        if (targetFormat !== "json" && targetFormat !== "yaml") {
-          console.error(`Error: unsupported format "${opts.format}". Use "json" or "yaml".`);
+        if (targetFormat !== "json" && targetFormat !== "yaml" && targetFormat !== "ts") {
+          console.error(`Error: unsupported format "${opts.format}". Use "json", "yaml" or "ts".`);
           process.exit(1);
         }
 
@@ -50,7 +52,10 @@ export function registerConvertCommand(program: Command): void {
         // Collect target files
         const targetFiles = [...files];
         if (opts.directory) {
-          targetFiles.push(...scanWorkflowFiles(opts.directory));
+          // Scanning a directory for `.ts` is opt-in: a repository that keeps
+          // workflows as `.ts` is full of TypeScript that is not a workflow.
+          // Explicit file arguments are always honoured, whatever the extension.
+          targetFiles.push(...scanWorkflowFiles(opts.directory, opts.ts));
         }
 
         if (targetFiles.length === 0) {
@@ -150,7 +155,7 @@ export function registerConvertCommand(program: Command): void {
 }
 
 /** Recursively scans a directory for workflow files (.json, .yaml, .yml). */
-function scanWorkflowFiles(dir: string): string[] {
+function scanWorkflowFiles(dir: string, includeTs = false): string[] {
   const results: string[] = [];
 
   try {
@@ -161,10 +166,11 @@ function scanWorkflowFiles(dir: string): string[] {
 
       if (stat.isDirectory()) {
         if (entry.startsWith("_")) continue;
-        results.push(...scanWorkflowFiles(fullPath));
+        results.push(...scanWorkflowFiles(fullPath, includeTs));
       } else {
         const ext = path.extname(entry).toLowerCase();
-        if (WORKFLOW_EXTENSIONS.has(ext)) {
+        const allowed = includeTs ? WORKFLOW_EXTENSIONS_WITH_TS : WORKFLOW_EXTENSIONS;
+        if (allowed.has(ext) && !entry.toLowerCase().endsWith(".d.ts")) {
           results.push(fullPath);
         }
       }

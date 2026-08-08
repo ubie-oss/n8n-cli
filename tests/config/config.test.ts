@@ -9,6 +9,7 @@ import {
   getEffectiveAutoTags,
   getEffectiveExternalizeThreshold,
   getEffectiveProjectID,
+  getEffectiveTsEnabled,
   getEffectiveYamlEnabled,
   parseClaudeMD,
 } from "@/config/claude-md.ts";
@@ -170,6 +171,34 @@ Some content here.
     expect(config.yamlEnabled).toBe(true);
   });
 
+  test("parses TypeScript mode enabled", () => {
+    const content = `## n8n CLI 設定
+
+| 設定項目 | 値 |
+|----------|-----|
+| TypeScript モード | 有効 |
+`;
+    const filePath = path.join(tmpDir, "CLAUDE.md");
+    fs.writeFileSync(filePath, content);
+
+    const config = parseClaudeMD(filePath);
+    expect(config.tsEnabled).toBe(true);
+    expect(config.yamlEnabled).toBe(false);
+  });
+
+  test("defaults TypeScript mode to disabled", () => {
+    const content = `## n8n CLI 設定
+
+| 設定項目 | 値 |
+|----------|-----|
+| YAML モード | 有効 |
+`;
+    const filePath = path.join(tmpDir, "CLAUDE.md");
+    fs.writeFileSync(filePath, content);
+
+    expect(parseClaudeMD(filePath).tsEnabled).toBe(false);
+  });
+
   test("parses externalize threshold", () => {
     const content = `## n8n CLI 設定
 
@@ -202,6 +231,7 @@ describe("getEffectiveProjectID", () => {
       defaultProjectID: "config-project",
       autoTags: [],
       yamlEnabled: false,
+      tsEnabled: false,
       externalizeThreshold: 0,
     };
     expect(getEffectiveProjectID("flag-project", config)).toBe("flag-project");
@@ -213,6 +243,7 @@ describe("getEffectiveProjectID", () => {
       defaultProjectID: "config-project",
       autoTags: [],
       yamlEnabled: false,
+      tsEnabled: false,
       externalizeThreshold: 0,
     };
     expect(getEffectiveProjectID("", config)).toBe("env-project");
@@ -224,6 +255,7 @@ describe("getEffectiveProjectID", () => {
       defaultProjectID: "config-project",
       autoTags: [],
       yamlEnabled: false,
+      tsEnabled: false,
       externalizeThreshold: 0,
     };
     expect(getEffectiveProjectID("", config)).toBe("config-project");
@@ -241,6 +273,7 @@ describe("getEffectiveAutoTags", () => {
       defaultProjectID: "",
       autoTags: ["custom-tag"],
       yamlEnabled: false,
+      tsEnabled: false,
       externalizeThreshold: 0,
     };
     expect(getEffectiveAutoTags(config)).toEqual(["custom-tag"]);
@@ -257,6 +290,7 @@ describe("getEffectiveYamlEnabled", () => {
       defaultProjectID: "",
       autoTags: [],
       yamlEnabled: true,
+      tsEnabled: false,
       externalizeThreshold: 0,
     };
     expect(getEffectiveYamlEnabled(false, true, config)).toBe(false);
@@ -271,6 +305,7 @@ describe("getEffectiveYamlEnabled", () => {
       defaultProjectID: "",
       autoTags: [],
       yamlEnabled: true,
+      tsEnabled: false,
       externalizeThreshold: 0,
     };
     expect(getEffectiveYamlEnabled(false, false, config)).toBe(true);
@@ -287,6 +322,7 @@ describe("getEffectiveExternalizeThreshold", () => {
       defaultProjectID: "",
       autoTags: [],
       yamlEnabled: false,
+      tsEnabled: false,
       externalizeThreshold: 10,
     };
     expect(getEffectiveExternalizeThreshold(5, config)).toBe(5);
@@ -297,6 +333,7 @@ describe("getEffectiveExternalizeThreshold", () => {
       defaultProjectID: "",
       autoTags: [],
       yamlEnabled: false,
+      tsEnabled: false,
       externalizeThreshold: 10,
     };
     expect(getEffectiveExternalizeThreshold(0, config)).toBe(10);
@@ -304,5 +341,29 @@ describe("getEffectiveExternalizeThreshold", () => {
 
   test("defaults to 3", () => {
     expect(getEffectiveExternalizeThreshold(0, null)).toBe(3);
+  });
+});
+
+describe("getEffectiveTsEnabled", () => {
+  const enabled = { tsEnabled: true } as CLIConfig;
+  const disabled = { tsEnabled: false } as CLIConfig;
+
+  test("--no-ts wins over everything else", () => {
+    expect(getEffectiveTsEnabled(true, true, enabled)).toBe(false);
+    expect(getEffectiveTsEnabled(false, true, enabled)).toBe(false);
+  });
+
+  test("--ts enables it even when the config is silent", () => {
+    expect(getEffectiveTsEnabled(true, false, null)).toBe(true);
+    expect(getEffectiveTsEnabled(true, false, disabled)).toBe(true);
+  });
+
+  test("falls back to the config when no flag is given", () => {
+    expect(getEffectiveTsEnabled(false, false, enabled)).toBe(true);
+    expect(getEffectiveTsEnabled(false, false, disabled)).toBe(false);
+  });
+
+  test("defaults to disabled with neither flag nor config", () => {
+    expect(getEffectiveTsEnabled(false, false, null)).toBe(false);
   });
 });

@@ -1,4 +1,4 @@
-.PHONY: all generate-schemas build cross-compile test test-integration typecheck lint format size-check clean
+.PHONY: all generate-schemas third-party-licenses check-third-party-licenses build cross-compile test test-integration typecheck lint format size-check quality-gate clean
 
 all: build
 
@@ -19,6 +19,15 @@ DEFINE_FLAGS = \
 
 generate-schemas:
 	bun run scripts/generate-schemas.ts
+
+# The compiled binary links every production dependency, several of which are
+# under the n8n Sustainable Use License. Its Notices clause requires shipping the
+# terms alongside the binary, so this file is attached to every release.
+third-party-licenses:
+	bun run scripts/generate-third-party-licenses.ts
+
+check-third-party-licenses:
+	bun run scripts/generate-third-party-licenses.ts --check
 
 build: generate-schemas
 	bun build src/index.ts --compile --outfile n8n-cli --minify $(DEFINE_FLAGS)
@@ -52,6 +61,9 @@ size-check:
 	else \
 		echo "OK: Binary size $${size} bytes (limit: $${limit})"; \
 	fi
+
+# Everything CI enforces, in one target so it can be run before pushing.
+quality-gate: generate-schemas typecheck lint check-third-party-licenses test
 
 clean:
 	rm -f n8n-cli
