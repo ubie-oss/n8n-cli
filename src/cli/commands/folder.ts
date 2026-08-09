@@ -17,7 +17,9 @@ import { resolveContext } from "@/cli/root.ts";
 export function registerFolderCommand(program: Command): void {
   const folder = program
     .command("folder")
-    .description("Manage workflow folders within an n8n project (licensed feature)");
+    .description(
+      "Manage workflow folders within an n8n project (needs a registered Community edition or a paid plan)",
+    );
 
   registerList(folder);
   registerGet(folder);
@@ -150,8 +152,13 @@ async function withFolderErrors(run: () => Promise<void>): Promise<void> {
         [
           "Error: the n8n instance rejected the folders API (403).",
           "",
-          "Folders are a licensed n8n feature. Check that the instance has it",
-          "enabled, and that the API key's scopes cover the folder:* operations.",
+          "Folders need the `feat:folders` entitlement, which a registered",
+          "Community edition carries for free (Settings > Usage and plan), as",
+          "does every paid plan. Check that, and that the API key's scopes",
+          "cover the folder:* operations.",
+          "",
+          "Note that a non-personal project is itself a paid feature: on a",
+          "Community instance, use `--project personal`.",
         ].join("\n"),
       );
       process.exit(1);

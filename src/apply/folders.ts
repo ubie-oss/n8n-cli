@@ -145,7 +145,9 @@ export function splitFolderPath(folderPath: string): string[] {
  *
  * A 403 here almost always means the instance has no `feat:folders`
  * entitlement rather than that the caller lacks permission on this one project,
- * and the raw "Forbidden" sends people looking at their API key instead.
+ * and the raw "Forbidden" sends people looking at their API key instead. The
+ * fix is usually free — registering a Community instance grants the feature —
+ * so the message says that rather than implying a plan upgrade.
  */
 function describeFolderFailure(walked: string, err: unknown): string {
   const subject = walked ? `folder "${walked}"` : "folders";
@@ -154,8 +156,9 @@ function describeFolderFailure(walked: string, err: unknown): string {
   if (isForbiddenError(err)) {
     return (
       `${subject}: the n8n instance rejected the folders API (403). ` +
-      "Folders are a licensed feature — check the instance has it enabled, and " +
-      "that the API key's scopes cover folder:list and folder:create."
+      "Folders need a registered Community edition (free, via Settings > Usage " +
+      "and plan) or a paid plan, and an API key whose scopes cover folder:list " +
+      "and folder:create."
     );
   }
 

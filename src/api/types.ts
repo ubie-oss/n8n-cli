@@ -177,9 +177,11 @@ export interface CLIConfig {
 /**
  * Folder represents an n8n workflow folder inside a project.
  *
- * Folders are a licensed feature (`feat:folders`): an instance without the
- * entitlement answers every folder endpoint with 403, so callers must be
- * prepared for the whole resource to be absent rather than empty.
+ * Folders sit behind a licence flag (`feat:folders`), so an instance without
+ * the entitlement answers every folder endpoint with 403 — callers must be
+ * prepared for the whole resource to be absent rather than empty. The bar is
+ * low, though: a free registered Community edition carries the entitlement, as
+ * does every paid plan. Only an *unregistered* Community instance lacks it.
  */
 export interface Folder {
   id: string;

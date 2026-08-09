@@ -114,12 +114,14 @@ describe("FolderResolver", () => {
     expect(await resolver.resolve("Ops")).toBe("f1");
   });
 
-  it("explains a 403 as the folders feature not being available", async () => {
+  it("explains a 403 as the folders entitlement being absent", async () => {
     const service = new FakeFolderService();
     service.listError = new APIError(ErrorCode.UNKNOWN_ERROR, "Forbidden", 403);
     const resolver = new FolderResolver(service.asService(), "p", true);
 
-    await expect(resolver.resolve("Ops")).rejects.toThrow(/licensed feature/);
+    // The remedy is free — registering a Community instance grants the feature
+    // — so the message must not send someone off to buy a plan.
+    await expect(resolver.resolve("Ops")).rejects.toThrow(/registered Community edition/);
   });
 
   it("retries the listing after a failure instead of resolving against nothing", async () => {
