@@ -29,6 +29,20 @@ const testRule = {
   conflictPolicy: "set-if-absent" as const,
 };
 
+describe("WebhookTokenInjectMiddleware headerClaims", () => {
+  test("a replace rule claims its header over its own prefix only", () => {
+    const mw = new WebhookTokenInjectMiddleware({
+      rules: [{ ...agentRule, header: "Authorization", conflictPolicy: "replace" }],
+    });
+    expect(mw.headerClaims).toEqual([{ header: "Authorization", pathPrefix: "/webhook/agent/" }]);
+  });
+
+  test("a set-if-absent rule claims nothing — it defers to the caller by design", () => {
+    const mw = new WebhookTokenInjectMiddleware({ rules: [agentRule, testRule] });
+    expect(mw.headerClaims).toEqual([]);
+  });
+});
+
 describe("WebhookTokenInjectMiddleware", () => {
   test("injects the token on a path under the rule's prefix", () => {
     const mw = new WebhookTokenInjectMiddleware({ rules: [agentRule] });

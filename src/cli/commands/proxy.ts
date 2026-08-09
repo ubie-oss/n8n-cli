@@ -23,6 +23,7 @@ interface ProxyOptions {
   iapAuthAudience?: string;
   iapAuthTokenSource?: string;
   iapAuthTokenEnvVar?: string;
+  iapAuthHeaderName?: string;
   iapAuthCacheTtlMs?: string;
   iapAuthTimeoutMs?: string;
   iapAuthMetadataBaseUrl?: string;
@@ -37,6 +38,9 @@ interface ProxyOptions {
   // token values inside them should be env-var references rather than literals
   // for the same reason api-key-inject refuses a raw key here.
   webhookTokenInjectRules?: string;
+  // bearer-token-inject client-middleware options. Same shape and same
+  // reasoning as webhook-token-inject's rules.
+  bearerTokenInjectRules?: string;
   // impersonator-token client-middleware options. Attaches the user's own
   // Google id_token as a side header so the server can attribute the call
   // to the human running the CLI (instead of the impersonated SA).
@@ -126,6 +130,10 @@ export function registerProxyCommand(program: Command): void {
       "Env var holding a pre-minted id_token (token-source=env)",
     )
     .option(
+      "--iap-auth-header-name <name>",
+      "Header the id_token is written to: authorization (default) or proxy-authorization. Use proxy-authorization when the upstream application needs a bearer token of its own in Authorization — IAP then reads the id_token from Proxy-Authorization and forwards Authorization to the backend unread. The proxy, not the caller, must supply that token (see --bearer-token-inject-rules): a caller's own Authorization is still discarded. env: N8N_IAP_AUTH_HEADER_NAME",
+    )
+    .option(
       "--iap-auth-cache-ttl-ms <ms>",
       "Id-token cache lifetime in milliseconds (default: 3000000, i.e. 50 min)",
     )
@@ -164,6 +172,17 @@ export function registerProxyCommand(program: Command): void {
         "Each rule needs exactly one of tokenEnvVar (preferred) or token, and an " +
         "optional conflictPolicy of set-if-absent (default) or replace. " +
         "env: N8N_WEBHOOK_TOKEN_INJECT_RULES",
+    )
+    // bearer-token-inject options — only meaningful when "bearer-token-inject"
+    // is in the client-middleware chain.
+    .option(
+      "--bearer-token-inject-rules <json>",
+      "JSON array of path-scoped Authorization rules: " +
+        '[{"pathPrefix":"/mcp-server/","tokenEnvVar":"MCP_TOKEN"}]. ' +
+        "Each rule needs exactly one of tokenEnvVar (preferred) or token, and an " +
+        'optional scheme (default "Bearer"). Requires --iap-auth-header-name=' +
+        "proxy-authorization when the upstream sits behind IAP. " +
+        "env: N8N_BEARER_TOKEN_INJECT_RULES",
     )
     .option(
       "--tags <tags>",
@@ -388,7 +407,7 @@ export function extractMiddlewareCliOpts(opts: ProxyOptions): Record<string, unk
  * read. Keeping the projection explicit prevents commander artifacts
  * (`_optionValues`, etc.) from leaking into factory inputs.
  */
-function extractClientMiddlewareCliOpts(opts: ProxyOptions): Record<string, unknown> {
+export function extractClientMiddlewareCliOpts(opts: ProxyOptions): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   const copy = (k: keyof ProxyOptions) => {
     if (opts[k] !== undefined) out[k] = opts[k];
@@ -396,6 +415,7 @@ function extractClientMiddlewareCliOpts(opts: ProxyOptions): Record<string, unkn
   copy("iapAuthAudience");
   copy("iapAuthTokenSource");
   copy("iapAuthTokenEnvVar");
+  copy("iapAuthHeaderName");
   copy("iapAuthCacheTtlMs");
   copy("iapAuthTimeoutMs");
   copy("iapAuthMetadataBaseUrl");
@@ -405,6 +425,7 @@ function extractClientMiddlewareCliOpts(opts: ProxyOptions): Record<string, unkn
   copy("apiKeyInjectHeader");
   copy("apiKeyInjectConflictPolicy");
   copy("webhookTokenInjectRules");
+  copy("bearerTokenInjectRules");
   copy("impersonatorTokenAudience");
   copy("impersonatorTokenSource");
   copy("impersonatorTokenEnvVar");

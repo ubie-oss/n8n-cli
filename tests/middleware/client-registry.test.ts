@@ -90,6 +90,53 @@ describe("buildClientMiddlewares", () => {
     });
   });
 
+  const claimer = (
+    name: string,
+    header: string,
+    pathPrefix?: string,
+  ): ClientMiddlewareFactory<FakeOptions> => ({
+    name,
+    loadFromEnv: () => ({}),
+    loadFromCLI: () => ({}),
+    build: () => ({ name, headerClaims: [{ header, pathPrefix }], apply: () => {} }),
+  });
+
+  test("two middlewares claiming one header are refused, naming both", () => {
+    registerClientFactory(claimer("first", "Authorization"));
+    registerClientFactory(claimer("second", "authorization"));
+    expect(() => buildClientMiddlewares({ enabled: ["first", "second"] })).toThrow(
+      /"first" and "second" both write the "authorization" header/,
+    );
+  });
+
+  test("claims on different headers coexist", () => {
+    registerClientFactory(claimer("gate", "proxy-authorization"));
+    registerClientFactory(claimer("app", "authorization"));
+    expect(buildClientMiddlewares({ enabled: ["gate", "app"] })).toHaveLength(2);
+  });
+
+  test("one header claimed over disjoint prefixes is allowed", () => {
+    registerClientFactory(claimer("hooks", "authorization", "/webhook/a/"));
+    registerClientFactory(claimer("mcp", "authorization", "/mcp-server/"));
+    expect(buildClientMiddlewares({ enabled: ["hooks", "mcp"] })).toHaveLength(2);
+  });
+
+  test("a nested prefix still collides, and the message says where", () => {
+    registerClientFactory(claimer("broad", "authorization", "/webhook/"));
+    registerClientFactory(claimer("narrow", "authorization", "/webhook/a/"));
+    expect(() => buildClientMiddlewares({ enabled: ["broad", "narrow"] })).toThrow(
+      /both write the "authorization" header on paths under "\/webhook\/a\/"/,
+    );
+  });
+
+  test("an unscoped claim collides with every scoped one", () => {
+    registerClientFactory(claimer("everywhere", "authorization"));
+    registerClientFactory(claimer("scoped", "authorization", "/mcp-server/"));
+    expect(() => buildClientMiddlewares({ enabled: ["everywhere", "scoped"] })).toThrow(
+      /both write the "authorization" header/,
+    );
+  });
+
   test("preserves middleware order", () => {
     registerClientFactory(fakeFactory("a"));
     registerClientFactory(fakeFactory("b"));

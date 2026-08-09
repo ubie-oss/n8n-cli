@@ -1,3 +1,4 @@
+import type { HeaderClaim } from "@/middleware/header-claims.ts";
 import type { ClientMiddleware, ClientMiddlewareContext } from "@/middleware/types.ts";
 
 /**
@@ -26,6 +27,12 @@ export interface WebhookTokenRule {
    *   - "set-if-absent": leave it intact. Default — a caller that still brings
    *     its own token keeps working while a deployment migrates.
    *   - "replace": overwrite, making the proxy the single token holder.
+   *
+   * One caveat for a rule whose `header` is `Authorization`: when the chain
+   * also contains a middleware that claims the credential headers (see
+   * `headerClaims`), the caller's value is already gone by the time this runs,
+   * so "set-if-absent" behaves like "replace". Webhook tokens normally live in
+   * their own header, where this does not arise.
    */
   conflictPolicy: "replace" | "set-if-absent";
 }
@@ -56,8 +63,18 @@ export interface WebhookTokenInjectOptions {
  */
 export class WebhookTokenInjectMiddleware implements ClientMiddleware {
   readonly name = "webhook-token-inject";
+  readonly headerClaims: readonly HeaderClaim[];
 
-  constructor(private readonly options: WebhookTokenInjectOptions) {}
+  constructor(private readonly options: WebhookTokenInjectOptions) {
+    // Only the "replace" rules claim, and only over their own prefix. Those are
+    // the ones that make the proxy the single holder of that value; a
+    // "set-if-absent" rule says the opposite by design — the caller's value
+    // wins — so it neither conflicts with another writer nor licenses
+    // discarding what the caller sent.
+    this.headerClaims = options.rules
+      .filter((r) => r.conflictPolicy === "replace")
+      .map((r) => ({ header: r.header, pathPrefix: r.pathPrefix }));
+  }
 
   apply(headers: Headers, ctx: ClientMiddlewareContext): void {
     for (const rule of this.options.rules) {

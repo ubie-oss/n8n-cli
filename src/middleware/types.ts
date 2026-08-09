@@ -1,5 +1,6 @@
 import type { Workflow } from "@/api/types.ts";
 import type { Violation } from "@/lint/rules/violation.ts";
+import type { HeaderClaim } from "./header-claims.ts";
 
 /** Where the pipeline is running. Middlewares can adapt to context. */
 export type PipelineMode = "proxy" | "apply" | "single";
@@ -225,6 +226,15 @@ export interface ClientMiddlewareContext {
  */
 export interface ClientMiddleware {
   readonly name: string;
+  /**
+   * Headers this middleware supplies, and on which paths. See `HeaderClaim`.
+   *
+   * A middleware that only reads, or that defers to a value the caller brought,
+   * claims nothing — a chain claiming no credential header leaves the caller's
+   * `Authorization` alone, which is what a proxy fronting webhook nodes with
+   * header or basic auth needs.
+   */
+  readonly headerClaims?: readonly HeaderClaim[];
   /**
    * Mutate `headers` in place. The proxy has already stripped hop-by-hop
    * headers, so callers can freely add/remove without re-checking that

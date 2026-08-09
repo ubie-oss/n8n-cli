@@ -11,14 +11,18 @@
  *
  * Preserves auth headers (`X-N8N-API-KEY`, `Authorization`) by default — the
  * client is expected to supply them and the upstream needs them to
- * authenticate. Client middlewares (see `ClientMiddleware`) can rewrite or
- * replace these after the strip step but before fetch.
+ * authenticate. The exception is a chain containing a middleware that claims
+ * the credential headers (see `headerClaims`): there the proxy holds the
+ * upstream credentials, so the client's `Authorization` is dropped before the
+ * chain runs. Client middlewares (see `ClientMiddleware`) execute after the
+ * strip step and before fetch.
  *
  * On the way back, `Content-Encoding` (and the now-stale `Content-Length`) are
  * dropped from the upstream response — see `normalizeResponseEncoding`.
  */
 import { BASE_UPDATED_AT_HEADER } from "@/api/headers.ts";
 import { runClientPipeline } from "@/middleware/client-pipeline.ts";
+import { claimCoversPath } from "@/middleware/header-claims.ts";
 import type { ClientMiddleware } from "@/middleware/types.ts";
 
 /**
@@ -96,6 +100,31 @@ function normalizeResponseEncoding(response: Response): Response {
   });
 }
 
+/**
+ * Headers that carry the credential for one hop of the chain. When a
+ * middleware claims either of them, the proxy — not the caller — is the one
+ * holding upstream credentials, and the caller's `Authorization` is dropped.
+ */
+const CREDENTIAL_HEADERS = new Set(["authorization", "proxy-authorization"]);
+
+/**
+ * Whether the chain supplies a credential header for this particular path.
+ *
+ * Where nothing claims one, the proxy is a transparent forwarder as far as auth
+ * goes: the caller may legitimately be authenticating to n8n itself (webhook
+ * nodes using header or basic auth), nothing in front of it consumed that
+ * header, and discarding it would break the request. The check is per-path
+ * because claims are — a rule scoped to `/mcp-server/` says nothing about what
+ * should happen to `/webhook/`.
+ */
+function chainSuppliesCredentials(chain: ClientMiddleware[], pathname: string): boolean {
+  return chain.some((m) =>
+    m.headerClaims?.some(
+      (c) => CREDENTIAL_HEADERS.has(c.header.toLowerCase()) && claimCoversPath(c, pathname),
+    ),
+  );
+}
+
 export interface ForwardOptions {
   /** Total request timeout in milliseconds; 0 disables timeout. */
   timeoutMs?: number;
@@ -124,6 +153,22 @@ export async function forwardRequest(
 
   const clientMiddlewares = options?.clientMiddlewares ?? [];
   if (clientMiddlewares.length > 0) {
+    if (chainSuppliesCredentials(clientMiddlewares, incomingUrl.pathname)) {
+      // The client's `Authorization` addresses *this* hop, not the upstream, so
+      // it is dropped for the same reason hop-by-hop headers are — and before
+      // the pipeline, so a middleware that sets it still wins.
+      //
+      // Two reasons it must not travel on. It is a credential for reaching the
+      // proxy and stays replayable until it expires, so letting it land in the
+      // upstream's logs leaks the right to call this proxy. And where the proxy
+      // fronts an IAP-protected backend, the client's token carries a different
+      // `aud` than the backend's IAP expects, so forwarding it only produces
+      // audience-mismatch 401s at the second hop.
+      //
+      // Doing this here rather than inside a middleware keeps the outcome
+      // independent of chain order: middlewares only ever add.
+      headers.delete("authorization");
+    }
     await runClientPipeline(clientMiddlewares, headers, {
       request: req,
       method: req.method,

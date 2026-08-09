@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { sanitizeHeaderValue } from "@/middleware/header-value.ts";
 import type { ClientMiddlewareFactory } from "@/middleware/types.ts";
 import { WebhookTokenInjectMiddleware } from "./middleware.ts";
 
@@ -126,7 +127,10 @@ function resolveTokens(
     return {
       pathPrefix: rule.pathPrefix,
       header: rule.header,
-      token: token as string,
+      token: sanitizeHeaderValue(
+        token as string,
+        `webhook-token-inject: rule for ${rule.pathPrefix}`,
+      ),
       conflictPolicy: rule.conflictPolicy,
     };
   });
