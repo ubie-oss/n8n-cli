@@ -188,7 +188,17 @@ async function refuse(
   );
 }
 
-/** Buffers a tools/list reply and drops the tools the policy withholds. */
+/**
+ * Buffers a tools/list reply and drops the tools the policy withholds.
+ *
+ * Buffering is safe here and only here: under Streamable HTTP a POST is
+ * answered by a stream that closes once the reply is delivered, and a tool list
+ * is a few kilobytes. The long-lived server-to-client stream is the `GET`, which
+ * never reaches this function. Note that `--upstream-timeout` bounds the fetch,
+ * not this read, so an upstream that opens a response and then stalls holds the
+ * request open — the same exposure the rest of the proxy has when it reads a
+ * body.
+ */
 async function filterToolsListResponse(
   response: Response,
   deps: McpGateDeps,
