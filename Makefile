@@ -63,7 +63,14 @@ size-check:
 	fi
 
 # Everything CI enforces, in one target so it can be run before pushing.
-quality-gate: generate-schemas typecheck lint check-third-party-licenses test
+#
+# `build` and `size-check` are in here because CI runs them and a gate that
+# stops short of what CI enforces is not a gate. They also catch a class of
+# problem the other targets structurally cannot: a dependency that type-checks
+# and tests fine but does not survive `bun build --compile`, or one that pushes
+# the shipped binary past the 100MB budget. Both only become visible once
+# something is actually compiled.
+quality-gate: generate-schemas typecheck lint check-third-party-licenses test build size-check
 
 clean:
 	rm -f n8n-cli

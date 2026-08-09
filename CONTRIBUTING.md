@@ -146,10 +146,13 @@ docs: update README with new CLI options
 
 2. Make your changes and ensure all checks pass:
    ```bash
-   make lint
-   make typecheck
-   make test
+   make quality-gate
    ```
+
+   This runs everything CI enforces — schema generation, type check, lint,
+   third-party licence check, tests, and a real compile with the binary size
+   check. Run it before pushing; the individual targets (`make lint`,
+   `make test`, …) are there for the faster inner loop.
 
 3. Push your branch and open a PR against `main`.
 
