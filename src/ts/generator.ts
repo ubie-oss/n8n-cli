@@ -168,6 +168,8 @@ function extractMeta(workflow: Workflow): string | null {
 
   if (workflow.isArchived) meta.isArchived = true;
 
+  if (workflow.description) meta.description = workflow.description;
+
   const tags = (workflow.tags ?? []).map((t) => t.name).filter((n): n is string => !!n);
   if (tags.length > 0) meta.tags = tags;
 
@@ -184,6 +186,9 @@ function extractMeta(workflow: Workflow): string | null {
   const lines = [`export const ${META_EXPORT_NAME} = {`];
   lines.push(`  active: ${meta.active},`);
   if (meta.isArchived !== undefined) lines.push(`  isArchived: ${meta.isArchived},`);
+  if (meta.description !== undefined) {
+    lines.push(`  description: ${JSON.stringify(meta.description)},`);
+  }
   if (meta.tags) {
     lines.push(`  tags: [${meta.tags.map((t) => JSON.stringify(t)).join(", ")}],`);
   }

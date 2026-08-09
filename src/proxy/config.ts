@@ -1,3 +1,4 @@
+import type { McpGateSettings } from "./mcp/config.ts";
 import type { RouteSpec } from "./rest/router.ts";
 
 /** Enforce levels: off = log only, warn = forward + log violations, error = block on errors */
@@ -73,6 +74,12 @@ export interface ProxyConfig {
    * pick out its own keys.
    */
   clientMiddlewareCliOptions?: Record<string, unknown>;
+  /**
+   * Policy applied to n8n's instance-level MCP endpoint. Absent means the path
+   * is forwarded like any other, which is what a deployment that never
+   * configured a gate keeps doing.
+   */
+  mcp?: McpGateSettings;
 }
 
 /**

@@ -475,6 +475,7 @@ export class Executor {
     const workflow = wf.workflow!;
     const input: WorkflowInput = {
       name: workflow.name,
+      ...(workflow.description !== undefined ? { description: workflow.description } : {}),
       nodes: workflow.nodes,
       connections: workflow.connections,
       settings: this.stripWriteUnsupportedSettings(workflow.settings as Record<string, unknown>),
@@ -505,6 +506,7 @@ export class Executor {
     // Note: pinData is intentionally excluded - n8n API rejects it as additional property
     const input: WorkflowInput = {
       name: workflow.name,
+      ...(workflow.description !== undefined ? { description: workflow.description } : {}),
       nodes: workflow.nodes,
       connections: workflow.connections,
       settings: this.stripWriteUnsupportedSettings(workflow.settings as Record<string, unknown>),

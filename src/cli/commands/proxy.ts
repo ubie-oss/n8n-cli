@@ -2,10 +2,11 @@ import type { Command } from "commander";
 import { parseTagFilter } from "@/common/tags.ts";
 import { parseMiddlewareList } from "@/middleware/registry.ts";
 import { parseEnforceLevel } from "@/proxy/config.ts";
+import { type McpCliOptions, parseMcpSettings } from "@/proxy/mcp/config.ts";
 import { parseRoutes } from "@/proxy/rest/router.ts";
 import { startProxy } from "@/proxy/server.ts";
 
-interface ProxyOptions {
+interface ProxyOptions extends McpCliOptions {
   listen: string;
   upstream?: string;
   lintConfig?: string;
@@ -194,6 +195,65 @@ export function registerProxyCommand(program: Command): void {
         '"METHOD /path/:id -> action [body=workflow]" (env: N8N_PROXY_ROUTES). ' +
         "Defaults to workflow create/update/tags/delete/activate.",
     )
+    // MCP gate — policy applied to n8n's instance-level MCP endpoint. Off
+    // unless --mcp-enforce is given, so an existing deployment that forwards
+    // /mcp-server/ keeps forwarding it.
+    .option(
+      "--mcp-enforce <level>",
+      "Enable the MCP gate at this level: off, warn (log the decision, forward anyway), error (refuse). " +
+        "Without it the MCP endpoint is forwarded unfiltered. env: N8N_MCP_ENFORCE",
+    )
+    .option(
+      "--mcp-path-prefix <path>",
+      "Path the MCP endpoint is served on (default: /mcp-server/). env: N8N_MCP_PATH_PREFIX",
+    )
+    .option(
+      "--mcp-allow-tools <list>",
+      "Comma-separated glob patterns for the only tools clients may see and call " +
+        '(e.g. "search_workflows,execute_workflow,get_workflow_details"). ' +
+        "Empty means every tool. env: N8N_MCP_ALLOW_TOOLS",
+    )
+    .option(
+      "--mcp-deny-tools <list>",
+      'Comma-separated glob patterns for tools to withhold (e.g. "*_credential*,archive_workflow"). ' +
+        "Applied after --mcp-allow-tools. env: N8N_MCP_DENY_TOOLS",
+    )
+    .option(
+      "--mcp-workflow-tags <tags>",
+      "Only workflows carrying ALL of these tags may be reached by a workflow-scoped tool call " +
+        "(AND condition). env: N8N_MCP_WORKFLOW_TAGS",
+    )
+    .option(
+      "--mcp-workflow-name-pattern <regex>",
+      "Only workflows whose name matches this regular expression may be reached. " +
+        "env: N8N_MCP_WORKFLOW_NAME_PATTERN",
+    )
+    .option(
+      "--mcp-require-available-in-mcp",
+      "Additionally require settings.availableInMCP on the target workflow. " +
+        "env: N8N_MCP_REQUIRE_AVAILABLE_IN_MCP=true",
+    )
+    .option(
+      "--mcp-workflow-id-args <json>",
+      'JSON object mapping a tool to the arguments naming its target workflow, e.g. {"run_workflow":["workflowId"]}. ' +
+        "Merged over the built-in map; an empty array removes a tool from the scope check. " +
+        "env: N8N_MCP_WORKFLOW_ID_ARGS",
+    )
+    .option(
+      "--mcp-on-missing-target <mode>",
+      "What to do when a workflow-scoped tool call names no workflow: deny (default) or allow. " +
+        "env: N8N_MCP_ON_MISSING_TARGET",
+    )
+    .option(
+      "--mcp-on-index-error <mode>",
+      "What to do when the workflow list cannot be read: deny (default) or allow. " +
+        "env: N8N_MCP_ON_INDEX_ERROR",
+    )
+    .option(
+      "--mcp-cache-ttl-ms <ms>",
+      "Lifetime of the cached workflow allowlist in milliseconds (default: 60000). " +
+        "env: N8N_MCP_CACHE_TTL_MS",
+    )
     // Authz options — only meaningful when "authz" is in the server-middleware chain.
     .option("--authz-enforce <level>", "Authz enforcement level: off, warn, error")
     .option("--authz-on-error <mode>", "Behavior when groups API fails: deny, allow")
@@ -319,6 +379,14 @@ export function registerProxyCommand(program: Command): void {
       const filterByTags = parseTagFilter(opts.tags ?? process.env.PROXY_FILTER_BY_TAGS);
       const routes = parseRoutes(opts.routes ?? process.env.N8N_PROXY_ROUTES);
 
+      let mcp: ReturnType<typeof parseMcpSettings>;
+      try {
+        mcp = parseMcpSettings(opts, process.env);
+      } catch (err) {
+        console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
+        process.exit(1);
+      }
+
       const handle = startProxy({
         routes,
         listen: opts.listen,
@@ -335,6 +403,7 @@ export function registerProxyCommand(program: Command): void {
         clientMiddlewares: clientMiddlewares.length > 0 ? clientMiddlewares : undefined,
         clientMiddlewareCliOptions: extractClientMiddlewareCliOpts(opts),
         filterByTags: filterByTags.length > 0 ? filterByTags : undefined,
+        mcp: mcp ?? undefined,
       });
 
       // Friendly startup line on stderr so it never pollutes JSON log streams.
@@ -349,8 +418,9 @@ export function registerProxyCommand(program: Command): void {
         ? clientMiddlewares.join(",")
         : (process.env.N8N_CLIENT_MIDDLEWARES ?? "(none)");
       const tagsDisplay = filterByTags.length > 0 ? `, tags=${filterByTags.join(",")}` : "";
+      const mcpDisplay = mcp ? `, mcp=${mcp.enforce} on ${mcp.pathPrefix}` : "";
       console.error(
-        `n8n-cli proxy listening on ${opts.listen} → ${upstream} (enforce=${enforce}, server-middlewares=${mwDisplay}, client-middlewares=${clientMwDisplay}${tagsDisplay})`,
+        `n8n-cli proxy listening on ${opts.listen} → ${upstream} (enforce=${enforce}, server-middlewares=${mwDisplay}, client-middlewares=${clientMwDisplay}${tagsDisplay}${mcpDisplay})`,
       );
 
       const shutdown = async (signal: string) => {

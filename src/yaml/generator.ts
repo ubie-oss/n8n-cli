@@ -348,6 +348,7 @@ export function buildYamlObject(
   const result: Record<string, unknown> = {
     id: workflow.id,
     name: workflow.name,
+    ...(workflow.description ? { description: workflow.description } : {}),
     active: workflow.active,
   };
 

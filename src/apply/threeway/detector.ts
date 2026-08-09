@@ -89,6 +89,15 @@ export class ThreeWayDetector {
       diff.hasChanges = true;
     }
 
+    // Symmetric here, unlike `compare()`: this runs over base/local/remote
+    // revisions of the same definition, so "absent on one side" really does
+    // mean the field changed between two states rather than "this file does
+    // not manage the field".
+    if ((a.description ?? "") !== (b.description ?? "")) {
+      diff.changedFields.push("description");
+      diff.hasChanges = true;
+    }
+
     if (a.active !== b.active) {
       diff.changedFields.push("active");
       diff.hasChanges = true;

@@ -2,6 +2,17 @@
 export interface Workflow {
   id?: string;
   name: string;
+  /**
+   * Free-text summary of what the workflow does, stored at the top level of the
+   * workflow object (not in `settings`, and not the local `description.md` the
+   * importer writes as documentation).
+   *
+   * It is what n8n's MCP server shows an agent in `search_workflows` results and
+   * in `get_workflow_details`, so for a workflow reachable over MCP this text is
+   * the tool description the model reads before deciding to call it. n8n
+   * truncates it at 255 characters from v2.27.0.
+   */
+  description?: string;
   active: boolean;
   isArchived?: boolean;
   nodes: Node[];
@@ -56,6 +67,17 @@ export interface Connection {
 
 /** WorkflowSettings represents workflow settings */
 export interface WorkflowSettings {
+  /**
+   * Whether n8n's instance-level MCP server may expose this workflow to a
+   * connected client. Off by default: without it an MCP client can still see
+   * the workflow in `search_workflows`, but `get_workflow_details` and
+   * `execute_workflow` refuse it.
+   *
+   * n8n's public API dropped this on write until v2.17.0 (n8n-io/n8n#27914), so
+   * against an older server it round-trips through import and is then silently
+   * discarded by apply — the toggle has to be set in the UI there.
+   */
+  availableInMCP?: boolean;
   saveExecutionProgress?: boolean;
   saveManualExecutions?: boolean;
   saveDataErrorExecution?: string;
@@ -100,6 +122,12 @@ export interface ListWorkflowsResponse {
  * as an additional property in PUT/POST requests. */
 export interface WorkflowInput {
   name: string;
+  /**
+   * Sent only when the local definition carries one. An n8n old enough to
+   * validate the payload strictly rejects unknown properties, so a definition
+   * that never had a description must not acquire an empty one on write.
+   */
+  description?: string;
   nodes: Node[];
   connections: Record<string, NodeConn>;
   settings?: WorkflowSettings;

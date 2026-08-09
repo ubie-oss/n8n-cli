@@ -11,6 +11,21 @@ export function compare(local: Workflow, remote: Workflow): WorkflowDiff {
     diff.hasChanges = true;
   }
 
+  // A definition with no `description` key is not claiming the description is
+  // empty — it is not managing the field at all, which is every definition
+  // written before n8n-cli could carry one. Comparing it against a description
+  // someone wrote in the n8n UI would report a change that apply then pushes
+  // *without* a description field, either wiping their text or never
+  // converging. Write `description: ""` to mean "empty, deliberately".
+  if (local.description !== undefined && local.description !== (remote.description ?? "")) {
+    diff.fields.push({
+      field: "description",
+      oldValue: remote.description ?? "",
+      newValue: local.description ?? "",
+    });
+    diff.hasChanges = true;
+  }
+
   if (local.active !== remote.active) {
     diff.fields.push({ field: "active", oldValue: remote.active, newValue: local.active });
     diff.hasChanges = true;
