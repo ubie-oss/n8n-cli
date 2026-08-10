@@ -67,6 +67,7 @@ export function parseTsWorkflow(
   }
   if (json.pinData) workflow.pinData = json.pinData as unknown as Workflow["pinData"];
   if (meta.isArchived !== undefined) workflow.isArchived = meta.isArchived;
+  if (meta.description !== undefined) workflow.description = meta.description;
   if (meta.tags) workflow.tags = meta.tags.map((name) => ({ id: "", name }));
   if (meta.updatedAt) workflow.updatedAt = meta.updatedAt;
 

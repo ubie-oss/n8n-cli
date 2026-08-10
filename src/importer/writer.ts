@@ -171,6 +171,7 @@ function describeRoundTripMismatch(workflow: Workflow, code: string): string | n
   const nodes = alignSynthesisedNodeIDs(parsed.nodes, workflow.nodes);
 
   if (parsed.name !== workflow.name) return "name";
+  if ((parsed.description ?? "") !== (workflow.description ?? "")) return "description";
   if (!nodesEqual(nodes.parsed, nodes.source)) {
     return describeNodeMismatch(nodes.parsed, nodes.source);
   }

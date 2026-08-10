@@ -14,6 +14,8 @@ import { DEFAULT_SERVER_MIDDLEWARE_CHAIN, registerBuiltins } from "@/middleware/
 import { normalizeUpstream, type ProxyConfig, parseListenAddr } from "./config.ts";
 import { DuplicateChecker } from "./duplicate.ts";
 import { Logger } from "./logging.ts";
+import { handleMcpRequest, isMcpPath, type McpGateDeps } from "./mcp/gate.ts";
+import { AllowedWorkflowIndex } from "./mcp/workflow-index.ts";
 import {
   buildBadJSONResponse,
   buildDenialResponse,
@@ -48,6 +50,8 @@ interface HandlerDeps {
   middlewares: ServerMiddleware[];
   clientMiddlewares: ClientMiddleware[];
   readiness: ReadinessState;
+  /** Built when the operator configured an MCP policy; absent otherwise. */
+  mcp: McpGateDeps | null;
 }
 
 /** Starts the proxy server. Returns a handle so tests can stop it cleanly. */
@@ -103,6 +107,32 @@ export function startProxy(config: ProxyConfig): ProxyHandle {
     cliOpts: config.clientMiddlewareCliOptions ?? {},
   });
 
+  const mcpSettings = config.mcp ?? null;
+  const mcp: McpGateDeps | null = mcpSettings
+    ? {
+        upstream,
+        policy: mcpSettings.policy,
+        enforce: mcpSettings.enforce,
+        index: new AllowedWorkflowIndex(
+          mcpSettings.policy,
+          {
+            upstream,
+            timeoutMs: config.upstreamTimeoutMs,
+            clientMiddlewares,
+          },
+          mcpSettings.cacheTtlMs,
+        ),
+        logger,
+        timeoutMs: config.upstreamTimeoutMs,
+        clientMiddlewares,
+      }
+    : null;
+
+  // Start resolving which workflows the policy covers now rather than inside
+  // the first tool call. Not awaited, and not part of the readiness pass
+  // below: a slow n8n must not hold the container back — see `prefetch()`.
+  mcp?.index.prefetch();
+
   // Run prepare() up front so identity-resolution / config-load failures
   // surface at startup rather than on the first request. We also track the
   // result so `/readyz` can report 503 until every middleware finishes
@@ -150,6 +180,7 @@ export function startProxy(config: ProxyConfig): ProxyHandle {
     middlewares,
     clientMiddlewares,
     readiness,
+    mcp,
   };
 
   const server = Bun.serve({
@@ -186,6 +217,17 @@ async function handle(req: Request, deps: HandlerDeps): Promise<Response> {
   //             existing probes. Use /livez or /readyz for new deployments.
   if (isProbeRequest(req.method, pathname)) {
     return handleProbe(req.method, pathname, deps);
+  }
+
+  // MCP policy, when one is configured. Checked before the workflow-mutation
+  // table because the two surfaces are disjoint: n8n's MCP endpoint speaks
+  // JSON-RPC on its own path and never looks like a public-API write.
+  if (deps.mcp && isMcpPath(pathname)) {
+    try {
+      return await handleMcpRequest(req, deps.mcp);
+    } catch (err) {
+      return reportError(err, req, pathname, deps);
+    }
   }
 
   const mutation = matchWorkflowMutation(req.method, pathname, deps.config.routes);

@@ -9,6 +9,7 @@ A command-line interface for managing [n8n](https://n8n.io/) workflows as code. 
 - **Import** - Pull workflows from an n8n server to local files, with optional YAML/TypeScript conversion and code externalization
 - **Lint** - Validate workflow definitions against configurable rules
 - **Proxy** - Transparent HTTP proxy that intercepts workflow saves to the n8n public API and runs lint server-side, blocking violations before they reach n8n, and refusing writes built from an out-of-date copy of a workflow
+- **MCP gating** - Put your own policy in front of n8n's MCP server: expose only the tools you chose, and only against the workflows your convention says an agent may reach
 - **Format** - Auto-organize node positions for cleaner workflow layouts
 - **Test** - Execute CLI tests against workflows via webhook endpoints
 - **Webhook** - List and call a workflow's webhook nodes through the authenticated egress path
@@ -301,6 +302,52 @@ Validates that Schedule Trigger nodes don't fire more frequently than a configur
 {
   "rules": {
     "schedule-trigger-frequency": ["warning", { "minInterval": "daily" }]
+  }
+}
+```
+
+##### `mcp-tool-description`
+
+Checks that a workflow reachable through n8n's instance-level MCP server carries a description worth reading. Enabled by default with severity `warning`; it does nothing to a workflow that is not MCP-exposed.
+
+A workflow with `settings.availableInMCP` is a tool an agent can call, and the top-level `description` is what n8n hands the model — in `search_workflows` results and in `get_workflow_details` — to decide whether to call it. n8n truncates it at 255 characters from v2.27.0.
+
+| Option | Type | Description |
+|--------|------|-------------|
+| `mcpTags` | `string[]` | Tag names that also mean "exposed over MCP", for repositories that mark intent with a tag |
+| `minLength` | `number` | Shortest description accepted (default: `20`; `0` disables) |
+| `maxLength` | `number` | Longest description accepted (default: `255`, n8n's own limit) |
+
+```json
+{
+  "rules": {
+    "mcp-tool-description": ["error", { "mcpTags": ["mcp"], "minLength": 40 }]
+  }
+}
+```
+
+##### `mcp-exposure`
+
+Enforces your own rule about *which* workflows may be exposed over MCP. Enabled by default with severity `warning`, but every check is opt-in: with no options the rule does nothing, because there is no convention it could guess.
+
+n8n's `Available in MCP` toggle is per-workflow and anyone with edit rights can flip it in the UI, so on its own it is not a policy — it is whatever the last person clicked. Pair it with a tag and a naming convention and it becomes one, reviewable in the diff.
+
+| Option | Type | Description |
+|--------|------|-------------|
+| `requireTags` | `string[]` | Tags an MCP-exposed workflow must carry (all of them) |
+| `namePattern` | `string` | Regular expression the workflow name must match |
+| `mcpTags` | `string[]` | Tags that mean "meant for MCP" even when the setting is off |
+| `requireSetting` | `boolean` | When true, a workflow carrying an `mcpTags` tag must also have `settings.availableInMCP` — otherwise the tag promises access n8n refuses |
+
+```json
+{
+  "rules": {
+    "mcp-exposure": ["error", {
+      "mcpTags": ["mcp"],
+      "requireTags": ["mcp"],
+      "namePattern": "^\\[mcp\\] ",
+      "requireSetting": true
+    }]
   }
 }
 ```
@@ -1023,6 +1070,58 @@ Under `--stale-write-enforce warn` the write is forwarded with an `X-N8n-Stale-W
 
 > **Scope is advisory, not an enforcement boundary.** The filter reads tags from the request body the client sent, not from the existing upstream workflow, so a caller can bypass middleware by stripping the tag from the JSON they submit. Use it to opt subsets of workflows into policy (organizational scoping), not to defend against a hostile client; for hard enforcement keep the filter empty so every save is checked, or pair the filter with API-key / network-level access controls.
 
+#### MCP gating
+
+<a id="mcp-gating"></a>
+
+n8n's instance-level MCP server publishes one fixed set of tools — search, execute, publish, archive, workflow authoring, agent authoring, credentials, data tables — and `search_workflows` lists every workflow the connecting user can see. Whether an agent may *run* a given workflow is a per-workflow `Available in MCP` toggle, set in the n8n UI by anyone with edit rights, invisible in review, and dropped by the public API before v2.17.0.
+
+How much of that tool set a client gets depends on how it authenticated. An OAuth2 client is granted scopes and n8n narrows the tools to match. **A static MCP access token carries no scopes, and n8n reads that as "every tool"** — including `create_workflow_from_code`, `update_workflow`, `archive_workflow`, the agent-authoring tools and `list_credentials`. A proxy holding one token on behalf of its callers is therefore holding the unrestricted variant, and the allowlist below is the only thing narrowing it.
+
+That is a reasonable product default and a poor blast radius. The MCP gate puts the operator's own answer in front of it, where a workflow author cannot change it:
+
+```bash
+n8n-cli proxy \
+  --upstream https://n8n.example.com \
+  --mcp-enforce error \
+  --mcp-allow-tools 'search_workflows,get_workflow_details,execute_workflow' \
+  --mcp-workflow-tags mcp
+```
+
+Three things happen, and only the first is cosmetic:
+
+1. **`tools/list` is filtered** — a withheld tool never reaches the model's context.
+2. **`tools/call` on a withheld tool is refused at the proxy**, and never reaches n8n. Hiding a tool an agent can still call is theatre; the refusal comes back as a JSON-RPC `Unknown tool` error.
+3. **`tools/call` on a tool that names a workflow is refused unless that workflow carries the tags you named.** The proxy resolves tags against the n8n API (cached for `--mcp-cache-ttl-ms`). The refusal comes back as an MCP tool result with `isError: true`, so the agent is told *why* rather than seeing a transport failure.
+
+Everything else on the path — `initialize`, notifications, the server-to-client `GET` stream, session teardown — is forwarded untouched, and both `application/json` and `text/event-stream` (Streamable HTTP) replies are handled.
+
+| Flag | Env | Description |
+|------|-----|-------------|
+| `--mcp-enforce <level>` | `N8N_MCP_ENFORCE` | `off`, `warn`, `error`. **Required to enable the gate** — without it `/mcp-server/` is forwarded unfiltered, so upgrading changes nothing |
+| `--mcp-allow-tools <list>` | `N8N_MCP_ALLOW_TOOLS` | Comma-separated `*`-globs; only these tools are visible and callable. Empty means all |
+| `--mcp-deny-tools <list>` | `N8N_MCP_DENY_TOOLS` | Globs to withhold, applied after the allowlist |
+| `--mcp-workflow-tags <tags>` | `N8N_MCP_WORKFLOW_TAGS` | A reachable workflow must carry **all** of these tags |
+| `--mcp-cache-ttl-ms <ms>` | `N8N_MCP_CACHE_TTL_MS` | Workflow-tag cache lifetime (default `60000`) |
+
+**Rollout:** `--mcp-enforce warn` logs every decision and changes nothing — the tool list is *not* filtered in warn mode either, because a client that never sees a tool cannot exercise it and the log you are rolling out against would stay empty.
+
+**Fail-closed.** A tool call whose workflow cannot be resolved — because the upstream list is unreadable — is refused, as is a workflow-scoped call that names no workflow. There is no switch to open those: a gate that opens during an outage is not a gate, and `warn` already covers "measure, don't block".
+
+**Cost of the tag lookup.** Resolving tags means walking every page of `/api/v1/workflows`, which on an instance with thousands of workflows is seconds. The gate starts that fetch at startup instead of inside the first tool call, and a call that arrives while it is still running joins it rather than starting a second one. The prefetch is *not* part of the readiness pass: a deployment whose startup probe reads `/readyz` would otherwise be held back for as long as a slow n8n takes, which is a worse failure than the latency it avoids. After that the index is refreshed on the first call past `--mcp-cache-ttl-ms`; raise the TTL if that refresh shows up in your latency.
+
+**Deliberately not options.** The endpoint path is fixed at `/mcp-server/`, because n8n fixes it and a flag would only be a way to point the gate at the wrong path and quietly stop gating. And the gate does not re-check `settings.availableInMCP`: n8n already refuses `execute_workflow` and `get_workflow_details` for a workflow without it, so the check would add configuration and no enforcement. Use the tag for what n8n's toggle cannot give you — a decision that shows up in review.
+
+**Which tools take a workflow id.** A built-in table covers the workflow-scoped tools — `execute_workflow`, `test_workflow`, `prepare_workflow_pin_data`, `get_workflow_details`, `get_workflow_history`, `get_workflow_version`, `restore_workflow_version`, `update_workflow`, `publish_workflow`, `unpublish_workflow`, `archive_workflow` — reading `workflowId` and then `id`. It is not configurable and it is not the only check: the gate separately scans **every** argument value, nested ones included, against the set of workflow ids that exist upstream. So a tool n8n renames, a parameter this release read wrong, or a tool it has never heard of cannot carry a forbidden workflow id past the gate — the table only decides how precise the refusal message is, and whether a call that names no workflow at all is refused.
+
+> Tool names differ between n8n's documentation and its implementation — the docs call them `list_tags`, `get_execution` and `search_executions`, the server registers `list_workflow_tags`, `get_workflow_execution` and `search_workflow_executions`. Build `--mcp-allow-tools` from a real `tools/list` against your instance, not from the docs; a misspelt entry silently withholds a tool you meant to allow.
+
+**What it does not do:** `search_workflows` results are forwarded verbatim, so an agent can still *see* a preview — name, description — of every workflow the connecting identity can read, even ones it may not fetch or run. Withhold `search_workflows` itself if that listing is the problem.
+
+> As with every other check here, this is an enforcement boundary only if direct access to n8n is blocked at the network level. A client that can reach `/mcp-server/` on the instance itself bypasses the proxy.
+
+The repository-side half of this — deciding which workflows *should* be exposed, and making sure they carry a description worth reading — is the [`mcp-exposure`](#mcp-exposure) and [`mcp-tool-description`](#mcp-tool-description) lint rules.
+
 **Health probes:**
 
 | Path | Method | Behavior |
@@ -1115,6 +1214,8 @@ import { workflow, trigger, node } from "@n8n/workflow-sdk";
 export const meta = {
   active: true,
   tags: ["managed-as-code"],
+  // The workflow's top-level description. See "Workflow description" below.
+  description: "Looks up a hospital by name and returns its contract status.",
   // Written by n8n-cli when it generates the file; keeps node IDs and the
   // import skip-check stable. Optional in hand-written files.
   nodeIds: { Trigger: "a1b2c3d4-...", Set: "e5f6a7b8-..." },
@@ -1182,6 +1283,44 @@ workflow. `apply` still lints `.ts` workflows before writing them upstream.
 true of YAML), so editing and re-applying a workflow that changed upstream in the
 meantime reports a conflict and needs `--force`.
 
+
+## Workflow description and MCP exposure
+
+A workflow carries a top-level `description` — free text, distinct from the
+`description.md` `import` writes into `_subfiles/` as local documentation, and
+distinct from a node's `notes`. `import` brings it down, `apply` pushes it back,
+and it round-trips through JSON, YAML and `.ts` (in the `meta` block, since the
+SDK has no field for it).
+
+It is worth writing carefully when the workflow is reachable over n8n's
+instance-level MCP server, because that is where the text is read: n8n shows it
+to a connected agent in `search_workflows` results and in `get_workflow_details`,
+so it is effectively the tool description the model uses to decide whether to
+call the workflow. n8n truncates it at 255 characters from v2.27.0.
+
+Whether a workflow is reachable at all is `settings.availableInMCP` — the
+`Available in MCP` toggle in n8n's workflow settings. n8n-cli treats it as an
+ordinary setting: imported, diffed and applied like the rest. Two caveats:
+
+- n8n's public API silently dropped it on write until **v2.17.0**
+  ([n8n-io/n8n#27914](https://github.com/n8n-io/n8n/pull/27914)). Against an older
+  server the value round-trips into your definitions and is then discarded on
+  apply, so the toggle has to be set in the UI there.
+- `search_workflows` lists every workflow the connecting user can see, whether or
+  not it is MCP-enabled; the toggle only gates `get_workflow_details` and
+  `execute_workflow`. To decide what an agent may reach independently of that,
+  put the [`mcp` gate](#mcp-gating) in front of n8n.
+
+`apply` only sends `description` when the local definition has one, so a
+definition that never carried one is unaffected — which matters against an n8n
+old enough to reject unknown properties outright. A definition with no
+`description` key is treated as not managing the field: it is not diffed against
+whatever is upstream, so a description written in the n8n UI is left alone until
+`import` brings it down. Write `description: ""` to clear one deliberately.
+
+The [`mcp-tool-description`](#mcp-tool-description) and
+[`mcp-exposure`](#mcp-exposure) lint rules turn all of this into something CI can
+check.
 
 ## Configuration
 

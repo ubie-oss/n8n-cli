@@ -35,6 +35,12 @@ export interface TsWorkflowMeta {
   isArchived?: boolean;
   tags?: string[];
   /**
+   * The workflow's top-level `description`. The SDK's `WorkflowJSON` has no
+   * field for it, and it is the text an MCP client reads as the tool's
+   * description, so it has to survive the round trip through `.ts`.
+   */
+  description?: string;
+  /**
    * Node IDs keyed by node name.
    *
    * The SDK's builder has no field for a node ID and mints a random UUID on
@@ -162,6 +168,12 @@ function coerceMeta(raw: unknown): TsWorkflowMeta {
       throw new TsPreprocessError(`${META_EXPORT_NAME}.tags must be an array of strings`);
     }
     meta.tags = obj.tags as string[];
+  }
+  if (obj.description !== undefined) {
+    if (typeof obj.description !== "string") {
+      throw new TsPreprocessError(`${META_EXPORT_NAME}.description must be a string`);
+    }
+    meta.description = obj.description;
   }
   if (obj.updatedAt !== undefined) {
     if (typeof obj.updatedAt !== "string") {

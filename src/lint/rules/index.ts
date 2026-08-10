@@ -6,6 +6,8 @@ import { expressionModePrefixRule } from "./expression-mode-prefix.ts";
 import { filterOperatorValidRule } from "./filter-operator-valid.ts";
 import { implicitJsonRefRule } from "./implicit-json-ref.ts";
 import { jsonSyntaxRule } from "./json-syntax.ts";
+import { mcpExposureRule } from "./mcp-exposure.ts";
+import { mcpToolDescriptionRule } from "./mcp-tool-description.ts";
 import { noPlaintextSecretsRule } from "./no-plaintext-secrets.ts";
 import { nodeParamsRule } from "./node-params.ts";
 import { nodeRefCardinalityRule } from "./node-ref-cardinality.ts";
@@ -33,5 +35,7 @@ export function registerDefaultRules(): RuleRegistry {
   registry.register(bannedNodeRule);
   registry.register(filterOperatorValidRule);
   registry.register(noPlaintextSecretsRule);
+  registry.register(mcpToolDescriptionRule);
+  registry.register(mcpExposureRule);
   return registry;
 }
