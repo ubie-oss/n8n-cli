@@ -25,8 +25,13 @@ export type WorkflowIdArgs = Record<string, string[]>;
 /**
  * The n8n MCP tools that target a single workflow, and where the id lives.
  *
- * This is a fixed table rather than an option because it is not the only line
- * of defence: `scanForWorkflowIds` separately checks *every* argument value
+ * Names and the `workflowId` parameter are taken from n8n's own tool
+ * definitions (`packages/cli/src/modules/mcp/tools/`), not from its docs — the
+ * docs name several of these differently. `id` stays as a fallback for a
+ * version that renames the parameter.
+ *
+ * A fixed table rather than an option, because it is not the only line of
+ * defence: `scanForWorkflowIds` separately checks *every* argument value
  * against the set of workflow ids that exist upstream. So a tool n8n renames,
  * or one this release has never heard of, cannot smuggle a forbidden workflow
  * id past the gate — the table only decides how precise the refusal message is,
@@ -35,8 +40,11 @@ export type WorkflowIdArgs = Record<string, string[]>;
 export const WORKFLOW_ID_ARGS: WorkflowIdArgs = {
   execute_workflow: ["workflowId", "id"],
   test_workflow: ["workflowId", "id"],
-  prepare_test_pin_data: ["workflowId", "id"],
+  prepare_workflow_pin_data: ["workflowId", "id"],
   get_workflow_details: ["workflowId", "id"],
+  get_workflow_history: ["workflowId", "id"],
+  get_workflow_version: ["workflowId", "id"],
+  restore_workflow_version: ["workflowId", "id"],
   update_workflow: ["workflowId", "id"],
   publish_workflow: ["workflowId", "id"],
   unpublish_workflow: ["workflowId", "id"],

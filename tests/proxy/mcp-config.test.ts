@@ -59,6 +59,14 @@ describe("targetWorkflowId", () => {
     expect(targetWorkflowId("search_workflows", { workflowId: "x" })).toBeUndefined();
   });
 
+  test("the table uses the names n8n registers, not the ones its docs use", () => {
+    // n8n's docs say `prepare_test_pin_data`; the server registers
+    // `prepare_workflow_pin_data`. Reading the table off the docs left a dead
+    // entry and an unscoped tool.
+    expect(targetWorkflowId("prepare_workflow_pin_data", { workflowId: "wf1" })).toBe("wf1");
+    expect(targetWorkflowId("restore_workflow_version", { workflowId: "wf1" })).toBe("wf1");
+  });
+
   test("null when the tool targets one but the call named none", () => {
     expect(targetWorkflowId("execute_workflow", {})).toBeNull();
     expect(targetWorkflowId("execute_workflow", { workflowId: "" })).toBeNull();

@@ -368,12 +368,22 @@ describe("MCP gate: startup", () => {
     return upstream.captured.filter((c) => c.pathname === "/api/v1/workflows").length;
   }
 
+  /**
+   * The prefetch is deliberately outside the readiness pass, so `/readyz`
+   * turning green says nothing about it having run. Poll for the effect.
+   */
+  async function waitForPrefetch(): Promise<void> {
+    for (let i = 0; i < 100 && listCalls() === 0; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+  }
+
   test("the workflow index is fetched at startup, not inside the first call", async () => {
     // On Cloud Run with min-scale 0 this is the difference between a cold
     // start costing the container's own startup and costing the caller's
     // request timeout — which the gate would answer by failing closed.
     start(policy({ workflowTags: ["mcp"] }));
-    await waitForReady();
+    await waitForPrefetch();
 
     expect(listCalls()).toBe(1);
 
@@ -408,10 +418,14 @@ describe("MCP gate: startup", () => {
     expect((await waitForReady()).status).toBe(200);
   });
 
-  test("no policy means no prefetch at all", async () => {
+  test("no workflow scope means no prefetch at all", async () => {
+    // Nothing to resolve, so the listing is never issued — the gate does not
+    // pay for an index it would not read. Safe to assert without polling:
+    // with no scope the lookup returns before it can make a request.
     start(policy({ allowTools: ["search_workflows"] }));
     await waitForReady();
-    expect(upstream.captured.some((c) => c.pathname === "/api/v1/workflows")).toBe(false);
+    await call("tools/call", { name: "search_workflows", arguments: {} });
+    expect(listCalls()).toBe(0);
   });
 });
 
