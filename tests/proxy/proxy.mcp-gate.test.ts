@@ -349,6 +349,53 @@ describe("MCP gate: failure and enforcement modes", () => {
   });
 });
 
+describe("MCP gate: startup", () => {
+  async function readyz(): Promise<{ status: number; body: string }> {
+    const res = await fetch(`http://127.0.0.1:${proxy.port}/readyz`);
+    return { status: res.status, body: await res.text() };
+  }
+
+  async function waitForReady(): Promise<{ status: number; body: string }> {
+    for (let i = 0; i < 50; i++) {
+      const r = await readyz();
+      if (r.body !== "preparing\n") return r;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    return readyz();
+  }
+
+  test("the workflow index is fetched before the first call, not during it", async () => {
+    // On Cloud Run with min-scale 0 this is the difference between a cold
+    // start costing the container's startup budget and costing the caller's
+    // request timeout.
+    start(policy({ workflowTags: ["mcp"] }));
+    await waitForReady();
+
+    expect(upstream.captured.some((c) => c.pathname === "/api/v1/workflows")).toBe(true);
+
+    const before = upstream.captured.filter((c) => c.pathname === "/api/v1/workflows").length;
+    await call("tools/call", { name: "execute_workflow", arguments: { workflowId: "wf-open" } });
+    const after = upstream.captured.filter((c) => c.pathname === "/api/v1/workflows").length;
+    expect(after).toBe(before);
+  });
+
+  test("an n8n that is down at boot does not keep the proxy from becoming ready", async () => {
+    // Refusing readiness forever would turn a transient upstream blip into a
+    // proxy that never serves — including the paths the gate has no say over.
+    await upstream.server.stop(true);
+    upstream = startMockUpstream({ listFails: true });
+    start(policy({ workflowTags: ["mcp"] }));
+
+    expect((await waitForReady()).status).toBe(200);
+  });
+
+  test("no policy means no prefetch at all", async () => {
+    start(policy({ allowTools: ["search_workflows"] }));
+    await waitForReady();
+    expect(upstream.captured.some((c) => c.pathname === "/api/v1/workflows")).toBe(false);
+  });
+});
+
 describe("MCP gate: what it leaves alone", () => {
   test("initialize passes through", async () => {
     start(policy({ allowTools: ["search_workflows"], workflowTags: ["mcp"] }));

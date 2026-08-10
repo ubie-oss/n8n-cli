@@ -64,6 +64,28 @@ export class AllowedWorkflowIndex {
   }
 
   /**
+   * Fills the cache before the first request needs it.
+   *
+   * The listing walks every page of `/api/v1/workflows` with full node
+   * payloads, which on an instance with a few thousand workflows is seconds,
+   * not milliseconds. Paying that inside the first `tools/call` puts it against
+   * the caller's request budget — on Cloud Run with `min-scale: 0`, that is a
+   * per-cold-start risk of timing out a call the policy meant to allow. A
+   * container's startup budget is the right place for it.
+   *
+   * Never throws: a proxy that refuses to become ready because n8n happened to
+   * be down at boot is worse than one that warms up on its first request.
+   */
+  async warm(): Promise<void> {
+    try {
+      await this.sets();
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      console.error(`n8n-cli proxy: could not prefetch the MCP workflow index: ${reason}`);
+    }
+  }
+
+  /**
    * The upstream workflow sets.
    *
    * Throws when the upstream cannot be read. The gate turns that into a refusal
@@ -94,6 +116,9 @@ export class AllowedWorkflowIndex {
     for (let page = 0; page < MAX_PAGES; page++) {
       const url = new URL(`${this.deps.upstream}/api/v1/workflows`);
       url.searchParams.set("limit", "100");
+      // Only tags are read from the response. Pinned data can be the largest
+      // part of a workflow and is never looked at here.
+      url.searchParams.set("excludePinnedData", "true");
       if (cursor) url.searchParams.set("cursor", cursor);
 
       const { response } = await forwardRequest(

@@ -107,6 +107,27 @@ export function startProxy(config: ProxyConfig): ProxyHandle {
     cliOpts: config.clientMiddlewareCliOptions ?? {},
   });
 
+  const mcpSettings = config.mcp ?? null;
+  const mcp: McpGateDeps | null = mcpSettings
+    ? {
+        upstream,
+        policy: mcpSettings.policy,
+        enforce: mcpSettings.enforce,
+        index: new AllowedWorkflowIndex(
+          mcpSettings.policy,
+          {
+            upstream,
+            timeoutMs: config.upstreamTimeoutMs,
+            clientMiddlewares,
+          },
+          mcpSettings.cacheTtlMs,
+        ),
+        logger,
+        timeoutMs: config.upstreamTimeoutMs,
+        clientMiddlewares,
+      }
+    : null;
+
   // Run prepare() up front so identity-resolution / config-load failures
   // surface at startup rather than on the first request. We also track the
   // result so `/readyz` can report 503 until every middleware finishes
@@ -119,6 +140,10 @@ export function startProxy(config: ProxyConfig): ProxyHandle {
   const allForPrepare: Array<{ name: string; prepare?: () => unknown }> = [
     ...middlewares,
     ...clientMiddlewares,
+    // Warming the MCP workflow index here spends a container's startup budget
+    // instead of the first caller's request budget. `warm()` never throws, so
+    // an n8n that is down at boot delays nothing and fails no probe.
+    ...(mcp ? [{ name: "mcp-gate", prepare: () => mcp.index.warm() }] : []),
   ];
   Promise.all(
     allForPrepare.map(async (mw) => {
@@ -145,27 +170,6 @@ export function startProxy(config: ProxyConfig): ProxyHandle {
   const duplicates = config.allowDuplicates
     ? null
     : new DuplicateChecker(upstream, config.duplicateTtlMs);
-
-  const mcpSettings = config.mcp ?? null;
-  const mcp: McpGateDeps | null = mcpSettings
-    ? {
-        upstream,
-        policy: mcpSettings.policy,
-        enforce: mcpSettings.enforce,
-        index: new AllowedWorkflowIndex(
-          mcpSettings.policy,
-          {
-            upstream,
-            timeoutMs: config.upstreamTimeoutMs,
-            clientMiddlewares,
-          },
-          mcpSettings.cacheTtlMs,
-        ),
-        logger,
-        timeoutMs: config.upstreamTimeoutMs,
-        clientMiddlewares,
-      }
-    : null;
 
   const deps: HandlerDeps = {
     upstream,
