@@ -10,19 +10,29 @@
  * edit rights, and nothing about it is reviewable.
  *
  * This module holds the operator's own answer instead — a tool allowlist, and a
- * rule for which workflows count as agent-reachable — evaluated in front of n8n
+ * tag that says which workflows are agent-reachable — evaluated in front of n8n
  * where an author cannot change it.
+ *
+ * Deliberately *not* configurable: whether the target must also have
+ * `settings.availableInMCP`. n8n already refuses `execute_workflow` and
+ * `get_workflow_details` for a workflow without it, so re-checking here would
+ * add a flag and no enforcement.
  */
 
 /** Tools that act on one workflow, and the argument naming it. */
 export type WorkflowIdArgs = Record<string, string[]>;
 
 /**
- * The n8n MCP tools that target a single workflow. `workflowId` first, `id` as
- * the fallback, so a rename upstream degrades to "argument not found" — which,
- * with the default `onMissingTarget: "deny"`, fails closed.
+ * The n8n MCP tools that target a single workflow, and where the id lives.
+ *
+ * This is a fixed table rather than an option because it is not the only line
+ * of defence: `scanForWorkflowIds` separately checks *every* argument value
+ * against the set of workflow ids that exist upstream. So a tool n8n renames,
+ * or one this release has never heard of, cannot smuggle a forbidden workflow
+ * id past the gate — the table only decides how precise the refusal message is,
+ * and whether a call that names no workflow at all is refused.
  */
-export const DEFAULT_WORKFLOW_ID_ARGS: WorkflowIdArgs = {
+export const WORKFLOW_ID_ARGS: WorkflowIdArgs = {
   execute_workflow: ["workflowId", "id"],
   test_workflow: ["workflowId", "id"],
   prepare_test_pin_data: ["workflowId", "id"],
@@ -43,30 +53,11 @@ export interface McpPolicy {
   denyTools: string[];
   /** Tags a workflow must carry (all of them) to be reachable over MCP. */
   workflowTags: string[];
-  /** Regular expression a reachable workflow's name must match. */
-  workflowNamePattern?: string;
-  /** Whether a workflow must also have `settings.availableInMCP` set. */
-  requireAvailableInMCP: boolean;
-  /** Per-tool argument names carrying the target workflow id. */
-  workflowIdArgs: WorkflowIdArgs;
-  /** What to do when a workflow-scoped tool call names no workflow. */
-  onMissingTarget: "deny" | "allow";
 }
 
 /** True when the policy says nothing about which workflows are reachable. */
 export function hasWorkflowScope(policy: McpPolicy): boolean {
-  return (
-    policy.workflowTags.length > 0 ||
-    policy.workflowNamePattern !== undefined ||
-    policy.requireAvailableInMCP
-  );
-}
-
-/** True when the policy says nothing about tools either — a pure passthrough. */
-export function isPassthrough(policy: McpPolicy): boolean {
-  return (
-    policy.allowTools.length === 0 && policy.denyTools.length === 0 && !hasWorkflowScope(policy)
-  );
+  return policy.workflowTags.length > 0;
 }
 
 /** Whether a tool name survives the allow/deny lists. */
@@ -80,16 +71,16 @@ export function isToolAllowed(policy: McpPolicy, name: string): boolean {
 /**
  * The workflow id a `tools/call` targets.
  *
- * Returns `undefined` when the tool is not workflow-scoped at all (nothing to
- * check), and `null` when it is but the call named no workflow — which the
- * caller resolves through `onMissingTarget` rather than waving through.
+ * Returns `undefined` when the tool is not known to target a workflow (nothing
+ * precise to say), and `null` when it is but the call named none — which is
+ * refused rather than waved through, because a mapped tool with no target is a
+ * malformed call, not a broad one.
  */
 export function targetWorkflowId(
-  policy: McpPolicy,
   tool: string,
   args: Record<string, unknown>,
 ): string | null | undefined {
-  const names = policy.workflowIdArgs[tool];
+  const names = WORKFLOW_ID_ARGS[tool];
   if (!names) return undefined;
   for (const name of names) {
     const value = args[name];
@@ -98,6 +89,43 @@ export function targetWorkflowId(
     if (typeof value === "number") return String(value);
   }
   return null;
+}
+
+/**
+ * Every value anywhere in a tool call's arguments that names a workflow this
+ * instance actually has.
+ *
+ * The backstop behind {@link WORKFLOW_ID_ARGS}. The argument names in that table
+ * were read off n8n's docs, not off the running server, and n8n adds MCP tools
+ * between releases — so the gate must not depend on having guessed right. Any
+ * argument value that *is* an upstream workflow id gets checked against the
+ * policy, whatever the tool is called and whatever the parameter is named.
+ *
+ * Walks nested objects and arrays: a filter or a batch request buries the id
+ * one level down, and a check that only read the top level would miss it.
+ */
+export function scanForWorkflowIds(args: unknown, known: ReadonlySet<string>): Set<string> {
+  const found = new Set<string>();
+
+  const walk = (value: unknown, depth: number): void => {
+    // Bounded so a pathological payload cannot spin the gate.
+    if (depth > 8) return;
+    if (typeof value === "string" || typeof value === "number") {
+      const candidate = String(value);
+      if (known.has(candidate)) found.add(candidate);
+      return;
+    }
+    if (Array.isArray(value)) {
+      for (const item of value) walk(item, depth + 1);
+      return;
+    }
+    if (typeof value === "object" && value !== null) {
+      for (const item of Object.values(value)) walk(item, depth + 1);
+    }
+  };
+
+  walk(args, 0);
+  return found;
 }
 
 /**

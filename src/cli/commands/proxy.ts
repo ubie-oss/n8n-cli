@@ -3,6 +3,7 @@ import { parseTagFilter } from "@/common/tags.ts";
 import { parseMiddlewareList } from "@/middleware/registry.ts";
 import { parseEnforceLevel } from "@/proxy/config.ts";
 import { type McpCliOptions, parseMcpSettings } from "@/proxy/mcp/config.ts";
+import { MCP_PATH_PREFIX } from "@/proxy/mcp/gate.ts";
 import { parseRoutes } from "@/proxy/rest/router.ts";
 import { startProxy } from "@/proxy/server.ts";
 
@@ -204,10 +205,6 @@ export function registerProxyCommand(program: Command): void {
         "Without it the MCP endpoint is forwarded unfiltered. env: N8N_MCP_ENFORCE",
     )
     .option(
-      "--mcp-path-prefix <path>",
-      "Path the MCP endpoint is served on (default: /mcp-server/). env: N8N_MCP_PATH_PREFIX",
-    )
-    .option(
       "--mcp-allow-tools <list>",
       "Comma-separated glob patterns for the only tools clients may see and call " +
         '(e.g. "search_workflows,execute_workflow,get_workflow_details"). ' +
@@ -222,32 +219,6 @@ export function registerProxyCommand(program: Command): void {
       "--mcp-workflow-tags <tags>",
       "Only workflows carrying ALL of these tags may be reached by a workflow-scoped tool call " +
         "(AND condition). env: N8N_MCP_WORKFLOW_TAGS",
-    )
-    .option(
-      "--mcp-workflow-name-pattern <regex>",
-      "Only workflows whose name matches this regular expression may be reached. " +
-        "env: N8N_MCP_WORKFLOW_NAME_PATTERN",
-    )
-    .option(
-      "--mcp-require-available-in-mcp",
-      "Additionally require settings.availableInMCP on the target workflow. " +
-        "env: N8N_MCP_REQUIRE_AVAILABLE_IN_MCP=true",
-    )
-    .option(
-      "--mcp-workflow-id-args <json>",
-      'JSON object mapping a tool to the arguments naming its target workflow, e.g. {"run_workflow":["workflowId"]}. ' +
-        "Merged over the built-in map; an empty array removes a tool from the scope check. " +
-        "env: N8N_MCP_WORKFLOW_ID_ARGS",
-    )
-    .option(
-      "--mcp-on-missing-target <mode>",
-      "What to do when a workflow-scoped tool call names no workflow: deny (default) or allow. " +
-        "env: N8N_MCP_ON_MISSING_TARGET",
-    )
-    .option(
-      "--mcp-on-index-error <mode>",
-      "What to do when the workflow list cannot be read: deny (default) or allow. " +
-        "env: N8N_MCP_ON_INDEX_ERROR",
     )
     .option(
       "--mcp-cache-ttl-ms <ms>",
@@ -418,7 +389,7 @@ export function registerProxyCommand(program: Command): void {
         ? clientMiddlewares.join(",")
         : (process.env.N8N_CLIENT_MIDDLEWARES ?? "(none)");
       const tagsDisplay = filterByTags.length > 0 ? `, tags=${filterByTags.join(",")}` : "";
-      const mcpDisplay = mcp ? `, mcp=${mcp.enforce} on ${mcp.pathPrefix}` : "";
+      const mcpDisplay = mcp ? `, mcp=${mcp.enforce} on ${MCP_PATH_PREFIX}` : "";
       console.error(
         `n8n-cli proxy listening on ${opts.listen} → ${upstream} (enforce=${enforce}, server-middlewares=${mwDisplay}, client-middlewares=${clientMwDisplay}${tagsDisplay}${mcpDisplay})`,
       );

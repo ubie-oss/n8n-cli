@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import type { EnforceLevel } from "@/proxy/config.ts";
-import { DEFAULT_WORKFLOW_ID_ARGS, type McpPolicy } from "@/proxy/mcp/policy.ts";
+import type { McpPolicy } from "@/proxy/mcp/policy.ts";
 import { type ProxyHandle, startProxy } from "@/proxy/server.ts";
 
 /**
@@ -107,25 +107,13 @@ function mcpReply(request: { id?: unknown; method?: string; params?: { name?: st
 }
 
 function policy(overrides: Partial<McpPolicy> = {}): McpPolicy {
-  return {
-    allowTools: [],
-    denyTools: [],
-    workflowTags: [],
-    requireAvailableInMCP: false,
-    workflowIdArgs: DEFAULT_WORKFLOW_ID_ARGS,
-    onMissingTarget: "deny",
-    ...overrides,
-  };
+  return { allowTools: [], denyTools: [], workflowTags: [], ...overrides };
 }
 
 let upstream: ReturnType<typeof startMockUpstream>;
 let proxy: ProxyHandle;
 
-function start(
-  mcpPolicy: McpPolicy,
-  enforce: EnforceLevel = "error",
-  onIndexError: "deny" | "allow" = "deny",
-): void {
+function start(mcpPolicy: McpPolicy, enforce: EnforceLevel = "error"): void {
   proxy = startProxy({
     listen: "127.0.0.1:0",
     upstream: `http://127.0.0.1:${upstream.port}`,
@@ -133,13 +121,7 @@ function start(
     disableRules: [],
     logFormat: "json",
     allowDuplicates: true,
-    mcp: {
-      pathPrefix: "/mcp-server/",
-      enforce,
-      policy: mcpPolicy,
-      onIndexError,
-      cacheTtlMs: 60_000,
-    },
+    mcp: { enforce, policy: mcpPolicy, cacheTtlMs: 60_000 },
   });
 }
 
@@ -239,46 +221,72 @@ describe("MCP gate: workflow scope", () => {
     expect((reply.result as { isError?: boolean }).isError).toBeUndefined();
   });
 
-  test("requireAvailableInMCP rejects a workflow that only carries the tag", async () => {
-    start(policy({ workflowTags: ["mcp"], requireAvailableInMCP: true }));
+  test("the tag alone decides — availableInMCP is n8n's own check, not ours", async () => {
+    // `wf-tagged-only` carries the tag but not the setting. n8n refuses it on
+    // its own, so re-checking here would buy nothing and cost a flag.
+    start(policy({ workflowTags: ["mcp"] }));
     const reply = await call("tools/call", {
       name: "execute_workflow",
       arguments: { workflowId: "wf-tagged-only" },
     });
-    expect((reply.result as { isError?: boolean }).isError).toBe(true);
+    expect((reply.result as { isError?: boolean }).isError).toBeUndefined();
   });
 
-  test("a name pattern narrows the scope on its own", async () => {
-    start(policy({ workflowNamePattern: "^\\[mcp\\] " }));
-    const denied = await call("tools/call", {
-      name: "execute_workflow",
-      arguments: { workflowId: "wf-internal" },
-    });
-    expect((denied.result as { isError?: boolean }).isError).toBe(true);
-
-    const allowed = await call("tools/call", {
-      name: "execute_workflow",
-      arguments: { workflowId: "wf-open" },
-    });
-    expect((allowed.result as { isError?: boolean }).isError).toBeUndefined();
-  });
-
-  test("a tool that names no workflow is refused by default", async () => {
+  test("a tool that names no workflow is refused", async () => {
     start(policy({ workflowTags: ["mcp"] }));
     const reply = await call("tools/call", { name: "execute_workflow", arguments: {} });
     expect((reply.result as { isError?: boolean }).isError).toBe(true);
   });
 
-  test("onMissingTarget=allow lets it through", async () => {
-    start(policy({ workflowTags: ["mcp"], onMissingTarget: "allow" }));
-    const reply = await call("tools/call", { name: "execute_workflow", arguments: {} });
-    expect((reply.result as { isError?: boolean }).isError).toBeUndefined();
-  });
-
-  test("a tool outside the workflow map is not scope-checked", async () => {
+  test("a tool that targets no workflow passes untouched", async () => {
     start(policy({ workflowTags: ["mcp"] }));
     const reply = await call("tools/call", { name: "search_workflows", arguments: {} });
     expect((reply.result as { isError?: boolean }).isError).toBeUndefined();
+  });
+
+  test("an unknown tool carrying a forbidden id is still caught", async () => {
+    // The backstop. The built-in tool→argument table was read off n8n's docs,
+    // not off the running server, so the gate must not depend on having
+    // guessed the tool name or the parameter name right.
+    start(policy({ workflowTags: ["mcp"] }));
+    const reply = await call("tools/call", {
+      name: "some_tool_this_release_never_heard_of",
+      arguments: { target: { ref: "wf-internal" } },
+    });
+    const result = reply.result as { isError?: boolean; content: Array<{ text: string }> };
+    expect(result.isError).toBe(true);
+    expect(result.content[0]?.text).toContain("wf-internal");
+    expect(upstream.captured.some((c) => c.body.includes("wf-internal"))).toBe(false);
+  });
+
+  test("a known tool whose argument was renamed upstream is still caught", async () => {
+    start(policy({ workflowTags: ["mcp"] }));
+    const reply = await call("tools/call", {
+      name: "execute_workflow",
+      arguments: { workflow_id: "wf-internal" },
+    });
+    expect((reply.result as { isError?: boolean }).isError).toBe(true);
+  });
+
+  test("an argument that merely looks like text is not mistaken for an id", async () => {
+    start(policy({ workflowTags: ["mcp"] }));
+    const reply = await call("tools/call", {
+      name: "search_workflows",
+      arguments: { query: "wf-internal-ish notes" },
+    });
+    expect((reply.result as { isError?: boolean }).isError).toBeUndefined();
+  });
+
+  test("the id may arrive as a number", async () => {
+    start(policy({ workflowTags: ["mcp"] }));
+    const reply = await call("tools/call", {
+      name: "execute_workflow",
+      arguments: { workflowId: 42 },
+    });
+    // 42 is no workflow of this instance, but it was recognised as a target
+    // rather than treated as "no workflow named" — and refused either way.
+    const result = reply.result as { content: Array<{ text: string }> };
+    expect(result.content[0]?.text).toContain("42");
   });
 
   test("the id may arrive as a number", async () => {
@@ -295,7 +303,9 @@ describe("MCP gate: workflow scope", () => {
 });
 
 describe("MCP gate: failure and enforcement modes", () => {
-  test("an unreadable workflow list denies by default", async () => {
+  test("an unreadable workflow list refuses the call", async () => {
+    // Fail closed: a gate that opens during an upstream outage is not a gate,
+    // and an operator who wants the calls through has `--mcp-enforce warn`.
     await upstream.server.stop(true);
     upstream = startMockUpstream({ listFails: true });
     start(policy({ workflowTags: ["mcp"] }));
@@ -307,10 +317,10 @@ describe("MCP gate: failure and enforcement modes", () => {
     expect((reply.result as { isError?: boolean }).isError).toBe(true);
   });
 
-  test("onIndexError=allow forwards instead", async () => {
+  test("warn mode forwards even when the list is unreadable", async () => {
     await upstream.server.stop(true);
     upstream = startMockUpstream({ listFails: true });
-    start(policy({ workflowTags: ["mcp"] }), "error", "allow");
+    start(policy({ workflowTags: ["mcp"] }), "warn");
 
     const reply = await call("tools/call", {
       name: "execute_workflow",

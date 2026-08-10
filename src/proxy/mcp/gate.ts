@@ -30,7 +30,13 @@ import {
   toolCallName,
   toolErrorResult,
 } from "./jsonrpc.ts";
-import { hasWorkflowScope, isToolAllowed, type McpPolicy, targetWorkflowId } from "./policy.ts";
+import {
+  hasWorkflowScope,
+  isToolAllowed,
+  type McpPolicy,
+  scanForWorkflowIds,
+  targetWorkflowId,
+} from "./policy.ts";
 import type { AllowedWorkflowIndex } from "./workflow-index.ts";
 
 export interface McpGateDeps {
@@ -41,22 +47,20 @@ export interface McpGateDeps {
   logger: Logger;
   timeoutMs?: number;
   clientMiddlewares?: import("@/middleware/types.ts").ClientMiddleware[];
-  /**
-   * What to do when the workflow index cannot be read. `deny` (default) refuses
-   * the call; `allow` forwards it. Denying is right for a gate whose whole job
-   * is to bound what an agent can reach, but an operator running the gate for
-   * tidiness rather than safety may prefer the opposite.
-   */
-  onIndexError?: "deny" | "allow";
 }
+
+/**
+ * The path n8n serves its instance-level MCP endpoint on.
+ *
+ * Not configurable: n8n fixes it at `/mcp-server/http` and offers no setting to
+ * move it. A flag here would only be a way to point the gate at the wrong path
+ * and quietly stop gating.
+ */
+export const MCP_PATH_PREFIX = "/mcp-server/";
 
 /** True when this request targets the MCP endpoint the gate governs. */
-export function isMcpPath(pathname: string, pathPrefix: string): boolean {
-  return pathname === stripTrailingSlash(pathPrefix) || pathname.startsWith(pathPrefix);
-}
-
-function stripTrailingSlash(value: string): string {
-  return value.endsWith("/") ? value.slice(0, -1) : value;
+export function isMcpPath(pathname: string): boolean {
+  return pathname === "/mcp-server" || pathname.startsWith(MCP_PATH_PREFIX);
 }
 
 /**
@@ -154,11 +158,13 @@ async function refuse(
 
   if (!hasWorkflowScope(deps.policy)) return null;
 
-  const target = targetWorkflowId(deps.policy, tool, toolCallArguments(message));
-  if (target === undefined) return null;
+  const args = toolCallArguments(message);
+  const target = targetWorkflowId(tool, args);
 
+  // A tool this release knows to be workflow-scoped, called without naming one,
+  // is malformed rather than broad. Refused: waving it through would mean the
+  // one call the gate cannot reason about is also the one it lets past.
   if (target === null) {
-    if (deps.policy.onMissingTarget === "allow") return null;
     log(deps, pathname, `tool "${tool}" named no workflow`, tool);
     return toolErrorResult(
       message.id,
@@ -166,25 +172,33 @@ async function refuse(
     );
   }
 
-  let allowed: boolean;
+  let sets: Awaited<ReturnType<typeof deps.index.sets>>;
   try {
-    allowed = await deps.index.isAllowed(target);
+    sets = await deps.index.sets();
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
     log(deps, pathname, `workflow index unavailable: ${reason}`, tool);
-    if ((deps.onIndexError ?? "deny") === "allow") return null;
+    // Fail closed. A gate that opens during an upstream outage is not a gate,
+    // and an operator who wants the calls through has `--mcp-enforce warn`.
     return toolErrorResult(
       message.id,
       "This proxy could not verify whether that workflow is available over MCP. Try again shortly.",
     );
   }
 
-  if (allowed) return null;
+  // Every workflow id anywhere in the arguments, not just the one the table
+  // pointed at — so a parameter this release named wrong, or a tool it has
+  // never heard of, cannot carry a forbidden id past the check.
+  const mentioned = scanForWorkflowIds(args, sets.known);
+  if (target !== undefined) mentioned.add(target);
 
-  log(deps, pathname, `workflow ${target} is out of MCP scope`, tool);
+  const forbidden = [...mentioned].filter((id) => !sets.allowed.has(id));
+  if (forbidden.length === 0) return null;
+
+  log(deps, pathname, `workflow ${forbidden.join(", ")} is out of MCP scope`, tool);
   return toolErrorResult(
     message.id,
-    `Workflow ${target} is not available over MCP. Only workflows this instance's MCP policy covers can be reached; ask the workflow's owner to bring it under that policy.`,
+    `Workflow ${forbidden.join(", ")} is not available over MCP. Only workflows this instance's MCP policy covers can be reached; ask the workflow's owner to bring it under that policy.`,
   );
 }
 

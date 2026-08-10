@@ -1083,37 +1083,32 @@ n8n-cli proxy \
   --upstream https://n8n.example.com \
   --mcp-enforce error \
   --mcp-allow-tools 'search_workflows,get_workflow_details,execute_workflow' \
-  --mcp-workflow-tags mcp \
-  --mcp-require-available-in-mcp
+  --mcp-workflow-tags mcp
 ```
 
 Three things happen, and only the first is cosmetic:
 
 1. **`tools/list` is filtered** — a withheld tool never reaches the model's context.
 2. **`tools/call` on a withheld tool is refused at the proxy**, and never reaches n8n. Hiding a tool an agent can still call is theatre; the refusal comes back as a JSON-RPC `Unknown tool` error.
-3. **`tools/call` on a tool that names a workflow is refused unless that workflow matches the policy.** The proxy resolves the workflow against the n8n API (cached for `--mcp-cache-ttl-ms`) and checks tags, name and `settings.availableInMCP` as configured. The refusal comes back as an MCP tool result with `isError: true`, so the agent is told *why* rather than seeing a transport failure.
+3. **`tools/call` on a tool that names a workflow is refused unless that workflow carries the tags you named.** The proxy resolves tags against the n8n API (cached for `--mcp-cache-ttl-ms`). The refusal comes back as an MCP tool result with `isError: true`, so the agent is told *why* rather than seeing a transport failure.
 
 Everything else on the path — `initialize`, notifications, the server-to-client `GET` stream, session teardown — is forwarded untouched, and both `application/json` and `text/event-stream` (Streamable HTTP) replies are handled.
 
 | Flag | Env | Description |
 |------|-----|-------------|
 | `--mcp-enforce <level>` | `N8N_MCP_ENFORCE` | `off`, `warn`, `error`. **Required to enable the gate** — without it `/mcp-server/` is forwarded unfiltered, so upgrading changes nothing |
-| `--mcp-path-prefix <path>` | `N8N_MCP_PATH_PREFIX` | MCP endpoint path (default `/mcp-server/`) |
 | `--mcp-allow-tools <list>` | `N8N_MCP_ALLOW_TOOLS` | Comma-separated `*`-globs; only these tools are visible and callable. Empty means all |
 | `--mcp-deny-tools <list>` | `N8N_MCP_DENY_TOOLS` | Globs to withhold, applied after the allowlist |
 | `--mcp-workflow-tags <tags>` | `N8N_MCP_WORKFLOW_TAGS` | A reachable workflow must carry **all** of these tags |
-| `--mcp-workflow-name-pattern <regex>` | `N8N_MCP_WORKFLOW_NAME_PATTERN` | A reachable workflow's name must match |
-| `--mcp-require-available-in-mcp` | `N8N_MCP_REQUIRE_AVAILABLE_IN_MCP=true` | Also require `settings.availableInMCP` |
-| `--mcp-workflow-id-args <json>` | `N8N_MCP_WORKFLOW_ID_ARGS` | Tool → argument names carrying the target workflow id. Merged over the built-in map; `[]` opts a tool out |
-| `--mcp-on-missing-target <mode>` | `N8N_MCP_ON_MISSING_TARGET` | Workflow-scoped call that names no workflow: `deny` (default) or `allow` |
-| `--mcp-on-index-error <mode>` | `N8N_MCP_ON_INDEX_ERROR` | Workflow list unreadable: `deny` (default) or `allow` |
-| `--mcp-cache-ttl-ms <ms>` | `N8N_MCP_CACHE_TTL_MS` | Allowlist cache lifetime (default `60000`) |
+| `--mcp-cache-ttl-ms <ms>` | `N8N_MCP_CACHE_TTL_MS` | Workflow-tag cache lifetime (default `60000`) |
 
 **Rollout:** `--mcp-enforce warn` logs every decision and changes nothing — the tool list is *not* filtered in warn mode either, because a client that never sees a tool cannot exercise it and the log you are rolling out against would stay empty.
 
-**Fail-closed by default.** A tool call whose workflow cannot be resolved, or whose target the call did not name, is refused. Set `--mcp-on-index-error allow` / `--mcp-on-missing-target allow` when the gate is there for tidiness rather than for safety.
+**Fail-closed.** A tool call whose workflow cannot be resolved — because the upstream list is unreadable — is refused, as is a workflow-scoped call that names no workflow. There is no switch to open those: a gate that opens during an outage is not a gate, and `warn` already covers "measure, don't block".
 
-**Which tools take a workflow id.** The built-in map covers `execute_workflow`, `test_workflow`, `prepare_test_pin_data`, `get_workflow_details`, `update_workflow`, `publish_workflow`, `unpublish_workflow` and `archive_workflow`, reading `workflowId` and then `id`. If your n8n publishes a tool this release does not know about, name it with `--mcp-workflow-id-args` — an unknown tool is *not* scope-checked, so a tool that reaches workflows and is not in the map is a hole. Combining a strict `--mcp-allow-tools` with the scope check closes it: a tool that is not on the allowlist cannot be called at all.
+**Deliberately not options.** The endpoint path is fixed at `/mcp-server/`, because n8n fixes it and a flag would only be a way to point the gate at the wrong path and quietly stop gating. And the gate does not re-check `settings.availableInMCP`: n8n already refuses `execute_workflow` and `get_workflow_details` for a workflow without it, so the check would add configuration and no enforcement. Use the tag for what n8n's toggle cannot give you — a decision that shows up in review.
+
+**Which tools take a workflow id.** A built-in table covers `execute_workflow`, `test_workflow`, `prepare_test_pin_data`, `get_workflow_details`, `update_workflow`, `publish_workflow`, `unpublish_workflow` and `archive_workflow`, reading `workflowId` and then `id`. It is not configurable and it is not the only check: the gate separately scans **every** argument value, nested ones included, against the set of workflow ids that exist upstream. So a tool n8n renames, a parameter this release guessed wrong, or a tool it has never heard of cannot carry a forbidden workflow id past the gate — the table only decides how precise the refusal message is, and whether a call that names no workflow at all is refused.
 
 **What it does not do:** `search_workflows` results are forwarded verbatim, so an agent can still *see* a preview — name, description — of every workflow the connecting identity can read, even ones it may not fetch or run. Withhold `search_workflows` itself if that listing is the problem.
 

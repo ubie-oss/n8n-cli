@@ -1,26 +1,18 @@
 import { describe, expect, test } from "bun:test";
 import { parseMcpSettings } from "@/proxy/mcp/config.ts";
 import {
-  DEFAULT_WORKFLOW_ID_ARGS,
   globMatch,
   hasWorkflowScope,
   isToolAllowed,
   type McpPolicy,
+  scanForWorkflowIds,
   targetWorkflowId,
 } from "@/proxy/mcp/policy.ts";
 
 const NO_ENV = {} as NodeJS.ProcessEnv;
 
 function policy(overrides: Partial<McpPolicy> = {}): McpPolicy {
-  return {
-    allowTools: [],
-    denyTools: [],
-    workflowTags: [],
-    requireAvailableInMCP: false,
-    workflowIdArgs: DEFAULT_WORKFLOW_ID_ARGS,
-    onMissingTarget: "deny",
-    ...overrides,
-  };
+  return { allowTools: [], denyTools: [], workflowTags: [], ...overrides };
 }
 
 describe("globMatch", () => {
@@ -63,31 +55,58 @@ describe("isToolAllowed", () => {
 });
 
 describe("targetWorkflowId", () => {
-  test("undefined for a tool that targets no workflow", () => {
-    expect(targetWorkflowId(policy(), "search_workflows", { workflowId: "x" })).toBeUndefined();
+  test("undefined for a tool not known to target a workflow", () => {
+    expect(targetWorkflowId("search_workflows", { workflowId: "x" })).toBeUndefined();
   });
 
   test("null when the tool targets one but the call named none", () => {
-    expect(targetWorkflowId(policy(), "execute_workflow", {})).toBeNull();
-    expect(targetWorkflowId(policy(), "execute_workflow", { workflowId: "" })).toBeNull();
+    expect(targetWorkflowId("execute_workflow", {})).toBeNull();
+    expect(targetWorkflowId("execute_workflow", { workflowId: "" })).toBeNull();
   });
 
   test("falls back to `id`", () => {
-    expect(targetWorkflowId(policy(), "execute_workflow", { id: "wf1" })).toBe("wf1");
+    expect(targetWorkflowId("execute_workflow", { id: "wf1" })).toBe("wf1");
   });
 
   test("a numeric id is still an id", () => {
-    expect(targetWorkflowId(policy(), "execute_workflow", { workflowId: 7 })).toBe("7");
+    expect(targetWorkflowId("execute_workflow", { workflowId: 7 })).toBe("7");
+  });
+});
+
+describe("scanForWorkflowIds", () => {
+  const known = new Set(["wf-a", "wf-b"]);
+
+  test("finds an id under a parameter name nobody predicted", () => {
+    // The whole point: the built-in tool→argument table was read off n8n's
+    // docs, not off the running server. This check does not depend on it.
+    expect([...scanForWorkflowIds({ someFutureParam: "wf-a" }, known)]).toEqual(["wf-a"]);
+  });
+
+  test("walks nested objects and arrays", () => {
+    const args = { filter: { ids: ["wf-b", "nope"] }, other: { deep: { x: "wf-a" } } };
+    expect([...scanForWorkflowIds(args, known)].sort()).toEqual(["wf-a", "wf-b"]);
+  });
+
+  test("a numeric value is compared as its string form", () => {
+    expect([...scanForWorkflowIds({ id: 42 }, new Set(["42"]))]).toEqual(["42"]);
+  });
+
+  test("ignores values that are not workflow ids", () => {
+    expect([...scanForWorkflowIds({ q: "wf", note: "wf-a-ish" }, known)]).toEqual([]);
+  });
+
+  test("stops descending before a pathological payload can spin the gate", () => {
+    let deep: unknown = "wf-a";
+    for (let i = 0; i < 40; i++) deep = { deep };
+    expect([...scanForWorkflowIds(deep, known)]).toEqual([]);
   });
 });
 
 describe("hasWorkflowScope", () => {
-  test("false until something scopes workflows", () => {
+  test("false until a tag scopes workflows", () => {
     expect(hasWorkflowScope(policy())).toBe(false);
     expect(hasWorkflowScope(policy({ denyTools: ["*"] }))).toBe(false);
     expect(hasWorkflowScope(policy({ workflowTags: ["mcp"] }))).toBe(true);
-    expect(hasWorkflowScope(policy({ workflowNamePattern: "^x" }))).toBe(true);
-    expect(hasWorkflowScope(policy({ requireAvailableInMCP: true }))).toBe(true);
   });
 });
 
@@ -100,28 +119,18 @@ describe("parseMcpSettings", () => {
     const settings = parseMcpSettings(
       {
         mcpEnforce: "error",
-        mcpPathPrefix: "mcp",
         mcpAllowTools: "search_workflows, execute_workflow",
         mcpDenyTools: "*credential*",
         mcpWorkflowTags: "mcp,prod",
-        mcpWorkflowNamePattern: "^\\[mcp\\] ",
-        mcpRequireAvailableInMcp: true,
-        mcpOnMissingTarget: "allow",
-        mcpOnIndexError: "allow",
         mcpCacheTtlMs: "5000",
       },
       NO_ENV,
     );
 
     expect(settings?.enforce).toBe("error");
-    // A prefix is normalised on both ends so path matching is unambiguous.
-    expect(settings?.pathPrefix).toBe("/mcp/");
     expect(settings?.policy.allowTools).toEqual(["search_workflows", "execute_workflow"]);
     expect(settings?.policy.denyTools).toEqual(["*credential*"]);
     expect(settings?.policy.workflowTags).toEqual(["mcp", "prod"]);
-    expect(settings?.policy.requireAvailableInMCP).toBe(true);
-    expect(settings?.policy.onMissingTarget).toBe("allow");
-    expect(settings?.onIndexError).toBe("allow");
     expect(settings?.cacheTtlMs).toBe(5000);
   });
 
@@ -129,46 +138,15 @@ describe("parseMcpSettings", () => {
     const settings = parseMcpSettings({}, {
       N8N_MCP_ENFORCE: "warn",
       N8N_MCP_WORKFLOW_TAGS: "mcp",
-      N8N_MCP_REQUIRE_AVAILABLE_IN_MCP: "true",
     } as NodeJS.ProcessEnv);
 
     expect(settings?.enforce).toBe("warn");
     expect(settings?.policy.workflowTags).toEqual(["mcp"]);
-    expect(settings?.policy.requireAvailableInMCP).toBe(true);
-    expect(settings?.pathPrefix).toBe("/mcp-server/");
-  });
-
-  test("the built-in tool→argument map is the default", () => {
-    const settings = parseMcpSettings({ mcpEnforce: "error" }, NO_ENV);
-    expect(settings?.policy.workflowIdArgs.execute_workflow).toEqual(["workflowId", "id"]);
-  });
-
-  test("a custom tool→argument map is merged over the built-in one", () => {
-    const settings = parseMcpSettings(
-      { mcpEnforce: "error", mcpWorkflowIdArgs: '{"run_workflow":["wfId"],"archive_workflow":[]}' },
-      NO_ENV,
-    );
-    expect(settings?.policy.workflowIdArgs.run_workflow).toEqual(["wfId"]);
-    // Still known, because the map is additive.
-    expect(settings?.policy.workflowIdArgs.execute_workflow).toEqual(["workflowId", "id"]);
-    // An empty list opts a tool out of the scope check entirely.
-    expect(settings?.policy.workflowIdArgs.archive_workflow).toBeUndefined();
+    expect(settings?.cacheTtlMs).toBe(60_000);
   });
 
   test("a bad value is rejected at startup, naming the flag", () => {
     expect(() => parseMcpSettings({ mcpEnforce: "yes" }, NO_ENV)).toThrow(/--mcp-enforce/);
-    expect(() =>
-      parseMcpSettings({ mcpEnforce: "error", mcpWorkflowNamePattern: "([" }, NO_ENV),
-    ).toThrow(/--mcp-workflow-name-pattern/);
-    expect(() =>
-      parseMcpSettings({ mcpEnforce: "error", mcpOnIndexError: "maybe" }, NO_ENV),
-    ).toThrow(/--mcp-on-index-error/);
-    expect(() =>
-      parseMcpSettings({ mcpEnforce: "error", mcpWorkflowIdArgs: "[]" }, NO_ENV),
-    ).toThrow(/--mcp-workflow-id-args/);
-    expect(() =>
-      parseMcpSettings({ mcpEnforce: "error", mcpWorkflowIdArgs: '{"a":"b"}' }, NO_ENV),
-    ).toThrow(/array of strings/);
     expect(() => parseMcpSettings({ mcpEnforce: "error", mcpCacheTtlMs: "soon" }, NO_ENV)).toThrow(
       /--mcp-cache-ttl-ms/,
     );

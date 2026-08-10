@@ -164,7 +164,6 @@ export function startProxy(config: ProxyConfig): ProxyHandle {
         logger,
         timeoutMs: config.upstreamTimeoutMs,
         clientMiddlewares,
-        onIndexError: mcpSettings.onIndexError,
       }
     : null;
 
@@ -218,7 +217,7 @@ async function handle(req: Request, deps: HandlerDeps): Promise<Response> {
   // MCP policy, when one is configured. Checked before the workflow-mutation
   // table because the two surfaces are disjoint: n8n's MCP endpoint speaks
   // JSON-RPC on its own path and never looks like a public-API write.
-  if (deps.mcp && isMcpPath(pathname, deps.config.mcp?.pathPrefix ?? "/mcp-server/")) {
+  if (deps.mcp && isMcpPath(pathname)) {
     try {
       return await handleMcpRequest(req, deps.mcp);
     } catch (err) {
