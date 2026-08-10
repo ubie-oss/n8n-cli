@@ -364,24 +364,43 @@ describe("MCP gate: startup", () => {
     return readyz();
   }
 
-  test("the workflow index is fetched before the first call, not during it", async () => {
+  function listCalls(): number {
+    return upstream.captured.filter((c) => c.pathname === "/api/v1/workflows").length;
+  }
+
+  test("the workflow index is fetched at startup, not inside the first call", async () => {
     // On Cloud Run with min-scale 0 this is the difference between a cold
-    // start costing the container's startup budget and costing the caller's
-    // request timeout.
+    // start costing the container's own startup and costing the caller's
+    // request timeout — which the gate would answer by failing closed.
     start(policy({ workflowTags: ["mcp"] }));
     await waitForReady();
 
-    expect(upstream.captured.some((c) => c.pathname === "/api/v1/workflows")).toBe(true);
+    expect(listCalls()).toBe(1);
 
-    const before = upstream.captured.filter((c) => c.pathname === "/api/v1/workflows").length;
     await call("tools/call", { name: "execute_workflow", arguments: { workflowId: "wf-open" } });
-    const after = upstream.captured.filter((c) => c.pathname === "/api/v1/workflows").length;
-    expect(after).toBe(before);
+    expect(listCalls()).toBe(1);
   });
 
-  test("an n8n that is down at boot does not keep the proxy from becoming ready", async () => {
-    // Refusing readiness forever would turn a transient upstream blip into a
-    // proxy that never serves — including the paths the gate has no say over.
+  test("a call racing the prefetch joins it instead of starting a second one", async () => {
+    // Without single-flight the prefetch and the first request would each walk
+    // the whole workflow list, doubling the cost exactly when it is highest.
+    start(policy({ workflowTags: ["mcp"] }));
+
+    const replies = await Promise.all([
+      call("tools/call", { name: "execute_workflow", arguments: { workflowId: "wf-open" } }),
+      call("tools/call", { name: "execute_workflow", arguments: { workflowId: "wf-open" } }),
+    ]);
+
+    for (const reply of replies) {
+      expect((reply.result as { isError?: boolean }).isError).toBeUndefined();
+    }
+    expect(listCalls()).toBe(1);
+  });
+
+  test("readiness does not wait on the prefetch", async () => {
+    // A deployment whose startup probe reads /readyz must not be held back by
+    // a slow (or down) n8n: that turns a blip into a revision that never
+    // starts, which is worse than the cold-start latency being avoided.
     await upstream.server.stop(true);
     upstream = startMockUpstream({ listFails: true });
     start(policy({ workflowTags: ["mcp"] }));

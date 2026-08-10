@@ -128,6 +128,11 @@ export function startProxy(config: ProxyConfig): ProxyHandle {
       }
     : null;
 
+  // Start resolving which workflows the policy covers now rather than inside
+  // the first tool call. Not awaited, and not part of the readiness pass
+  // below: a slow n8n must not hold the container back — see `prefetch()`.
+  mcp?.index.prefetch();
+
   // Run prepare() up front so identity-resolution / config-load failures
   // surface at startup rather than on the first request. We also track the
   // result so `/readyz` can report 503 until every middleware finishes
@@ -140,10 +145,6 @@ export function startProxy(config: ProxyConfig): ProxyHandle {
   const allForPrepare: Array<{ name: string; prepare?: () => unknown }> = [
     ...middlewares,
     ...clientMiddlewares,
-    // Warming the MCP workflow index here spends a container's startup budget
-    // instead of the first caller's request budget. `warm()` never throws, so
-    // an n8n that is down at boot delays nothing and fails no probe.
-    ...(mcp ? [{ name: "mcp-gate", prepare: () => mcp.index.warm() }] : []),
   ];
   Promise.all(
     allForPrepare.map(async (mw) => {

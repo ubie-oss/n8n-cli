@@ -51,6 +51,14 @@ export interface WorkflowIndexDeps {
 
 export class AllowedWorkflowIndex {
   private cache: CacheEntry | null = null;
+  /**
+   * The fetch currently in flight, if any.
+   *
+   * Without it the startup prefetch and the first request that arrives while it
+   * is still running would each walk the whole workflow list — doubling the
+   * cost exactly when it is highest. Callers share one fetch instead.
+   */
+  private inFlight: Promise<WorkflowSets> | null = null;
 
   constructor(
     private readonly policy: McpPolicy,
@@ -64,25 +72,26 @@ export class AllowedWorkflowIndex {
   }
 
   /**
-   * Fills the cache before the first request needs it.
+   * Starts filling the cache, without waiting for it.
    *
    * The listing walks every page of `/api/v1/workflows` with full node
-   * payloads, which on an instance with a few thousand workflows is seconds,
-   * not milliseconds. Paying that inside the first `tools/call` puts it against
-   * the caller's request budget — on Cloud Run with `min-scale: 0`, that is a
-   * per-cold-start risk of timing out a call the policy meant to allow. A
-   * container's startup budget is the right place for it.
+   * payloads, which on an instance with thousands of workflows is seconds, not
+   * milliseconds. Paying that inside the first `tools/call` puts it against the
+   * caller's request budget — on Cloud Run with `min-scale: 0`, a per-cold-
+   * start risk of timing out a call the policy meant to allow, and the gate
+   * fails closed, so the caller sees a refusal rather than a slow success.
    *
-   * Never throws: a proxy that refuses to become ready because n8n happened to
-   * be down at boot is worse than one that warms up on its first request.
+   * Deliberately *not* awaited by the proxy's readiness pass. A deployment
+   * whose startup probe reads `/readyz` would otherwise hold the container
+   * back for as long as this takes, turning a slow n8n into a revision that
+   * never starts — a worse failure than the one being avoided. Requests that
+   * arrive meanwhile join the same fetch rather than starting their own.
    */
-  async warm(): Promise<void> {
-    try {
-      await this.sets();
-    } catch (err) {
+  prefetch(): void {
+    void this.sets().catch((err) => {
       const reason = err instanceof Error ? err.message : String(err);
       console.error(`n8n-cli proxy: could not prefetch the MCP workflow index: ${reason}`);
-    }
+    });
   }
 
   /**
@@ -99,13 +108,22 @@ export class AllowedWorkflowIndex {
 
     const now = performance.now();
     if (this.cache && this.cache.expiresAt > now) return this.cache.sets;
+    if (this.inFlight) return this.inFlight;
 
     // A failed fetch is never cached as an answer — an empty allowlist would be
     // indistinguishable from "nothing is reachable", and the gate would keep
-    // refusing every call for a full TTL after the upstream recovered.
-    const sets = await this.fetchSets();
-    this.cache = { sets, expiresAt: now + this.ttlMs };
-    return sets;
+    // refusing every call for a full TTL after the upstream recovered. The
+    // in-flight promise is cleared either way, so a failure is retried by the
+    // next caller rather than remembered.
+    this.inFlight = this.fetchSets()
+      .then((sets) => {
+        this.cache = { sets, expiresAt: performance.now() + this.ttlMs };
+        return sets;
+      })
+      .finally(() => {
+        this.inFlight = null;
+      });
+    return this.inFlight;
   }
 
   private async fetchSets(): Promise<WorkflowSets> {
