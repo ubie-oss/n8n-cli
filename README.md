@@ -1101,7 +1101,7 @@ Four things happen, and only the first is cosmetic:
 1. **`tools/list` is filtered** — a withheld verb never reaches the model's context.
 2. **`tools/call` on a withheld verb is refused at the proxy**, and never reaches n8n. Hiding a tool an agent can still call is theatre; the refusal comes back as a JSON-RPC `Unknown tool` error.
 3. **`tools/call` naming a workflow outside the scope is refused**, with an MCP tool result carrying `isError: true` and the reason — which tag is missing, or which trigger n8n would have entered it through. The agent is told *why* rather than seeing a transport failure.
-4. **`search_workflows` is narrowed rather than refused.** Its `tags` argument is an AND, the same semantics as the policy, so the policy's tags are merged into whatever the agent asked for. Without this an agent still sees the name and description of every workflow the token's owner can read.
+4. **`search_workflows` is narrowed rather than refused**, so that what an agent can see and what it can run are the same set. Its results are filtered on the way back against the same policy that governs `tools/call` — by tag, by entry path, or both. Where the policy has tags, they are also merged into the request's own `tags` argument (an AND, the same semantics), which saves n8n from serving rows that would be dropped anyway.
 
 Everything else on the path — `initialize`, notifications, the server-to-client `GET` stream, session teardown — is forwarded untouched, and both `application/json` and `text/event-stream` (Streamable HTTP) replies are handled.
 
@@ -1140,7 +1140,7 @@ The matching mirrors n8n's `findMcpSupportedTrigger`. That is a coupling: if n8n
 
 > **Build `--mcp-allow-tools` from a real `tools/list` against your own instance.** n8n renames these tools between versions — a 2.32.5 instance serves `list_tags`, `get_execution`, `search_executions` and `prepare_test_pin_data`, where later code renames them to `list_workflow_tags`, `get_workflow_execution`, `search_workflow_executions` and `prepare_workflow_pin_data`. Neither the documentation nor a checkout of n8n's default branch tells you which set *your* server publishes. A name that does not exist costs nothing; a real tool missing from the allowlist is silently withheld, so listing both spellings is the safe move.
 
-**What it does not do:** with `--mcp-workflow-tags` set, `search_workflows` is narrowed to those tags — but an **entry-path-only** policy has no equivalent argument upstream, so the listing stays wide: an agent still sees the name and description of every workflow the connecting identity can read. Pair the path rule with a tag, or withhold `search_workflows` itself, if that listing is the problem.
+**What it does not do:** only `search_workflows` is filtered on the way back. The execution-history tools (`search_executions`, `get_execution`) report on workflows the policy does not expose, so withhold them unless that history is meant to be readable. And `count` in a filtered page is the upstream count minus what was dropped, which is exact for a single page and an estimate when n8n reports a total across pages.
 
 > As with every other check here, this is an enforcement boundary only if direct access to n8n is blocked at the network level. A client that can reach `/mcp-server/` on the instance itself bypasses the proxy.
 
