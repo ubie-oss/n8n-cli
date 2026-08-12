@@ -60,10 +60,11 @@ describe("targetWorkflowId", () => {
     expect(targetWorkflowId("search_workflows", { workflowId: "x" })).toBeUndefined();
   });
 
-  test("the table uses the names n8n registers, not the ones its docs use", () => {
-    // n8n's docs say `prepare_test_pin_data`; the server registers
-    // `prepare_workflow_pin_data`. Reading the table off the docs left a dead
-    // entry and an unscoped tool.
+  test("both spellings n8n has used are covered", () => {
+    // n8n renames these between versions: a live 2.32.5 instance serves
+    // `prepare_test_pin_data`, the default branch `prepare_workflow_pin_data`.
+    // Picking one left the other unscoped by name on half the fleet.
+    expect(targetWorkflowId("prepare_test_pin_data", { workflowId: "wf1" })).toBe("wf1");
     expect(targetWorkflowId("prepare_workflow_pin_data", { workflowId: "wf1" })).toBe("wf1");
     expect(targetWorkflowId("restore_workflow_version", { workflowId: "wf1" })).toBe("wf1");
   });

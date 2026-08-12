@@ -34,10 +34,13 @@ export type WorkflowIdArgs = Record<string, string[]>;
 /**
  * The n8n MCP tools that target a single workflow, and where the id lives.
  *
- * Names and the `workflowId` parameter are taken from n8n's own tool
- * definitions (`packages/cli/src/modules/mcp/tools/`), not from its docs — the
- * docs name several of these differently. `id` stays as a fallback for a
- * version that renames the parameter.
+ * **n8n renames these between versions**, so both spellings seen so far are
+ * listed. A live 2.32.5 instance serves `prepare_test_pin_data`; n8n's default
+ * branch has renamed it to `prepare_workflow_pin_data`. An entry for a tool the
+ * server does not publish costs nothing; a missing one loses the precise
+ * refusal message. So the table is generous on purpose.
+ *
+ * The parameter is `workflowId` in every tool checked; `id` stays as a fallback.
  *
  * A fixed table rather than an option, because it is not the only line of
  * defence: `scanForWorkflowIds` separately checks *every* argument value
@@ -49,6 +52,7 @@ export type WorkflowIdArgs = Record<string, string[]>;
 export const WORKFLOW_ID_ARGS: WorkflowIdArgs = {
   execute_workflow: ["workflowId", "id"],
   test_workflow: ["workflowId", "id"],
+  prepare_test_pin_data: ["workflowId", "id"],
   prepare_workflow_pin_data: ["workflowId", "id"],
   get_workflow_details: ["workflowId", "id"],
   get_workflow_history: ["workflowId", "id"],
