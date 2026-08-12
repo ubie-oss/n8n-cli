@@ -1,3 +1,5 @@
+import { globMatch } from "@/common/mcp.ts";
+
 /**
  * What an MCP client is allowed to see and do through this proxy.
  *
@@ -18,6 +20,13 @@
  * `get_workflow_details` for a workflow without it, so re-checking here would
  * add a flag and no enforcement.
  */
+
+export {
+  type EntryTrigger,
+  findEntryTrigger,
+  globMatch,
+  MCP_ENTRY_TRIGGER_TYPES,
+} from "@/common/mcp.ts";
 
 /** Tools that act on one workflow, and the argument naming it. */
 export type WorkflowIdArgs = Record<string, string[]>;
@@ -53,19 +62,34 @@ export const WORKFLOW_ID_ARGS: WorkflowIdArgs = {
 
 export interface McpPolicy {
   /**
-   * Glob patterns (`*` matches any run of characters) for the tools a client may
-   * see and call. When empty every tool is allowed and only `denyTools` applies.
+   * Glob patterns (`*` matches any run of characters) for the *verbs* a client
+   * may see and call — `execute_workflow`, `update_workflow` and so on. Not the
+   * workflows: under instance-level MCP a workflow is an argument, never a tool.
+   * When empty every tool is allowed and only `denyTools` applies.
    */
   allowTools: string[];
   /** Glob patterns for tools to withhold. Applied after `allowTools`. */
   denyTools: string[];
   /** Tags a workflow must carry (all of them) to be reachable over MCP. */
   workflowTags: string[];
+  /**
+   * Glob the *entry trigger's* path must match for a workflow to be reachable.
+   *
+   * The entry trigger is the one n8n would actually fire — see
+   * {@link findEntryTrigger}. Matching on its path lets a repository declare
+   * "this workflow has an interface meant for agents" in the workflow itself,
+   * without the proxy caring which trigger type was used to build it.
+   *
+   * A trigger with no path (a Schedule trigger, or a webhook/form node that
+   * never had one set — n8n falls back to the node's `webhookId`) matches
+   * nothing, so declaring the path is what opts a workflow in.
+   */
+  entryPathPattern?: string;
 }
 
 /** True when the policy says nothing about which workflows are reachable. */
 export function hasWorkflowScope(policy: McpPolicy): boolean {
-  return policy.workflowTags.length > 0;
+  return policy.workflowTags.length > 0 || policy.entryPathPattern !== undefined;
 }
 
 /** Whether a tool name survives the allow/deny lists. */
@@ -134,26 +158,4 @@ export function scanForWorkflowIds(args: unknown, known: ReadonlySet<string>): S
 
   walk(args, 0);
   return found;
-}
-
-/**
- * Matches a `*`-glob against a name.
- *
- * Deliberately not a regex from the operator: these patterns are matched
- * against tool names that arrive from upstream, and a config typo producing a
- * catastrophically backtracking pattern would be a denial of service on the
- * gate itself.
- */
-export function globMatch(pattern: string, value: string): boolean {
-  return globRegex(pattern).test(value);
-}
-
-/** Compiles a `*`-glob to an anchored regex with every other character literal. */
-function globRegex(pattern: string): RegExp {
-  const escaped = pattern.split("*").map(escapeRegex).join(".*");
-  return new RegExp(`^${escaped}$`);
-}
-
-function escapeRegex(literal: string): string {
-  return literal.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }

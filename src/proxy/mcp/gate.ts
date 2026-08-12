@@ -37,7 +37,7 @@ import {
   scanForWorkflowIds,
   targetWorkflowId,
 } from "./policy.ts";
-import type { AllowedWorkflowIndex } from "./workflow-index.ts";
+import { type AllowedWorkflowIndex, explainRefusal } from "./workflow-index.ts";
 
 export interface McpGateDeps {
   upstream: string;
@@ -99,6 +99,17 @@ export async function handleMcpRequest(req: Request, deps: McpGateDeps): Promise
     if (refusal) refusals.push(refusal);
   }
 
+  // Narrow a discovery call rather than refusing it. `search_workflows` takes a
+  // `tags` filter with AND semantics — the same semantics as the policy — so
+  // adding the policy's tags to whatever the agent asked for can only shrink
+  // the result. Without this the agent still sees the name and description of
+  // every workflow the token's owner can read, which is the one part of the
+  // listing surface n8n gives no way to close.
+  const narrowedJSON =
+    refusals.length === 0 && deps.enforce === "error"
+      ? narrowSearchArguments(parsed, deps.policy)
+      : null;
+
   // Under `warn` the decision is logged and the call still goes through, which
   // is how an operator finds out what a policy would break before it does.
   if (refusals.length > 0 && deps.enforce === "error") {
@@ -118,7 +129,7 @@ export async function handleMcpRequest(req: Request, deps: McpGateDeps): Promise
     return jsonRpcResponse(refusals, parsed.isBatch);
   }
 
-  const response = await forward(req, rawJSON, pathname, deps);
+  const response = await forward(req, narrowedJSON ?? rawJSON, pathname, deps);
 
   // Only a tools/list reply needs rewriting, and only when the policy actually
   // withholds something. Everything else streams back untouched.
@@ -130,6 +141,39 @@ export async function handleMcpRequest(req: Request, deps: McpGateDeps): Promise
   if (!listsTools || !filtersTools(deps.policy) || deps.enforce !== "error") return response;
 
   return filterToolsListResponse(response, deps, pathname);
+}
+
+/**
+ * Adds the policy's tags to a `search_workflows` call, or returns null when
+ * there is nothing to add.
+ *
+ * Only tags: the entry-path rule has no equivalent argument upstream, so a
+ * path-only policy still leaves the listing wide. Say so in the README rather
+ * than pretending otherwise.
+ */
+function narrowSearchArguments(
+  parsed: { messages: JsonRpcMessage[]; isBatch: boolean },
+  policy: McpPolicy,
+): string | null {
+  if (policy.workflowTags.length === 0) return null;
+
+  let changed = false;
+  const messages = parsed.messages.map((message) => {
+    if (toolCallName(message) !== "search_workflows") return message;
+    const args = toolCallArguments(message);
+    const asked = Array.isArray(args.tags)
+      ? args.tags.filter((t): t is string => typeof t === "string")
+      : [];
+    const merged = [...new Set([...asked, ...policy.workflowTags])];
+    if (merged.length === asked.length) return message;
+    changed = true;
+    return {
+      ...message,
+      params: { ...message.params, arguments: { ...args, tags: merged } },
+    };
+  });
+
+  return changed ? encodeReply(messages, parsed.isBatch) : null;
 }
 
 /** Whether the policy can withhold any tool at all. */
@@ -189,16 +233,24 @@ async function refuse(
   // Every workflow id anywhere in the arguments, not just the one the table
   // pointed at — so a parameter this release named wrong, or a tool it has
   // never heard of, cannot carry a forbidden id past the check.
-  const mentioned = scanForWorkflowIds(args, sets.known);
+  const mentioned = scanForWorkflowIds(args, new Set(sets.facts.keys()));
   if (target !== undefined) mentioned.add(target);
 
   const forbidden = [...mentioned].filter((id) => !sets.allowed.has(id));
   if (forbidden.length === 0) return null;
 
-  log(deps, pathname, `workflow ${forbidden.join(", ")} is out of MCP scope`, tool);
+  // Name the reason. An agent told only "no" retries; one told the entry
+  // trigger declares no path can report something its user can act on.
+  const detail = forbidden
+    .map((id) => `${id} (${explainRefusal(deps.policy, sets.facts.get(id))})`)
+    .join("; ");
+
+  log(deps, pathname, `workflow out of MCP scope: ${detail}`, tool);
   return toolErrorResult(
     message.id,
-    `Workflow ${forbidden.join(", ")} is not available over MCP. Only workflows this instance's MCP policy covers can be reached; ask the workflow's owner to bring it under that policy.`,
+    `Not available over MCP: ${detail}. Note that every workflow id anywhere in the arguments is ` +
+      "checked, so this may name one the call merely referenced — a sub-workflow, say — rather " +
+      "than the one it targeted. Ask the owner to bring it under this instance's MCP policy.",
   );
 }
 

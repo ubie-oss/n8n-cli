@@ -131,7 +131,11 @@ export function startProxy(config: ProxyConfig): ProxyHandle {
   // Start resolving which workflows the policy covers now rather than inside
   // the first tool call. Not awaited, and not part of the readiness pass
   // below: a slow n8n must not hold the container back — see `prefetch()`.
-  mcp?.index.prefetch();
+  //
+  // Skipped at `off`, where no request will read the result: paginating every
+  // workflow at startup — and logging a credential failure for it — is a poor
+  // way to honour "this gate is turned off".
+  if (mcp && mcp.enforce !== "off") mcp.index.prefetch();
 
   // Run prepare() up front so identity-resolution / config-load failures
   // surface at startup rather than on the first request. We also track the

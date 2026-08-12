@@ -218,7 +218,16 @@ export function registerProxyCommand(program: Command): void {
     .option(
       "--mcp-workflow-tags <tags>",
       "Only workflows carrying ALL of these tags may be reached by a workflow-scoped tool call " +
-        "(AND condition). env: N8N_MCP_WORKFLOW_TAGS",
+        "(AND condition). Also narrows search_workflows, which n8n otherwise answers with every " +
+        "workflow the token's owner can read. env: N8N_MCP_WORKFLOW_TAGS",
+    )
+    .option(
+      "--mcp-entry-path-pattern <glob>",
+      "Only workflows whose entry trigger declares a path matching this glob may be reached " +
+        '(e.g. "__mcp__/*"). The entry trigger is the one n8n would actually fire: the first ' +
+        "non-disabled Schedule/Webhook/Form/Chat node in the workflow. A trigger with no path — " +
+        "a Schedule, or a webhook that never had one set — matches nothing, so declaring the " +
+        "path is what opts a workflow in. env: N8N_MCP_ENTRY_PATH_PATTERN",
     )
     .option(
       "--mcp-cache-ttl-ms <ms>",

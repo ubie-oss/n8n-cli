@@ -100,4 +100,27 @@ describe("workflow description: diffing", () => {
     expect(result.type).toBe("update");
     expect(result.baseToLocal?.changedFields).toContain("description");
   });
+
+  test("a description written in the n8n UI does not turn an unrelated edit into a conflict", () => {
+    // `remote` comes from the API, `base` from the git base ref. Every
+    // definition written before description support lacks the key, so
+    // comparing the two symmetrically made "someone typed a description in the
+    // UI" read as a remote change — and, paired with any local edit, as a
+    // conflict needing --force. Nothing is at risk: apply never sends a
+    // description the local file does not declare.
+    const detector = new ThreeWayDetector();
+    const local = { ...base, name: "renamed locally" };
+    const remote = { ...base, description: "written in the n8n UI" };
+
+    const result = detector.detect(base, local, remote);
+
+    expect(result.type).toBe("update");
+    expect(result.baseToRemote?.changedFields ?? []).not.toContain("description");
+  });
+
+  test("a genuine divergence is still a conflict", () => {
+    const detector = new ThreeWayDetector();
+    const result = detector.detect(base, { ...base, name: "local" }, { ...base, name: "remote" });
+    expect(result.type).toBe("conflict");
+  });
 });
