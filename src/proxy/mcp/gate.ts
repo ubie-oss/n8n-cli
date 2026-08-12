@@ -1,7 +1,7 @@
 /**
  * The MCP gate: an operator's policy in front of n8n's MCP endpoint.
  *
- * Three things happen here, and only the first is cosmetic:
+ * Four things happen here, and only the first is cosmetic:
  *
  *   1. `tools/list` results are filtered, so a tool the policy withholds never
  *      appears in the model's context at all.
@@ -11,6 +11,8 @@
  *      workflow matches the policy, which is the part n8n's own per-workflow
  *      toggle cannot give you: it is set in the UI, by anyone with edit rights,
  *      and never shows up in a review.
+ *   4. `search_workflows` results are filtered against that same policy, so the
+ *      set an agent can see is the set it can run.
  *
  * Everything else on the MCP path — `initialize`, `notifications/*`, the
  * server-to-client `GET` stream, session teardown — is forwarded untouched.
@@ -131,25 +133,45 @@ export async function handleMcpRequest(req: Request, deps: McpGateDeps): Promise
 
   const response = await forward(req, narrowedJSON ?? rawJSON, pathname, deps);
 
-  // Only a tools/list reply needs rewriting, and only when the policy actually
-  // withholds something. Everything else streams back untouched.
-  //
-  // Under `warn` the list is left alone as well: the point of warn is to find
-  // out what the policy would break, and a client that never sees a tool cannot
-  // exercise it, so the log an operator is rolling out against would stay empty.
-  const listsTools = parsed.messages.some((m) => m.method === "tools/list");
-  if (!listsTools || !filtersTools(deps.policy) || deps.enforce !== "error") return response;
+  // Under `warn` nothing is rewritten: the point of warn is to find out what
+  // the policy would break, and a client that never sees a tool or a workflow
+  // cannot exercise it, so the log an operator is rolling out against would
+  // stay empty.
+  if (deps.enforce !== "error") return response;
 
-  return filterToolsListResponse(response, deps, pathname);
+  const tools = filtersTools(deps.policy) && parsed.messages.some((m) => m.method === "tools/list");
+  const searchIds = hasWorkflowScope(deps.policy)
+    ? searchCallIds(parsed.messages)
+    : new Set<string | number>();
+  if (!tools && searchIds.size === 0) return response;
+
+  return filterResponse(response, deps, pathname, { tools, searchIds });
+}
+
+/**
+ * Ids of the `search_workflows` calls in a request.
+ *
+ * The reply to a `tools/call` does not name the tool, and `{data, count}` is the
+ * envelope several n8n tools share — so the replies to filter are identified by
+ * the id they answer, not by their shape.
+ */
+function searchCallIds(messages: JsonRpcMessage[]): Set<string | number> {
+  const ids = new Set<string | number>();
+  for (const message of messages) {
+    if (toolCallName(message) !== "search_workflows") continue;
+    if (typeof message.id === "string" || typeof message.id === "number") ids.add(message.id);
+  }
+  return ids;
 }
 
 /**
  * Adds the policy's tags to a `search_workflows` call, or returns null when
  * there is nothing to add.
  *
- * Only tags: the entry-path rule has no equivalent argument upstream, so a
- * path-only policy still leaves the listing wide. Say so in the README rather
- * than pretending otherwise.
+ * Only tags: the entry-path rule has no equivalent argument upstream. That is
+ * why this is an optimisation and not the enforcement — narrowing the request
+ * saves n8n from serving rows that would be dropped anyway, and
+ * `filterResponse` is what actually decides the listing.
  */
 function narrowSearchArguments(
   parsed: { messages: JsonRpcMessage[]; isBatch: boolean },
@@ -255,41 +277,81 @@ async function refuse(
 }
 
 /**
- * Buffers a tools/list reply and drops the tools the policy withholds.
+ * Buffers a reply and drops what the policy withholds — tools from a
+ * `tools/list`, workflows from a `search_workflows`.
+ *
+ * The listing half is the one n8n gives no way to close. `search_workflows`
+ * returns the name and description of every workflow the token's owner can
+ * read, and its only relevant filter is `tags` — so a policy written as a path
+ * convention has nothing to push upstream, and the result has to be narrowed on
+ * the way back. Doing it here is what makes "visible" and "executable" the same
+ * set, whichever predicate the policy is written in.
  *
  * Buffering is safe here and only here: under Streamable HTTP a POST is
- * answered by a stream that closes once the reply is delivered, and a tool list
- * is a few kilobytes. The long-lived server-to-client stream is the `GET`, which
- * never reaches this function. Note that `--upstream-timeout` bounds the fetch,
- * not this read, so an upstream that opens a response and then stalls holds the
- * request open — the same exposure the rest of the proxy has when it reads a
- * body.
+ * answered by a stream that closes once the reply is delivered, and both a tool
+ * list and a page of search results are a few kilobytes. The long-lived
+ * server-to-client stream is the `GET`, which never reaches this function. Note
+ * that `--upstream-timeout` bounds the fetch, not this read, so an upstream that
+ * opens a response and then stalls holds the request open — the same exposure
+ * the rest of the proxy has when it reads a body.
  */
-async function filterToolsListResponse(
+async function filterResponse(
   response: Response,
   deps: McpGateDeps,
   pathname: string,
+  plan: { tools: boolean; searchIds: Set<string | number> },
 ): Promise<Response> {
+  // By now `refuse()` has already resolved the index for any workflow-scoped
+  // call in this request, so this is a cache read. It can still fail on a
+  // request whose only tool call is the search itself.
+  let allowed: ReadonlySet<string> | null = null;
+  if (plan.searchIds.size > 0) {
+    try {
+      allowed = (await deps.index.sets()).allowed;
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      log(deps, pathname, `workflow index unavailable, withholding search results: ${reason}`);
+    }
+  }
+
   const contentType = response.headers.get("content-type");
   const body = await response.text();
 
-  let removed = 0;
+  let removedTools = 0;
+  let removedWorkflows = 0;
   const rewritten = rewriteBody(body, contentType, (message) => {
-    const tools = message.result?.tools;
-    if (!Array.isArray(tools)) return message;
-    const kept = tools.filter((tool) => {
-      const name = (tool as { name?: unknown })?.name;
-      if (typeof name !== "string") return true;
-      const allowed = isToolAllowed(deps.policy, name);
-      if (!allowed) removed++;
-      return allowed;
+    if (plan.tools && Array.isArray(message.result?.tools)) {
+      const tools = message.result.tools;
+      const kept = tools.filter((tool) => {
+        const name = (tool as { name?: unknown })?.name;
+        if (typeof name !== "string") return true;
+        const ok = isToolAllowed(deps.policy, name);
+        if (!ok) removedTools++;
+        return ok;
+      });
+      if (kept.length === tools.length) return message;
+      return { ...message, result: { ...message.result, tools: kept } };
+    }
+
+    if (message.id === undefined || message.id === null || !plan.searchIds.has(message.id)) {
+      return message;
+    }
+    if (!allowed) {
+      // Fail closed, like a refused call: an unfiltered listing is the leak
+      // this function exists to prevent.
+      return toolErrorResult(
+        message.id,
+        "This proxy could not verify which workflows are available over MCP. Try again shortly.",
+      );
+    }
+    return filterSearchResult(message, allowed, (n) => {
+      removedWorkflows += n;
     });
-    if (kept.length === tools.length) return message;
-    return { ...message, result: { ...message.result, tools: kept } };
   });
 
-  if (removed > 0) {
-    log(deps, pathname, `withheld ${removed} tool(s) from tools/list`);
+  if (removedTools > 0) log(deps, pathname, `withheld ${removedTools} tool(s) from tools/list`);
+  if (removedWorkflows > 0) {
+    log(deps, pathname, `withheld ${removedWorkflows} workflow(s) from search_workflows`);
   }
 
   const headers = new Headers(response.headers);
@@ -300,6 +362,90 @@ async function filterToolsListResponse(
     statusText: response.statusText,
     headers,
   });
+}
+
+/**
+ * Drops out-of-policy workflows from a `search_workflows` result.
+ *
+ * n8n sends the same `{data, count}` payload twice — once as `structuredContent`
+ * and once JSON-encoded in a text content block — and a client may read either.
+ * Both are rewritten, or the names filtered out of one arrive through the other.
+ */
+function filterSearchResult(
+  message: JsonRpcMessage,
+  allowed: ReadonlySet<string>,
+  count: (removed: number) => void,
+): JsonRpcMessage {
+  const result = message.result;
+  if (!result) return message;
+
+  const next: Record<string, unknown> = { ...result };
+  let changed = false;
+  let removed = 0;
+
+  const structured = filterPayload(result.structuredContent, allowed);
+  if (structured) {
+    next.structuredContent = structured.payload;
+    removed = Math.max(removed, structured.removed);
+    changed = true;
+  }
+
+  if (Array.isArray(result.content)) {
+    const content = result.content.map((block) => {
+      const text = (block as { text?: unknown })?.text;
+      if (typeof text !== "string") return block;
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(text);
+      } catch {
+        return block;
+      }
+      const filtered = filterPayload(parsed, allowed);
+      if (!filtered) return block;
+      removed = Math.max(removed, filtered.removed);
+      changed = true;
+      return { ...(block as object), text: JSON.stringify(filtered.payload) };
+    });
+    if (changed) next.content = content;
+  }
+
+  if (!changed) return message;
+  count(removed);
+  return { ...message, result: next };
+}
+
+/**
+ * Filters one `{data, count}` payload, or returns null when it is not one.
+ *
+ * An entry whose `id` is not an allowed workflow goes, and so does one carrying
+ * no usable id: the point is that nothing reaches the model that it could not
+ * then execute, and an entry the gate cannot identify is not identifiable at
+ * `tools/call` time either.
+ *
+ * `count` is decremented rather than recomputed. n8n reports the number of
+ * matches, which may exceed the page in hand; subtracting what was dropped is
+ * right when it is a page count and the closest honest answer when it is a
+ * total. Leaving it alone would have an agent paging after workflows it is
+ * never going to be shown.
+ */
+function filterPayload(
+  payload: unknown,
+  allowed: ReadonlySet<string>,
+): { payload: Record<string, unknown>; removed: number } | null {
+  if (typeof payload !== "object" || payload === null || Array.isArray(payload)) return null;
+  const record = payload as Record<string, unknown>;
+  if (!Array.isArray(record.data)) return null;
+
+  const kept = record.data.filter((item) => {
+    const id = (item as { id?: unknown })?.id;
+    return typeof id === "string" && allowed.has(id);
+  });
+  const removed = record.data.length - kept.length;
+  if (removed === 0) return null;
+
+  const next: Record<string, unknown> = { ...record, data: kept };
+  if (typeof record.count === "number") next.count = Math.max(0, record.count - removed);
+  return { payload: next, removed };
 }
 
 function jsonRpcResponse(messages: JsonRpcMessage[], isBatch: boolean): Response {

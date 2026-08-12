@@ -130,6 +130,28 @@ function mcpReply(request: { id?: unknown; method?: string; params?: { name?: st
   if (request.method === "tools/list") {
     return { jsonrpc: "2.0", id: request.id, result: { tools: TOOLS } };
   }
+  if (request.params?.name === "search_workflows") {
+    // The shape a live 2.32.5 instance returns: the same {data, count} payload
+    // twice, once structured and once JSON-encoded in a text block.
+    const payload = {
+      data: WORKFLOWS.map((w) => ({
+        id: w.id,
+        name: w.name,
+        description: `what ${w.name} does`,
+        availableInMCP: (w.settings as { availableInMCP?: boolean }).availableInMCP === true,
+        tags: w.tags,
+      })),
+      count: WORKFLOWS.length,
+    };
+    return {
+      jsonrpc: "2.0",
+      id: request.id,
+      result: {
+        content: [{ type: "text", text: JSON.stringify(payload) }],
+        structuredContent: payload,
+      },
+    };
+  }
   return {
     jsonrpc: "2.0",
     id: request.id,
@@ -475,6 +497,108 @@ describe("MCP gate: narrowing search_workflows", () => {
     start(policy({ workflowTags: ["mcp"] }), "warn");
     await call("tools/call", { name: "search_workflows", arguments: {} });
     expect(sentArgs()).toEqual({});
+  });
+});
+
+describe("MCP gate: filtering search_workflows results", () => {
+  /** The two channels n8n sends the same payload down, read separately. */
+  function listed(reply: Record<string, unknown>): {
+    structured: string[];
+    text: string[];
+    count: number;
+  } {
+    const result = reply.result as {
+      structuredContent?: { data?: Array<{ id: string }>; count?: number };
+      content?: Array<{ text?: string }>;
+    };
+    const text = JSON.parse(result.content?.[0]?.text ?? "{}") as {
+      data?: Array<{ id: string }>;
+      count?: number;
+    };
+    return {
+      structured: (result.structuredContent?.data ?? []).map((w) => w.id),
+      text: (text.data ?? []).map((w) => w.id),
+      count: result.structuredContent?.count ?? -1,
+    };
+  }
+
+  async function search(args: unknown = {}): Promise<Record<string, unknown>> {
+    return await call("tools/call", { name: "search_workflows", arguments: args });
+  }
+
+  test("an entry-path policy narrows the listing, with no tag involved", async () => {
+    // The listing is the half n8n cannot close: its only relevant filter is
+    // `tags`, so without this a path-based policy would let an agent read the
+    // name and description of every workflow before finding out it may run one.
+    start(policy({ entryPathPattern: "__mcp__/*" }));
+    expect(listed(await search()).structured).toEqual(["wf-open"]);
+  });
+
+  test("both channels are rewritten, and they agree", async () => {
+    // Filtering one and not the other would send the names out through the
+    // channel that was left alone.
+    start(policy({ entryPathPattern: "__mcp__/*" }));
+    const seen = listed(await search());
+    expect(seen.text).toEqual(seen.structured);
+  });
+
+  test("count follows the rows that were dropped", async () => {
+    // Left alone, an agent pages after workflows it will never be shown.
+    start(policy({ entryPathPattern: "__mcp__/*" }));
+    expect(listed(await search()).count).toBe(1);
+  });
+
+  test("a tag policy filters the reply as well as narrowing the request", async () => {
+    // The upstream `tags` argument is an optimisation; this is the enforcement.
+    // The mock ignores the argument, so what comes back is the unfiltered list.
+    start(policy({ workflowTags: ["mcp"] }));
+    expect(listed(await search()).structured).toEqual(["wf-open", "wf-tagged-only", "wf-cron"]);
+  });
+
+  test("filtering survives SSE framing", async () => {
+    await upstream.server.stop(true);
+    upstream = startMockUpstream({ sse: true });
+    start(policy({ entryPathPattern: "__mcp__/*" }));
+    expect(listed(await search()).structured).toEqual(["wf-open"]);
+  });
+
+  test("a page where everything is out of scope comes back empty, not refilled", async () => {
+    start(policy({ entryPathPattern: "__nothing__/*" }));
+    const seen = listed(await search());
+    expect(seen.structured).toEqual([]);
+    expect(seen.count).toBe(0);
+  });
+
+  test("a tools-only policy leaves the listing alone", async () => {
+    // Nothing has been said about which workflows are reachable, so filtering
+    // the reply would be inventing a policy the operator did not write.
+    start(policy({ allowTools: ["search_workflows"] }));
+    expect(listed(await search()).structured).toHaveLength(WORKFLOWS.length);
+  });
+
+  test("warn mode returns the listing untouched", async () => {
+    start(policy({ entryPathPattern: "__mcp__/*" }), "warn");
+    expect(listed(await search()).structured).toHaveLength(WORKFLOWS.length);
+  });
+
+  test("another tool's reply is not filtered by resemblance", async () => {
+    // `{data, count}` is a shared envelope. The reply to filter is identified
+    // by the id it answers, not by looking like a search result.
+    start(policy({ entryPathPattern: "__mcp__/*" }));
+    const reply = await call("tools/call", { name: "search_projects", arguments: {} });
+    const result = reply.result as { content: Array<{ text: string }> };
+    expect(result.content[0]?.text).toBe("ran search_projects");
+  });
+
+  test("an unreadable workflow list withholds the listing rather than passing it", async () => {
+    await upstream.server.stop(true);
+    upstream = startMockUpstream({ listFails: true });
+    start(policy({ entryPathPattern: "__mcp__/*" }));
+
+    const reply = await search();
+    const result = reply.result as { isError?: boolean; content: Array<{ text: string }> };
+    expect(result.isError).toBe(true);
+    expect(result.content[0]?.text).toContain("could not verify");
   });
 });
 
