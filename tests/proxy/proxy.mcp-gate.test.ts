@@ -26,12 +26,32 @@ const TOOLS = [
   { name: "list_credentials", description: "List credentials" },
 ];
 
+/** A trigger node as n8n stores it. */
+const trigger = (name: string, type: string, path?: string, disabled = false) => ({
+  id: `n-${name}`,
+  name,
+  type,
+  typeVersion: 1,
+  position: [0, 0] as [number, number],
+  parameters: path === undefined ? {} : { path },
+  ...(disabled ? { disabled: true } : {}),
+});
+
+const WEBHOOK = "n8n-nodes-base.webhook";
+const FORM = "n8n-nodes-base.formTrigger";
+const SCHEDULE = "n8n-nodes-base.scheduleTrigger";
+
 const WORKFLOWS = [
   {
     id: "wf-open",
     name: "[mcp] hospital lookup",
     active: true,
-    nodes: [],
+    // The shape the convention asks for: the agent-facing entry first, the
+    // repository's test entry after it.
+    nodes: [
+      trigger("[MCP] entry", FORM, "__mcp__/hospital-lookup"),
+      trigger("[CLI Test] entry", WEBHOOK, "__cli-test__/uuid-1"),
+    ],
     connections: {},
     settings: { availableInMCP: true },
     tags: [{ id: "1", name: "mcp" }],
@@ -40,7 +60,7 @@ const WORKFLOWS = [
     id: "wf-internal",
     name: "payroll export",
     active: true,
-    nodes: [],
+    nodes: [trigger("[CLI Test] entry", WEBHOOK, "__cli-test__/uuid-2")],
     connections: {},
     settings: {},
     tags: [{ id: "2", name: "finance" }],
@@ -49,9 +69,20 @@ const WORKFLOWS = [
     id: "wf-tagged-only",
     name: "[mcp] draft tool",
     active: true,
-    nodes: [],
+    // Tagged, but its only entry is the test hook — no agent-facing path.
+    nodes: [trigger("[CLI Test] entry", WEBHOOK, "__cli-test__/uuid-3")],
     connections: {},
     settings: {},
+    tags: [{ id: "1", name: "mcp" }],
+  },
+  {
+    id: "wf-cron",
+    name: "[mcp] nightly digest",
+    active: true,
+    // Tagged and MCP-enabled, but a Schedule trigger carries no path at all.
+    nodes: [trigger("Every night", SCHEDULE)],
+    connections: {},
+    settings: { availableInMCP: true },
     tags: [{ id: "1", name: "mcp" }],
   },
 ];
@@ -349,6 +380,104 @@ describe("MCP gate: failure and enforcement modes", () => {
   });
 });
 
+describe("MCP gate: entry-trigger path scope", () => {
+  const ENTRY = { entryPathPattern: "__mcp__/*" };
+
+  async function execute(workflowId: string): Promise<Record<string, unknown>> {
+    return await call("tools/call", { name: "execute_workflow", arguments: { workflowId } });
+  }
+
+  function refusal(reply: Record<string, unknown>): string | null {
+    const result = reply.result as { isError?: boolean; content?: Array<{ text: string }> };
+    return result?.isError ? (result.content?.[0]?.text ?? "") : null;
+  }
+
+  test("a workflow whose entry declares the agent-facing path is reachable", async () => {
+    start(policy(ENTRY));
+    expect(refusal(await execute("wf-open"))).toBeNull();
+  });
+
+  test("a workflow whose only entry is the repository's test hook is not", async () => {
+    // The point of the path rule: `[CLI Test]` is a real, working webhook, so
+    // trigger *type* cannot tell it apart from an agent-facing one. The path can.
+    start(policy(ENTRY));
+    expect(refusal(await execute("wf-tagged-only"))).toContain(
+      "outside the agent-facing namespace",
+    );
+  });
+
+  test("a Schedule-only workflow falls out without being special-cased", async () => {
+    // Schedule triggers carry no path at all, so a cron job cannot opt itself
+    // in by accident — an agent firing a nightly batch on demand is exactly the
+    // surprise this avoids.
+    start(policy(ENTRY));
+    expect(refusal(await execute("wf-cron"))).toContain("declares no path");
+  });
+
+  test("the entry is the FIRST supported trigger, mirroring n8n", async () => {
+    // wf-open lists the agent entry first and the test hook second. Were the
+    // gate to scan for *any* matching trigger instead of the first one, the
+    // ordering that decides n8n's behaviour would stop mattering here — and the
+    // two would disagree.
+    start(policy({ entryPathPattern: "__cli-test__/*" }));
+    expect(refusal(await execute("wf-open"))).toContain("__mcp__/hospital-lookup");
+  });
+
+  test("tags and entry path are both required when both are configured", async () => {
+    start(policy({ workflowTags: ["finance"], entryPathPattern: "__mcp__/*" }));
+    const text = refusal(await execute("wf-open"));
+    expect(text).toContain("finance");
+  });
+
+  test("the refusal names the workflow and the reason, not just 'no'", async () => {
+    start(policy(ENTRY));
+    const text = refusal(await execute("wf-cron"));
+    expect(text).toContain("wf-cron");
+    expect(text).toContain("Every night");
+  });
+});
+
+describe("MCP gate: narrowing search_workflows", () => {
+  function sentArgs(): Record<string, unknown> | undefined {
+    const hit = upstream.captured.find((c) => c.body.includes("search_workflows"));
+    if (!hit) return undefined;
+    return JSON.parse(hit.body).params?.arguments;
+  }
+
+  test("the policy's tags are added to the agent's own filter", async () => {
+    // n8n answers search_workflows with everything the token's owner can read.
+    // Its `tags` filter is an AND, so merging the policy's tags in can only
+    // shrink the result — the one part of the listing surface that can be closed.
+    start(policy({ workflowTags: ["mcp"] }));
+    await call("tools/call", {
+      name: "search_workflows",
+      arguments: { query: "hospital", tags: ["ops"] },
+    });
+    expect(sentArgs()?.tags).toEqual(["ops", "mcp"]);
+    expect(sentArgs()?.query).toBe("hospital");
+  });
+
+  test("tags are added when the agent asked for none", async () => {
+    start(policy({ workflowTags: ["mcp"] }));
+    await call("tools/call", { name: "search_workflows", arguments: {} });
+    expect(sentArgs()?.tags).toEqual(["mcp"]);
+  });
+
+  test("a policy with no tags leaves the call alone", async () => {
+    // An entry-path policy has no equivalent argument upstream, so the listing
+    // stays wide. Better to leave it visibly untouched than to fake a filter.
+    start(policy({ entryPathPattern: "__mcp__/*" }));
+    await call("tools/call", { name: "search_workflows", arguments: { query: "x" } });
+    expect(sentArgs()).toEqual({ query: "x" });
+  });
+
+  test("warn mode does not rewrite the call either", async () => {
+    start(policy({ workflowTags: ["mcp"] }), "warn");
+    await call("tools/call", { name: "search_workflows", arguments: {} });
+    expect(sentArgs()).toEqual({});
+  });
+});
+
 describe("MCP gate: startup", () => {
   async function readyz(): Promise<{ status: number; body: string }> {
     const res = await fetch(`http://127.0.0.1:${proxy.port}/readyz`);
@@ -416,6 +545,16 @@ describe("MCP gate: startup", () => {
     start(policy({ workflowTags: ["mcp"] }));
 
     expect((await waitForReady()).status).toBe(200);
+  });
+
+  test("enforce=off does not paginate the whole instance for nothing", async () => {
+    // A gate someone turned off should not walk every page of
+    // /api/v1/workflows at startup, nor log a credential failure for a lookup
+    // no request will read.
+    start(policy({ workflowTags: ["mcp"] }), "off");
+    await waitForReady();
+    await call("tools/list");
+    expect(listCalls()).toBe(0);
   });
 
   test("no workflow scope means no prefetch at all", async () => {

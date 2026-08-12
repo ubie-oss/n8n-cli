@@ -338,6 +338,7 @@ n8n's `Available in MCP` toggle is per-workflow and anyone with edit rights can 
 | `namePattern` | `string` | Regular expression the workflow name must match |
 | `mcpTags` | `string[]` | Tags that mean "meant for MCP" even when the setting is off |
 | `requireSetting` | `boolean` | When true, a workflow carrying an `mcpTags` tag must also have `settings.availableInMCP` — otherwise the tag promises access n8n refuses |
+| `entryPathPattern` | `string` | `*`-glob the [entry trigger's](#the-entry-trigger) path must match. Pass the same glob the proxy runs with, so CI and the gate agree. The message names the node that would actually fire, which node order otherwise hides |
 
 ```json
 {
@@ -345,8 +346,8 @@ n8n's `Available in MCP` toggle is per-workflow and anyone with edit rights can 
     "mcp-exposure": ["error", {
       "mcpTags": ["mcp"],
       "requireTags": ["mcp"],
-      "namePattern": "^\\[mcp\\] ",
-      "requireSetting": true
+      "requireSetting": true,
+      "entryPathPattern": "__mcp__/*"
     }]
   }
 }
@@ -1083,26 +1084,49 @@ That is a reasonable product default and a poor blast radius. The MCP gate puts 
 ```bash
 n8n-cli proxy \
   --upstream https://n8n.example.com \
+  --client-middleware api-key-inject \
+  --api-key-inject-key-env-var N8N_API_KEY \
   --mcp-enforce error \
   --mcp-allow-tools 'search_workflows,get_workflow_details,execute_workflow' \
-  --mcp-workflow-tags mcp
+  --mcp-workflow-tags mcp \
+  --mcp-entry-path-pattern '__mcp__/*'
 ```
 
-Three things happen, and only the first is cosmetic:
+> **The gate needs its own credential for the public API.** Deciding whether a workflow is in scope means reading `/api/v1/workflows`, and an MCP client authenticates to the *MCP* endpoint — nothing on its request carries an `X-N8N-API-KEY`. So the egress chain has to supply one, unscoped (`api-key-inject`), or every workflow-scoped call is refused with "could not verify whether that workflow is available over MCP". A 401 on that lookup says so explicitly in the log.
 
-1. **`tools/list` is filtered** — a withheld tool never reaches the model's context.
-2. **`tools/call` on a withheld tool is refused at the proxy**, and never reaches n8n. Hiding a tool an agent can still call is theatre; the refusal comes back as a JSON-RPC `Unknown tool` error.
-3. **`tools/call` on a tool that names a workflow is refused unless that workflow carries the tags you named.** The proxy resolves tags against the n8n API (cached for `--mcp-cache-ttl-ms`). The refusal comes back as an MCP tool result with `isError: true`, so the agent is told *why* rather than seeing a transport failure.
+**A workflow is never a tool here.** Under instance-level MCP the tools are verbs — `search_workflows`, `execute_workflow`, `update_workflow` — and a workflow is an *argument* to one. So the gate has two independent axes: which verbs a client gets, and which workflows those verbs may name.
+
+Four things happen, and only the first is cosmetic:
+
+1. **`tools/list` is filtered** — a withheld verb never reaches the model's context.
+2. **`tools/call` on a withheld verb is refused at the proxy**, and never reaches n8n. Hiding a tool an agent can still call is theatre; the refusal comes back as a JSON-RPC `Unknown tool` error.
+3. **`tools/call` naming a workflow outside the scope is refused**, with an MCP tool result carrying `isError: true` and the reason — which tag is missing, or which trigger n8n would have entered it through. The agent is told *why* rather than seeing a transport failure.
+4. **`search_workflows` is narrowed rather than refused.** Its `tags` argument is an AND, the same semantics as the policy, so the policy's tags are merged into whatever the agent asked for. Without this an agent still sees the name and description of every workflow the token's owner can read.
 
 Everything else on the path — `initialize`, notifications, the server-to-client `GET` stream, session teardown — is forwarded untouched, and both `application/json` and `text/event-stream` (Streamable HTTP) replies are handled.
 
 | Flag | Env | Description |
 |------|-----|-------------|
 | `--mcp-enforce <level>` | `N8N_MCP_ENFORCE` | `off`, `warn`, `error`. **Required to enable the gate** — without it `/mcp-server/` is forwarded unfiltered, so upgrading changes nothing |
-| `--mcp-allow-tools <list>` | `N8N_MCP_ALLOW_TOOLS` | Comma-separated `*`-globs; only these tools are visible and callable. Empty means all |
+| `--mcp-allow-tools <list>` | `N8N_MCP_ALLOW_TOOLS` | Comma-separated `*`-globs; only these **verbs** are visible and callable. Empty means all |
 | `--mcp-deny-tools <list>` | `N8N_MCP_DENY_TOOLS` | Globs to withhold, applied after the allowlist |
-| `--mcp-workflow-tags <tags>` | `N8N_MCP_WORKFLOW_TAGS` | A reachable workflow must carry **all** of these tags |
-| `--mcp-cache-ttl-ms <ms>` | `N8N_MCP_CACHE_TTL_MS` | Workflow-tag cache lifetime (default `60000`) |
+| `--mcp-workflow-tags <tags>` | `N8N_MCP_WORKFLOW_TAGS` | A reachable workflow must carry **all** of these tags. Also narrows `search_workflows` |
+| `--mcp-entry-path-pattern <glob>` | `N8N_MCP_ENTRY_PATH_PATTERN` | A reachable workflow's **entry trigger** must declare a path matching this glob (see below) |
+| `--mcp-cache-ttl-ms <ms>` | `N8N_MCP_CACHE_TTL_MS` | Workflow-facts cache lifetime (default `60000`) |
+
+### The entry trigger
+
+`execute_workflow` does not let the caller choose a trigger. n8n maps the supplied input onto **the first non-disabled Schedule / Webhook / Form / Chat node in the workflow's `nodes` array** and starts there — array order decides, and its own source calls the multi-trigger case unsupported. Node order is invisible in a diff, so a workflow can be exposed exactly as intended and still be entered through a test hook, or through a nightly Schedule.
+
+`--mcp-entry-path-pattern` gates on the path *that* trigger declares. It lets a repository mark "this workflow has an interface meant for agents" in the workflow itself, while the proxy stays agnostic about which trigger type was used to build it:
+
+- A **Schedule** trigger carries no path, so a cron job cannot opt itself in by accident.
+- A webhook or form node that never had a path set carries none either — n8n falls back to the node's `webhookId`. Declaring the path is what opts a workflow in, so the rule fails closed.
+- Matching happens against the *first* supported trigger, not any of them, precisely so that this and n8n agree about which node runs.
+
+The matching mirrors n8n's `findMcpSupportedTrigger`. That is a coupling: if n8n adds a supported trigger type, a workflow whose new-type trigger sorts earlier is entered somewhere this release does not predict. The list lives in one place (`src/common/mcp.ts`) and is worth revisiting on an n8n upgrade. The [`mcp-exposure`](#mcp-exposure) lint rule takes the same glob, so CI and the gate cannot disagree.
+
+> **`fmt` re-derives node order from position.** `n8n-cli fmt` writes nodes sorted by canvas position (left to right, then top to bottom), so on a formatted workflow the entry is whichever matching trigger sits leftmost — not whichever appears first in the file you edited. It also recomputes those positions with a graph layout, which places every trigger in the same column and orders them by a heuristic you do not control. Two ways out: keep the agent-facing trigger's path unique so the lint rule catches any drift on the next PR, or keep MCP-exposed definitions in a format `fmt` does not touch (`.ts`, where node order is explicit). `fmt` does not know about this glob today.
 
 **Rollout:** `--mcp-enforce warn` logs every decision and changes nothing — the tool list is *not* filtered in warn mode either, because a client that never sees a tool cannot exercise it and the log you are rolling out against would stay empty.
 
@@ -1116,7 +1140,7 @@ Everything else on the path — `initialize`, notifications, the server-to-clien
 
 > Tool names differ between n8n's documentation and its implementation — the docs call them `list_tags`, `get_execution` and `search_executions`, the server registers `list_workflow_tags`, `get_workflow_execution` and `search_workflow_executions`. Build `--mcp-allow-tools` from a real `tools/list` against your instance, not from the docs; a misspelt entry silently withholds a tool you meant to allow.
 
-**What it does not do:** `search_workflows` results are forwarded verbatim, so an agent can still *see* a preview — name, description — of every workflow the connecting identity can read, even ones it may not fetch or run. Withhold `search_workflows` itself if that listing is the problem.
+**What it does not do:** with `--mcp-workflow-tags` set, `search_workflows` is narrowed to those tags — but an **entry-path-only** policy has no equivalent argument upstream, so the listing stays wide: an agent still sees the name and description of every workflow the connecting identity can read. Pair the path rule with a tag, or withhold `search_workflows` itself, if that listing is the problem.
 
 > As with every other check here, this is an enforcement boundary only if direct access to n8n is blocked at the network level. A client that can reach `/mcp-server/` on the instance itself bypasses the proxy.
 

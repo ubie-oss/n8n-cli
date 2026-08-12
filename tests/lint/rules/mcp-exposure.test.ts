@@ -86,6 +86,86 @@ describe("mcp-exposure rule", () => {
     expect(violations[0]?.message).toContain("availableInMCP");
   });
 
+  describe("entryPathPattern", () => {
+    const webhook = (name: string, path?: string, disabled = false) => ({
+      id: `n-${name}`,
+      name,
+      type: "n8n-nodes-base.webhook",
+      typeVersion: 2,
+      position: [0, 0] as [number, number],
+      parameters: path === undefined ? {} : { path },
+      ...(disabled ? { disabled: true } : {}),
+    });
+    const exposed = (nodes: Workflow["nodes"]) =>
+      makeWorkflow({ nodes, settings: { availableInMCP: true } });
+    const OPT = { entryPathPattern: "__mcp__/*" };
+
+    test("passes when the first supported trigger is the agent-facing one", () => {
+      const wf = exposed([
+        webhook("[MCP] entry", "__mcp__/lookup"),
+        webhook("[CLI Test]", "__cli-test__/u"),
+      ]);
+      expect(mcpExposureRule.check(wf, "", OPT)).toEqual([]);
+    });
+
+    test("flags the case the whole rule exists for: the test hook is first", () => {
+      // Same two nodes, opposite order. Nothing else about the workflow differs,
+      // and nothing in a diff would show it — which is why this is checked.
+      const wf = exposed([
+        webhook("[CLI Test]", "__cli-test__/u"),
+        webhook("[MCP] entry", "__mcp__/lookup"),
+      ]);
+      const violations = mcpExposureRule.check(wf, "", OPT);
+      expect(violations.length).toBe(1);
+      expect(violations[0]?.message).toContain('"[CLI Test]"');
+      expect(violations[0]?.message).toContain("__cli-test__/u");
+    });
+
+    test("a Schedule entry is reported as having no path, with the way out named", () => {
+      const wf = exposed([
+        {
+          id: "s",
+          name: "Every night",
+          type: "n8n-nodes-base.scheduleTrigger",
+          typeVersion: 1,
+          position: [0, 0],
+          parameters: {},
+        },
+      ]);
+      const violations = mcpExposureRule.check(wf, "", OPT);
+      expect(violations[0]?.message).toContain("declares no path");
+      expect(violations[0]?.message).toContain("take it out of MCP");
+    });
+
+    test("a workflow n8n cannot enter at all is called out separately", () => {
+      const wf = exposed([
+        {
+          id: "sub",
+          name: "Called by another workflow",
+          type: "n8n-nodes-base.executeWorkflowTrigger",
+          typeVersion: 1,
+          position: [0, 0],
+          parameters: {},
+        },
+      ]);
+      expect(mcpExposureRule.check(wf, "", OPT)[0]?.message).toContain("no trigger n8n can enter");
+    });
+
+    test("a disabled trigger does not count as the entry", () => {
+      const wf = exposed([
+        webhook("[MCP] disabled", "__mcp__/lookup", true),
+        webhook("[CLI Test]", "__cli-test__/u"),
+      ]);
+      expect(mcpExposureRule.check(wf, "", OPT)[0]?.message).toContain('"[CLI Test]"');
+    });
+
+    test("the check is off unless the pattern is configured", () => {
+      const wf = exposed([webhook("[CLI Test]", "__cli-test__/u")]);
+      expect(mcpExposureRule.check(wf, "")).toEqual([]);
+      expect(mcpExposureRule.check(wf, "", { entryPathPattern: "" })).toEqual([]);
+    });
+  });
+
   test("requireSetting is satisfied once the setting is on", () => {
     const wf = makeWorkflow({ tags: [{ name: "mcp" }], settings: { availableInMCP: true } });
     expect(mcpExposureRule.check(wf, "", { mcpTags: ["mcp"], requireSetting: true })).toEqual([]);

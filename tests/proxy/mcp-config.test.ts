@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { parseMcpSettings } from "@/proxy/mcp/config.ts";
 import {
+  findEntryTrigger,
   globMatch,
   hasWorkflowScope,
   isToolAllowed,
@@ -110,17 +111,96 @@ describe("scanForWorkflowIds", () => {
   });
 });
 
+describe("findEntryTrigger", () => {
+  const node = (name: string, type: string, extra: Record<string, unknown> = {}) => ({
+    name,
+    type,
+    ...extra,
+  });
+
+  test("takes the first supported trigger in array order, like n8n does", () => {
+    const entry = findEntryTrigger([
+      node("Set", "n8n-nodes-base.set"),
+      node("A", "n8n-nodes-base.webhook", { parameters: { path: "__mcp__/a" } }),
+      node("B", "n8n-nodes-base.formTrigger", { parameters: { path: "__mcp__/b" } }),
+    ]);
+    expect(entry?.name).toBe("A");
+    expect(entry?.path).toBe("__mcp__/a");
+  });
+
+  test("skips disabled triggers, like n8n does", () => {
+    const entry = findEntryTrigger([
+      node("Off", "n8n-nodes-base.webhook", { disabled: true, parameters: { path: "off" } }),
+      node("On", "n8n-nodes-base.webhook", { parameters: { path: "on" } }),
+    ]);
+    expect(entry?.name).toBe("On");
+  });
+
+  test("a Schedule trigger is an entry, but carries no path", () => {
+    const entry = findEntryTrigger([node("Nightly", "n8n-nodes-base.scheduleTrigger")]);
+    expect(entry?.type).toBe("n8n-nodes-base.scheduleTrigger");
+    expect(entry?.path).toBeUndefined();
+  });
+
+  test("a webhook that never had a path set carries none either", () => {
+    // n8n falls back to the node's webhookId for the URL, which is a UUID and
+    // deliberately not something a path convention should match.
+    const entry = findEntryTrigger([
+      node("W", "n8n-nodes-base.webhook", { parameters: {}, webhookId: "uuid" }),
+    ]);
+    expect(entry?.path).toBeUndefined();
+  });
+
+  test("ignores node types n8n will not enter a workflow through", () => {
+    expect(
+      findEntryTrigger([
+        node("Sub", "n8n-nodes-base.executeWorkflowTrigger"),
+        node("Manual", "n8n-nodes-base.manualTrigger"),
+      ]),
+    ).toBeNull();
+  });
+
+  test("no nodes at all is not an entry", () => {
+    expect(findEntryTrigger([])).toBeNull();
+    expect(findEntryTrigger(undefined)).toBeNull();
+  });
+});
+
 describe("hasWorkflowScope", () => {
   test("false until a tag scopes workflows", () => {
     expect(hasWorkflowScope(policy())).toBe(false);
     expect(hasWorkflowScope(policy({ denyTools: ["*"] }))).toBe(false);
     expect(hasWorkflowScope(policy({ workflowTags: ["mcp"] }))).toBe(true);
+    expect(hasWorkflowScope(policy({ entryPathPattern: "__mcp__/*" }))).toBe(true);
   });
 });
 
 describe("parseMcpSettings", () => {
-  test("no gate unless enforcement is asked for", () => {
-    expect(parseMcpSettings({ mcpAllowTools: "search_workflows" }, NO_ENV)).toBeNull();
+  test("no gate, and no complaint, when nothing was configured", () => {
+    expect(parseMcpSettings({}, NO_ENV)).toBeNull();
+  });
+
+  test("a policy written without an enforce level is refused, not ignored", () => {
+    // The dangerous shape: the deployment says "only these tools, only these
+    // workflows" and forwards /mcp-server/ unfiltered, with nothing in the
+    // startup line to contradict the belief that the gate is on.
+    expect(() => parseMcpSettings({ mcpAllowTools: "search_workflows" }, NO_ENV)).toThrow(
+      /N8N_MCP_ALLOW_TOOLS.*--mcp-enforce/s,
+    );
+    expect(() =>
+      parseMcpSettings({}, { N8N_MCP_WORKFLOW_TAGS: "mcp" } as NodeJS.ProcessEnv),
+    ).toThrow(/N8N_MCP_WORKFLOW_TAGS/);
+  });
+
+  test("the cache TTL alone is not a policy, so it does not block startup", () => {
+    // It tunes how often a lookup repeats. Someone who set only that has
+    // expressed no belief about what is exposed.
+    expect(parseMcpSettings({ mcpCacheTtlMs: "5000" }, NO_ENV)).toBeNull();
+  });
+
+  test("enforce=off is a real answer, and silences that check", () => {
+    const settings = parseMcpSettings({ mcpEnforce: "off", mcpWorkflowTags: "mcp" }, NO_ENV);
+    expect(settings?.enforce).toBe("off");
   });
 
   test("reads the whole policy off the flags", () => {
@@ -130,6 +210,7 @@ describe("parseMcpSettings", () => {
         mcpAllowTools: "search_workflows, execute_workflow",
         mcpDenyTools: "*credential*",
         mcpWorkflowTags: "mcp,prod",
+        mcpEntryPathPattern: "__mcp__/*",
         mcpCacheTtlMs: "5000",
       },
       NO_ENV,
@@ -139,6 +220,7 @@ describe("parseMcpSettings", () => {
     expect(settings?.policy.allowTools).toEqual(["search_workflows", "execute_workflow"]);
     expect(settings?.policy.denyTools).toEqual(["*credential*"]);
     expect(settings?.policy.workflowTags).toEqual(["mcp", "prod"]);
+    expect(settings?.policy.entryPathPattern).toBe("__mcp__/*");
     expect(settings?.cacheTtlMs).toBe(5000);
   });
 
@@ -151,6 +233,20 @@ describe("parseMcpSettings", () => {
     expect(settings?.enforce).toBe("warn");
     expect(settings?.policy.workflowTags).toEqual(["mcp"]);
     expect(settings?.cacheTtlMs).toBe(60_000);
+  });
+
+  test("an unset entry-path pattern stays absent rather than becoming an empty glob", () => {
+    // An empty string would match nothing, silently gating everything off.
+    const settings = parseMcpSettings({ mcpEnforce: "error", mcpEntryPathPattern: "  " }, NO_ENV);
+    expect(settings?.policy.entryPathPattern).toBeUndefined();
+  });
+
+  test("the entry-path pattern also comes from the environment", () => {
+    const settings = parseMcpSettings({}, {
+      N8N_MCP_ENFORCE: "error",
+      N8N_MCP_ENTRY_PATH_PATTERN: "__mcp__/*",
+    } as NodeJS.ProcessEnv);
+    expect(settings?.policy.entryPathPattern).toBe("__mcp__/*");
   });
 
   test("a bad value is rejected at startup, naming the flag", () => {

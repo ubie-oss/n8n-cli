@@ -1,15 +1,15 @@
 /**
- * Which workflows exist upstream, and which of them the MCP policy considers
- * agent-reachable.
+ * What the gate knows about the workflows upstream.
  *
- * The decision needs the workflow's tags, and those are not in the MCP call —
- * only an id is. So the gate resolves them against the n8n public API and
- * caches the answer, the way the duplicate-name check does.
+ * An MCP call carries a workflow id and nothing else, but the policy asks about
+ * tags and about which trigger n8n would fire. So the gate resolves those from
+ * the n8n public API and caches the answer, the way the duplicate-name check
+ * does.
  *
- * Both sets matter. `allowed` answers "may this call proceed?"; `known` lets the
- * gate recognise a workflow id sitting in an argument it was not expecting, so
- * a tool whose parameter names this release guessed wrong still cannot reach a
- * workflow the policy excludes.
+ * Facts are kept per workflow rather than as a bare allow/deny set. Two reasons:
+ * a refusal can then say *why* ("its entry trigger is a Schedule with no path")
+ * instead of only "no", and a new predicate becomes a config change rather than
+ * another round trip to n8n.
  *
  * The lookup goes through `forwardRequest`, not a bare fetch, because on a
  * deployment where the proxy holds the credentials (IAP id_token, shared API
@@ -21,7 +21,13 @@
 import type { Workflow } from "@/api/types.ts";
 import type { ClientMiddleware } from "@/middleware/types.ts";
 import { forwardRequest } from "../upstream.ts";
-import { hasWorkflowScope, type McpPolicy } from "./policy.ts";
+import {
+  type EntryTrigger,
+  findEntryTrigger,
+  globMatch,
+  hasWorkflowScope,
+  type McpPolicy,
+} from "./policy.ts";
 
 /** Cap on pagination, matching the duplicate-name index. */
 const MAX_PAGES = 50;
@@ -31,9 +37,20 @@ interface ListResponse {
   nextCursor?: string | null;
 }
 
+/** What the gate remembers about one workflow. */
+export interface WorkflowFacts {
+  id: string;
+  name: string;
+  description?: string;
+  tags: string[];
+  availableInMCP: boolean;
+  /** The trigger n8n would start an MCP execution from, if any. */
+  entry: EntryTrigger | null;
+}
+
 export interface WorkflowSets {
-  /** Every workflow id upstream, whatever the policy says about it. */
-  known: Set<string>;
+  /** Facts for every workflow upstream, keyed by id. */
+  facts: Map<string, WorkflowFacts>;
   /** The subset the policy lets an agent reach. */
   allowed: Set<string>;
 }
@@ -47,6 +64,32 @@ export interface WorkflowIndexDeps {
   upstream: string;
   timeoutMs?: number;
   clientMiddlewares?: ClientMiddleware[];
+}
+
+/** Why a workflow is not reachable, phrased for the agent that asked. */
+export function explainRefusal(policy: McpPolicy, facts: WorkflowFacts | undefined): string {
+  if (!facts) return "no workflow with that id is visible to this proxy";
+  const reasons: string[] = [];
+  if (policy.workflowTags.length > 0) {
+    const missing = policy.workflowTags.filter((t) => !facts.tags.includes(t));
+    if (missing.length > 0) reasons.push(`it does not carry the tag(s) ${missing.join(", ")}`);
+  }
+  if (policy.entryPathPattern !== undefined && !entryPathMatches(policy, facts)) {
+    reasons.push(
+      facts.entry === null
+        ? "it has no trigger this proxy can enter it through"
+        : facts.entry.path === undefined
+          ? `its entry trigger "${facts.entry.name}" declares no path`
+          : `its entry trigger path "${facts.entry.path}" is outside the agent-facing namespace`,
+    );
+  }
+  return reasons.length > 0 ? reasons.join("; ") : "it is outside this proxy's MCP policy";
+}
+
+function entryPathMatches(policy: McpPolicy, facts: WorkflowFacts): boolean {
+  if (policy.entryPathPattern === undefined) return true;
+  if (!facts.entry?.path) return false;
+  return globMatch(policy.entryPathPattern, facts.entry.path);
 }
 
 export class AllowedWorkflowIndex {
@@ -95,7 +138,7 @@ export class AllowedWorkflowIndex {
   }
 
   /**
-   * The upstream workflow sets.
+   * The upstream workflow facts.
    *
    * Throws when the upstream cannot be read. The gate turns that into a refusal
    * — this class refuses to answer "allowed" from a list it never managed to
@@ -103,7 +146,7 @@ export class AllowedWorkflowIndex {
    */
   async sets(): Promise<WorkflowSets> {
     if (!hasWorkflowScope(this.policy)) {
-      return { known: new Set(), allowed: new Set() };
+      return { facts: new Map(), allowed: new Set() };
     }
 
     const now = performance.now();
@@ -127,15 +170,18 @@ export class AllowedWorkflowIndex {
   }
 
   private async fetchSets(): Promise<WorkflowSets> {
-    const known = new Set<string>();
+    const facts = new Map<string, WorkflowFacts>();
     const allowed = new Set<string>();
 
     let cursor: string | undefined;
     for (let page = 0; page < MAX_PAGES; page++) {
-      const url = new URL(`${this.deps.upstream}/api/v1/workflows`);
+      // Only the path and query are read from this URL — `forwardRequest`
+      // prepends the upstream base itself. Building it from `upstream` would
+      // double any base path an operator put in `--upstream`.
+      const url = new URL("/api/v1/workflows", "http://mcp-gate.invalid");
       url.searchParams.set("limit", "100");
-      // Only tags are read from the response. Pinned data can be the largest
-      // part of a workflow and is never looked at here.
+      // Only tags and trigger nodes are read from the response. Pinned data can
+      // be the largest part of a workflow and is never looked at here.
       url.searchParams.set("excludePinnedData", "true");
       if (cursor) url.searchParams.set("cursor", cursor);
 
@@ -149,27 +195,49 @@ export class AllowedWorkflowIndex {
         { timeoutMs: this.deps.timeoutMs, clientMiddlewares: this.deps.clientMiddlewares },
       );
       if (!response.ok) {
-        throw new Error(`upstream returned HTTP ${response.status} listing workflows`);
+        // 401/403 here is nearly always a missing credential rather than a
+        // broken n8n: an MCP client authenticates to the MCP endpoint, so
+        // nothing on the request carries an X-N8N-API-KEY unless the egress
+        // chain supplies one. Say that, because the symptom otherwise is every
+        // workflow-scoped call being refused with no clue why.
+        const hint =
+          response.status === 401 || response.status === 403
+            ? " — the MCP gate reads the workflow list under the proxy's own credentials," +
+              " so the client-middleware chain must supply one for /api/v1 (api-key-inject)"
+            : "";
+        throw new Error(`upstream returned HTTP ${response.status} listing workflows${hint}`);
       }
 
       const body = (await response.json()) as ListResponse;
       for (const workflow of body.data ?? []) {
         if (!workflow.id) continue;
-        known.add(workflow.id);
-        if (this.matches(workflow)) allowed.add(workflow.id);
+        const f = toFacts(workflow);
+        facts.set(f.id, f);
+        if (this.matches(f)) allowed.add(f.id);
       }
 
       cursor = body.nextCursor ?? undefined;
       if (!cursor) break;
     }
 
-    return { known, allowed };
+    return { facts, allowed };
   }
 
-  private matches(workflow: Workflow): boolean {
+  private matches(facts: WorkflowFacts): boolean {
     // The whole list is fetched rather than filtered with `?tags=`: n8n's tag
     // filter is an OR on some versions, and this has to be an AND.
-    const present = new Set((workflow.tags ?? []).map((t) => t.name));
-    return this.policy.workflowTags.every((t) => present.has(t));
+    if (!this.policy.workflowTags.every((t) => facts.tags.includes(t))) return false;
+    return entryPathMatches(this.policy, facts);
   }
+}
+
+function toFacts(workflow: Workflow): WorkflowFacts {
+  return {
+    id: workflow.id ?? "",
+    name: workflow.name ?? "",
+    ...(workflow.description ? { description: workflow.description } : {}),
+    tags: (workflow.tags ?? []).map((t) => t.name),
+    availableInMCP: workflow.settings?.availableInMCP === true,
+    entry: findEntryTrigger(workflow.nodes),
+  };
 }

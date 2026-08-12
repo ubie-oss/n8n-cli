@@ -34,6 +34,21 @@ export class ThreeWayDetector {
     const baseToLocal = this.compareWorkflows(local, base);
     const baseToRemote = this.compareWorkflows(remote, base);
 
+    // `description` is judged on the base→local edge only, and never on
+    // base→remote.
+    //
+    // `remote` comes from the n8n API while `base` is the definition at the git
+    // base ref, so comparing them symmetrically means "this file predates
+    // description support and someone wrote one in the UI" reads as a remote
+    // change — and, paired with any local edit, as a conflict needing --force.
+    // Nothing is at risk there: apply never sends a description the local file
+    // does not declare (see `compare` in ../differ.ts), so a UI-authored one
+    // cannot be clobbered and has nothing to conflict with.
+    if (this.localChangedDescription(local, base)) {
+      baseToLocal.changedFields.push("description");
+      baseToLocal.hasChanges = true;
+    }
+
     if (!baseToLocal.hasChanges && !baseToRemote.hasChanges) {
       return {
         type: "skip",
@@ -80,21 +95,24 @@ export class ThreeWayDetector {
     };
   }
 
+  /**
+   * Whether the author changed the description in the definition itself.
+   *
+   * A local file with no `description` key is not claiming the description is
+   * empty — it is not managing the field, which is every definition written
+   * before n8n-cli could carry one. Same rule as the 2-way `compare`.
+   */
+  private localChangedDescription(local: Workflow, base: Workflow): boolean {
+    if (local.description === undefined) return false;
+    return local.description !== (base.description ?? "");
+  }
+
   /** Compares two workflows and returns a DiffVector. */
   private compareWorkflows(a: Workflow, b: Workflow): DiffVector {
     const diff: DiffVector = { hasChanges: false, changedFields: [] };
 
     if (a.name !== b.name) {
       diff.changedFields.push("name");
-      diff.hasChanges = true;
-    }
-
-    // Symmetric here, unlike `compare()`: this runs over base/local/remote
-    // revisions of the same definition, so "absent on one side" really does
-    // mean the field changed between two states rather than "this file does
-    // not manage the field".
-    if ((a.description ?? "") !== (b.description ?? "")) {
-      diff.changedFields.push("description");
       diff.hasChanges = true;
     }
 
