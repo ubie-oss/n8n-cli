@@ -88,7 +88,9 @@ const WORKFLOWS = [
 ];
 
 /** Mock n8n: the MCP endpoint plus enough of the public API to build an index. */
-function startMockUpstream(options: { sse?: boolean; listFails?: boolean } = {}): {
+function startMockUpstream(
+  options: { sse?: boolean; listFails?: boolean; inflatedCount?: number } = {},
+): {
   server: ReturnType<typeof Bun.serve>;
   port: number;
   captured: Captured[];
@@ -114,7 +116,7 @@ function startMockUpstream(options: { sse?: boolean; listFails?: boolean } = {})
         // that the proxy handed it over unchanged.
         return new Response("bad request", { status: 400 });
       }
-      const reply = mcpReply(request);
+      const reply = mcpReply(request, options.inflatedCount);
       if (options.sse) {
         return new Response(`event: message\ndata: ${JSON.stringify(reply)}\n\n`, {
           headers: { "content-type": "text/event-stream" },
@@ -126,7 +128,10 @@ function startMockUpstream(options: { sse?: boolean; listFails?: boolean } = {})
   return { server, port: server.port!, captured };
 }
 
-function mcpReply(request: { id?: unknown; method?: string; params?: { name?: string } }): unknown {
+function mcpReply(
+  request: { id?: unknown; method?: string; params?: { name?: string } },
+  inflatedCount?: number,
+): unknown {
   if (request.method === "tools/list") {
     return { jsonrpc: "2.0", id: request.id, result: { tools: TOOLS } };
   }
@@ -141,7 +146,9 @@ function mcpReply(request: { id?: unknown; method?: string; params?: { name?: st
         availableInMCP: (w.settings as { availableInMCP?: boolean }).availableInMCP === true,
         tags: w.tags,
       })),
-      count: WORKFLOWS.length,
+      // n8n reports the total number of matches, which on a real instance is
+      // far larger than the page it just sent.
+      count: inflatedCount ?? WORKFLOWS.length,
     };
     return {
       jsonrpc: "2.0",
@@ -542,10 +549,23 @@ describe("MCP gate: filtering search_workflows results", () => {
     expect(seen.text).toEqual(seen.structured);
   });
 
-  test("count follows the rows that were dropped", async () => {
-    // Left alone, an agent pages after workflows it will never be shown.
+  test("count reports the rows that survived, not the upstream total", async () => {
+    // n8n's `count` is the total number of matches, not the size of the page.
+    // Against a live instance a page keeping 1 row came back saying 1385 —
+    // telling the model to keep paging after rows it will never be shown, and
+    // roughly how many workflows are being withheld from it.
     start(policy({ entryPathPattern: "__mcp__/*" }));
     expect(listed(await search()).count).toBe(1);
+  });
+
+  test("an upstream total far larger than the page does not leak through", async () => {
+    await upstream.server.stop(true);
+    upstream = startMockUpstream({ inflatedCount: 1385 });
+    start(policy({ entryPathPattern: "__mcp__/*" }));
+
+    const seen = listed(await search());
+    expect(seen.structured).toEqual(["wf-open"]);
+    expect(seen.count).toBe(1);
   });
 
   test("a tag policy filters the reply as well as narrowing the request", async () => {
