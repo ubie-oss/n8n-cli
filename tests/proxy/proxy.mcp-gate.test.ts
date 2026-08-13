@@ -622,6 +622,114 @@ describe("MCP gate: filtering search_workflows results", () => {
   });
 });
 
+describe("MCP gate: get_workflow_entry", () => {
+  const ALLOW = ["search_workflows", "execute_workflow", "get_workflow_entry"];
+
+  async function entry(workflowId: string): Promise<Record<string, unknown>> {
+    return await call("tools/call", {
+      name: "get_workflow_entry",
+      arguments: { workflowId },
+    });
+  }
+
+  function payload(reply: Record<string, unknown>): Record<string, unknown> {
+    const result = reply.result as {
+      structuredContent?: Record<string, unknown>;
+      content?: Array<{ text?: string }>;
+    };
+    return result.structuredContent ?? {};
+  }
+
+  test("is published beside n8n's own tools, not in place of one", async () => {
+    start(policy({ allowTools: ALLOW, entryPathPattern: "__mcp__/*" }));
+    expect(toolNames(await call("tools/list"))).toEqual([
+      "search_workflows",
+      "execute_workflow",
+      "get_workflow_entry",
+    ]);
+  });
+
+  test("names the trigger n8n would enter the workflow through", async () => {
+    // wf-open lists the agent entry first and the test hook second. Which one
+    // is reported decides which shape of `inputs` the caller builds.
+    start(policy({ allowTools: ALLOW, entryPathPattern: "__mcp__/*" }));
+    const seen = payload(await entry("wf-open")) as {
+      entry?: { name?: string; type?: string; path?: string; parameters?: unknown };
+    };
+    expect(seen.entry?.name).toBe("[MCP] entry");
+    expect(seen.entry?.type).toBe(FORM);
+    expect(seen.entry?.path).toBe("__mcp__/hospital-lookup");
+    expect(seen.entry?.parameters).toBeDefined();
+  });
+
+  test("answers without going upstream at all", async () => {
+    start(policy({ allowTools: ALLOW, entryPathPattern: "__mcp__/*" }));
+    await entry("wf-open");
+    expect(upstream.captured.some((c) => c.pathname === "/mcp-server/http")).toBe(false);
+  });
+
+  test("both channels carry the same payload, the way n8n builds its own", async () => {
+    start(policy({ allowTools: ALLOW, entryPathPattern: "__mcp__/*" }));
+    const result = (await entry("wf-open")).result as {
+      structuredContent: unknown;
+      content: Array<{ text: string }>;
+    };
+    expect(JSON.parse(result.content[0]!.text)).toEqual(result.structuredContent);
+  });
+
+  test("a workflow outside the policy is refused, with the reason", async () => {
+    start(policy({ allowTools: ALLOW, entryPathPattern: "__mcp__/*" }));
+    const result = (await entry("wf-tagged-only")).result as {
+      isError?: boolean;
+      content: Array<{ text: string }>;
+    };
+    expect(result.isError).toBe(true);
+    expect(result.content[0]?.text).toContain("outside the agent-facing namespace");
+  });
+
+  test("a call naming no workflow is refused", async () => {
+    start(policy({ allowTools: ALLOW, entryPathPattern: "__mcp__/*" }));
+    const reply = await call("tools/call", { name: "get_workflow_entry", arguments: {} });
+    expect((reply.result as { isError?: boolean }).isError).toBe(true);
+  });
+
+  test("an unreadable workflow list refuses rather than answers", async () => {
+    await upstream.server.stop(true);
+    upstream = startMockUpstream({ listFails: true });
+    start(policy({ allowTools: ALLOW, entryPathPattern: "__mcp__/*" }));
+    expect((await entry("wf-open")).result).toMatchObject({ isError: true });
+  });
+
+  test("it has to be named in the allowlist, not merely permitted by an empty one", async () => {
+    // An upgrade must not add a tool to someone's tools/list on its own.
+    start(policy({ entryPathPattern: "__mcp__/*" }));
+    expect(toolNames(await call("tools/list"))).not.toContain("get_workflow_entry");
+  });
+
+  test("warn does not publish it", async () => {
+    start(policy({ allowTools: ALLOW, entryPathPattern: "__mcp__/*" }), "warn");
+    expect(toolNames(await call("tools/list"))).not.toContain("get_workflow_entry");
+  });
+
+  test("n8n's own get_workflow_details is untouched when it is allowed too", async () => {
+    // The point of adding a tool rather than rewriting a reply: the large one
+    // still works, exactly as n8n serves it.
+    start(
+      policy({
+        allowTools: [...ALLOW, "get_workflow_details"],
+        entryPathPattern: "__mcp__/*",
+      }),
+    );
+    const reply = await call("tools/call", {
+      name: "get_workflow_details",
+      arguments: { workflowId: "wf-open" },
+    });
+    expect((reply.result as { content: Array<{ text: string }> }).content[0]?.text).toBe(
+      "ran get_workflow_details",
+    );
+  });
+});
+
 describe("MCP gate: startup", () => {
   async function readyz(): Promise<{ status: number; body: string }> {
     const res = await fetch(`http://127.0.0.1:${proxy.port}/readyz`);
