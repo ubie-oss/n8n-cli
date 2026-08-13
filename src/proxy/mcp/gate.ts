@@ -422,11 +422,16 @@ function filterSearchResult(
  * then execute, and an entry the gate cannot identify is not identifiable at
  * `tools/call` time either.
  *
- * `count` is decremented rather than recomputed. n8n reports the number of
- * matches, which may exceed the page in hand; subtracting what was dropped is
- * right when it is a page count and the closest honest answer when it is a
- * total. Leaving it alone would have an agent paging after workflows it is
- * never going to be shown.
+ * `count` is replaced by the number of rows that survived, not decremented by
+ * the number dropped. Measured against a live instance: n8n reports the total
+ * number of matches, not the size of the page in hand, so a page of 100 that
+ * keeps 1 came back saying 1385 — which tells the model both to keep paging
+ * after rows it will never be shown, and roughly how many workflows are being
+ * withheld from it. The rows and the number now say the same thing.
+ *
+ * The cost is that a later page's rows are not counted, so `count` reads as a
+ * floor rather than a total. That is the safe direction: this gate exists to
+ * not over-report.
  */
 function filterPayload(
   payload: unknown,
@@ -444,7 +449,7 @@ function filterPayload(
   if (removed === 0) return null;
 
   const next: Record<string, unknown> = { ...record, data: kept };
-  if (typeof record.count === "number") next.count = Math.max(0, record.count - removed);
+  if (typeof record.count === "number") next.count = kept.length;
   return { payload: next, removed };
 }
 
