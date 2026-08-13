@@ -196,21 +196,27 @@ async function answerEntryTool(
     );
   }
 
-  const replies = parsed.messages.map((message) => {
-    const id = toolCallArguments(message).workflowId;
-    if (typeof id !== "string" || id === "") {
-      return toolErrorResult(message.id, `${ENTRY_TOOL_NAME} requires a workflowId.`);
-    }
-    if (!sets.allowed.has(id)) {
-      log(deps, pathname, `workflow out of MCP scope: ${id}`, ENTRY_TOOL_NAME);
-      return toolErrorResult(
-        message.id,
-        `Not available over MCP: ${id} (${explainRefusal(deps.policy, sets.facts.get(id))}).`,
-      );
-    }
-    // `allowed` is built from `facts`, so the lookup cannot miss.
-    return entryToolResult(message.id, sets.facts.get(id) as WorkflowFacts);
-  });
+  const replies = await Promise.all(
+    parsed.messages.map(async (message) => {
+      const id = toolCallArguments(message).workflowId;
+      if (typeof id !== "string" || id === "") {
+        return toolErrorResult(message.id, `${ENTRY_TOOL_NAME} requires a workflowId.`);
+      }
+      if (!sets.allowed.has(id)) {
+        log(deps, pathname, `workflow out of MCP scope: ${id}`, ENTRY_TOOL_NAME);
+        return toolErrorResult(
+          message.id,
+          `Not available over MCP: ${id} (${explainRefusal(deps.policy, sets.facts.get(id))}).`,
+        );
+      }
+      // `allowed` is built from `facts`, so the lookup cannot miss.
+      const facts = sets.facts.get(id) as WorkflowFacts;
+      // Only now, and only for a workflow the policy already allows: the
+      // listing the index is built from carries no descriptions.
+      await deps.index.fillDescription(facts);
+      return entryToolResult(message.id, facts);
+    }),
+  );
 
   return jsonRpcResponse(replies, parsed.isBatch);
 }
