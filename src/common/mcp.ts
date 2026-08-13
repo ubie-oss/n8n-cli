@@ -38,6 +38,14 @@ export interface EntryTrigger {
    * path convention should be written against.
    */
   path?: string;
+  /**
+   * The trigger's own parameters, as n8n stores them.
+   *
+   * Carried so a caller can be told what to send without reading the workflow:
+   * a Form trigger's `formFields` and a Webhook's `httpMethod` both live here,
+   * and they are what `execute_workflow`'s `inputs` argument has to match.
+   */
+  parameters?: Record<string, unknown>;
 }
 
 /** The shape this needs from a node; deliberately looser than `Node`. */
@@ -63,10 +71,14 @@ export function findEntryTrigger(
     if (node.disabled === true) continue;
     if (typeof node.type !== "string" || !MCP_ENTRY_TRIGGER_TYPES.includes(node.type)) continue;
     const path = node.parameters?.path;
+    const parameters = node.parameters;
     return {
       name: typeof node.name === "string" ? node.name : "",
       type: node.type,
       ...(typeof path === "string" && path !== "" ? { path } : {}),
+      ...(typeof parameters === "object" && parameters !== null
+        ? { parameters: parameters as Record<string, unknown> }
+        : {}),
     };
   }
   return null;

@@ -1128,6 +1128,24 @@ The matching mirrors n8n's `findMcpSupportedTrigger`. That is a coupling: if n8n
 
 > **`fmt` re-derives node order from position.** `n8n-cli fmt` writes nodes sorted by canvas position (left to right, then top to bottom), so on a formatted workflow the entry is whichever matching trigger sits leftmost — not whichever appears first in the file you edited. It also recomputes those positions with a graph layout, which places every trigger in the same column and orders them by a heuristic you do not control. Two ways out: keep the agent-facing trigger's path unique so the lint rule catches any drift on the next PR, or keep MCP-exposed definitions in a format `fmt` does not touch (`.ts`, where node order is explicit). `fmt` does not know about this glob today.
 
+### `get_workflow_entry` — a tool the proxy adds
+
+`execute_workflow`'s own description tells the model to call `get_workflow_details` first, and it has to: `inputs` is a union discriminated by trigger type (`chat` / `form` / `webhook`), nothing in `search_workflows` says which one a workflow takes, and picking wrong makes n8n execute with empty data rather than fail. So that lookup runs before every execution — and n8n answers it with the whole workflow definition. Measured against a live instance, one workflow came back as **116 KB**, of which a caller that only runs workflows reads three fields.
+
+Name `get_workflow_entry` in `--mcp-allow-tools` and the gate publishes a small tool of its own beside n8n's:
+
+```json
+{ "id": "...", "name": "...", "description": "...", "tags": [],
+  "entry": { "name": "[MCP] entry", "type": "n8n-nodes-base.formTrigger",
+             "path": "__mcp__/...", "parameters": { "formFields": {} } } }
+```
+
+`entry` is resolved exactly as reachability is, so the trigger reported is the node n8n would start from, and its `parameters` carry what building `inputs` needs — a form trigger's `formFields`, a webhook's `httpMethod`.
+
+**It adds, it does not rewrite.** n8n's `get_workflow_details` keeps behaving exactly as n8n serves it; an operator who wants only the small one leaves the large one out of the allowlist. Nothing here makes this proxy responsible for a response shape it does not own. It also costs no upstream call — the gate already holds these facts, because resolving the entry trigger is how it decides reachability. The same scope applies: a workflow outside the policy is refused with the reason, not described.
+
+It must be named in `--mcp-allow-tools` rather than merely permitted by an empty one, so upgrading the proxy never adds a tool to a client's list on its own.
+
 **Rollout:** `--mcp-enforce warn` logs every decision and changes nothing — the tool list is *not* filtered in warn mode either, because a client that never sees a tool cannot exercise it and the log you are rolling out against would stay empty.
 
 **Fail-closed.** A tool call whose workflow cannot be resolved — because the upstream list is unreadable — is refused, as is a workflow-scoped call that names no workflow. There is no switch to open those: a gate that opens during an outage is not a gate, and `warn` already covers "measure, don't block".

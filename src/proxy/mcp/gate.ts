@@ -22,6 +22,12 @@ import type { EnforceLevel } from "../config.ts";
 import type { Logger } from "../logging.ts";
 import { forwardRequest } from "../upstream.ts";
 import {
+  ENTRY_TOOL_DEFINITION,
+  ENTRY_TOOL_NAME,
+  entryToolResult,
+  publishesEntryTool,
+} from "./entry-tool.ts";
+import {
   encodeReply,
   INVALID_PARAMS,
   type JsonRpcMessage,
@@ -39,7 +45,7 @@ import {
   scanForWorkflowIds,
   targetWorkflowId,
 } from "./policy.ts";
-import { type AllowedWorkflowIndex, explainRefusal } from "./workflow-index.ts";
+import { type AllowedWorkflowIndex, explainRefusal, type WorkflowFacts } from "./workflow-index.ts";
 
 export interface McpGateDeps {
   upstream: string;
@@ -95,6 +101,14 @@ export async function handleMcpRequest(req: Request, deps: McpGateDeps): Promise
     return forward(req, rawJSON, pathname, deps);
   }
 
+  // Answered here, never forwarded: n8n has no such tool. Before the refusal
+  // pass, because the same workflow scope decides both and this needs the facts
+  // rather than a yes/no.
+  if (deps.enforce === "error" && publishesEntryTool(deps.policy)) {
+    const answered = await answerEntryTool(parsed, pathname, deps);
+    if (answered) return answered;
+  }
+
   const refusals: JsonRpcMessage[] = [];
   for (const message of parsed.messages) {
     const refusal = await refuse(message, pathname, deps);
@@ -139,13 +153,66 @@ export async function handleMcpRequest(req: Request, deps: McpGateDeps): Promise
   // stay empty.
   if (deps.enforce !== "error") return response;
 
-  const tools = filtersTools(deps.policy) && parsed.messages.some((m) => m.method === "tools/list");
+  const listsTools = parsed.messages.some((m) => m.method === "tools/list");
+  const tools = listsTools && (filtersTools(deps.policy) || publishesEntryTool(deps.policy));
   const searchIds = hasWorkflowScope(deps.policy)
     ? searchCallIds(parsed.messages)
     : new Set<string | number>();
   if (!tools && searchIds.size === 0) return response;
 
   return filterResponse(response, deps, pathname, { tools, searchIds });
+}
+
+/**
+ * Answers `get_workflow_entry` without going upstream, or returns null when the
+ * request does not call it.
+ *
+ * A batch that mixes it with other calls is not split — the other half would
+ * still have to be forwarded and the two recombined, for a case no MCP client
+ * produces. Those fall through, and n8n rejects the unknown tool on its own
+ * terms, which is at least an honest answer.
+ */
+async function answerEntryTool(
+  parsed: { messages: JsonRpcMessage[]; isBatch: boolean },
+  pathname: string,
+  deps: McpGateDeps,
+): Promise<Response | null> {
+  if (!parsed.messages.every((m) => toolCallName(m) === ENTRY_TOOL_NAME)) return null;
+
+  let sets: Awaited<ReturnType<typeof deps.index.sets>>;
+  try {
+    sets = await deps.index.sets();
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    log(deps, pathname, `workflow index unavailable: ${reason}`, ENTRY_TOOL_NAME);
+    return jsonRpcResponse(
+      parsed.messages.map((m) =>
+        toolErrorResult(
+          m.id,
+          "This proxy could not verify whether that workflow is available over MCP. Try again shortly.",
+        ),
+      ),
+      parsed.isBatch,
+    );
+  }
+
+  const replies = parsed.messages.map((message) => {
+    const id = toolCallArguments(message).workflowId;
+    if (typeof id !== "string" || id === "") {
+      return toolErrorResult(message.id, `${ENTRY_TOOL_NAME} requires a workflowId.`);
+    }
+    if (!sets.allowed.has(id)) {
+      log(deps, pathname, `workflow out of MCP scope: ${id}`, ENTRY_TOOL_NAME);
+      return toolErrorResult(
+        message.id,
+        `Not available over MCP: ${id} (${explainRefusal(deps.policy, sets.facts.get(id))}).`,
+      );
+    }
+    // `allowed` is built from `facts`, so the lookup cannot miss.
+    return entryToolResult(message.id, sets.facts.get(id) as WorkflowFacts);
+  });
+
+  return jsonRpcResponse(replies, parsed.isBatch);
 }
 
 /**
@@ -329,8 +396,11 @@ async function filterResponse(
         if (!ok) removedTools++;
         return ok;
       });
-      if (kept.length === tools.length) return message;
-      return { ...message, result: { ...message.result, tools: kept } };
+      // Published beside n8n's own, never in place of one: this proxy adds a
+      // tool, it does not reshape what n8n serves.
+      const published = publishesEntryTool(deps.policy) ? [...kept, ENTRY_TOOL_DEFINITION] : kept;
+      if (published.length === tools.length) return message;
+      return { ...message, result: { ...message.result, tools: published } };
     }
 
     if (message.id === undefined || message.id === null || !plan.searchIds.has(message.id)) {
