@@ -19,6 +19,7 @@
  */
 
 import type { Workflow } from "@/api/types.ts";
+import { workflowProjectId } from "@/common/project-id.ts";
 import type { ClientMiddleware } from "@/middleware/types.ts";
 import { forwardRequest } from "../upstream.ts";
 import {
@@ -53,6 +54,8 @@ export interface WorkflowFacts {
   availableInMCP: boolean;
   /** The trigger n8n would start an MCP execution from, if any. */
   entry: EntryTrigger | null;
+  /** Owning n8n project, when upstream includes shared metadata. */
+  projectId: string;
 }
 
 export interface WorkflowSets {
@@ -289,5 +292,6 @@ function toFacts(workflow: Workflow): WorkflowFacts {
     tags: (workflow.tags ?? []).map((t) => t.name),
     availableInMCP: workflow.settings?.availableInMCP === true,
     entry: findEntryTrigger(workflow.nodes),
+    projectId: workflowProjectId(workflow),
   };
 }

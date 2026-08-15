@@ -18,6 +18,8 @@
  * server-to-client `GET` stream, session teardown — is forwarded untouched.
  */
 
+import type { ProjectRoleChecker } from "@/middleware/builtin/project-role/checker.ts";
+import { mcpToolAccessLevel } from "@/middleware/builtin/project-role/mcp-tools.ts";
 import type { EnforceLevel } from "../config.ts";
 import type { Logger } from "../logging.ts";
 import { forwardRequest } from "../upstream.ts";
@@ -55,6 +57,8 @@ export interface McpGateDeps {
   logger: Logger;
   timeoutMs?: number;
   clientMiddlewares?: import("@/middleware/types.ts").ClientMiddleware[];
+  /** When set, workflow-scoped tool calls also require n8n project membership. */
+  projectRoleChecker?: ProjectRoleChecker | null;
 }
 
 /**
@@ -111,7 +115,7 @@ export async function handleMcpRequest(req: Request, deps: McpGateDeps): Promise
 
   const refusals: JsonRpcMessage[] = [];
   for (const message of parsed.messages) {
-    const refusal = await refuse(message, pathname, deps);
+    const refusal = await refuse(message, pathname, deps, req);
     if (refusal) refusals.push(refusal);
   }
 
@@ -284,6 +288,7 @@ async function refuse(
   message: JsonRpcMessage,
   pathname: string,
   deps: McpGateDeps,
+  req: Request,
 ): Promise<JsonRpcMessage | null> {
   const tool = toolCallName(message);
   if (tool === null) return null;
@@ -332,21 +337,51 @@ async function refuse(
   if (target !== undefined) mentioned.add(target);
 
   const forbidden = [...mentioned].filter((id) => !sets.allowed.has(id));
-  if (forbidden.length === 0) return null;
+  if (forbidden.length > 0) {
+    // Name the reason. An agent told only "no" retries; one told the entry
+    // trigger declares no path can report something its user can act on.
+    const detail = forbidden
+      .map((id) => `${id} (${explainRefusal(deps.policy, sets.facts.get(id))})`)
+      .join("; ");
 
-  // Name the reason. An agent told only "no" retries; one told the entry
-  // trigger declares no path can report something its user can act on.
-  const detail = forbidden
-    .map((id) => `${id} (${explainRefusal(deps.policy, sets.facts.get(id))})`)
-    .join("; ");
+    log(deps, pathname, `workflow out of MCP scope: ${detail}`, tool);
+    return toolErrorResult(
+      message.id,
+      `Not available over MCP: ${detail}. Note that every workflow id anywhere in the arguments is ` +
+        "checked, so this may name one the call merely referenced — a sub-workflow, say — rather " +
+        "than the one it targeted. Ask the owner to bring it under this instance's MCP policy.",
+    );
+  }
 
-  log(deps, pathname, `workflow out of MCP scope: ${detail}`, tool);
-  return toolErrorResult(
-    message.id,
-    `Not available over MCP: ${detail}. Note that every workflow id anywhere in the arguments is ` +
-      "checked, so this may name one the call merely referenced — a sub-workflow, say — rather " +
-      "than the one it targeted. Ask the owner to bring it under this instance's MCP policy.",
-  );
+  if (deps.projectRoleChecker && target !== undefined) {
+    const level = mcpToolAccessLevel(tool);
+    if (level) {
+      const facts = sets.facts.get(target);
+      const projectId = facts?.projectId ?? "";
+      const email = deps.projectRoleChecker.resolveEmail({
+        workflow: null,
+        request: req,
+        mode: "proxy",
+      });
+      if (!email) {
+        log(deps, pathname, "project-role: missing identity", tool);
+        return toolErrorResult(
+          message.id,
+          "This proxy could not resolve the caller identity required for n8n project authorization.",
+        );
+      }
+      const verdict = await deps.projectRoleChecker.check({ email, projectId, level });
+      if (!verdict.allowed) {
+        log(deps, pathname, `project-role denied: ${verdict.reason ?? verdict.rule}`, tool);
+        return toolErrorResult(
+          message.id,
+          verdict.reason ?? "This caller lacks the n8n project role required for that tool.",
+        );
+      }
+    }
+  }
+
+  return null;
 }
 
 /**
