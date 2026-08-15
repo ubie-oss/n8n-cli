@@ -291,6 +291,7 @@ Summary (dry-run): 1 to create, 2 to update, 1 unchanged
 | `--disable-rule <name>` | Disable specific rule(s) |
 | `--list-rules` | List all rules |
 | `-o, --output <format>` | Output format: text, json (default: text) |
+| `--project <id>` | Project ID context for local files |
 
 **Rules (11 rules):**
 
@@ -317,9 +318,22 @@ Summary (dry-run): 1 to create, 2 to update, 1 unchanged
     "required-fields": "error",
     "orphaned-node": "warning",
     "implicit-json-ref": "off"
+  },
+  "projects": {
+    "<n8n-project-id>": {
+      "rules": {
+        "banned-node": ["error", {
+          "nodes": [{ "type": "n8n-nodes-base.code" }]
+        }]
+      }
+    }
   }
 }
 ```
+
+Top-level rules are global. Rules under a matching Project ID are an additional
+layer and cannot disable global policy. Remote lint detects the owner from the
+workflow; use `--project` for local files without ownership metadata.
 
 Config file search order:
 1. Path specified with `--config` flag

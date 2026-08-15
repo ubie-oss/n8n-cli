@@ -42,6 +42,7 @@ export class ProjectRoleChecker {
   }
 
   resolveProjectId(ctx: ServerMiddlewareContext): string {
+    if (ctx.projectId?.trim()) return ctx.projectId.trim();
     return workflowProjectId(ctx.workflow);
   }
 

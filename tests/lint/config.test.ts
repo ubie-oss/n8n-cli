@@ -106,4 +106,11 @@ describe("loadLintConfig auto-discovery", () => {
     expect(rc).toBeDefined();
     expect(rc!.severity).toBe("error");
   });
+
+  test("rejects malformed project blocks", () => {
+    const configPath = path.join(tmpDir, ".n8nlintrc.json");
+    fs.writeFileSync(configPath, JSON.stringify({ projects: { "project-a": "error" } }));
+
+    expect(() => loadLintConfig(configPath)).toThrow(/Invalid project config/);
+  });
 });

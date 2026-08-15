@@ -1,4 +1,4 @@
-import { STALE_WRITE_WARNING_HEADER } from "@/api/headers.ts";
+import { PROJECT_ID_HEADER, STALE_WRITE_WARNING_HEADER } from "@/api/headers.ts";
 import type { Workflow } from "@/api/types.ts";
 import { hasAllTags } from "@/common/tags.ts";
 import type { ProjectRoleChecker } from "@/middleware/builtin/project-role/checker.ts";
@@ -405,6 +405,8 @@ async function handleWorkflowMutation(
     mode: "proxy",
     action: mutation.action,
     workflowId: mutation.id,
+    projectId:
+      mutation.action === "create" ? (req.headers.get(PROJECT_ID_HEADER) ?? undefined) : undefined,
     fetchStoredWorkflow: (id) => fetchStoredWorkflow(id, apiKey, deps),
   });
 

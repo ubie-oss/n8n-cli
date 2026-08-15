@@ -86,6 +86,11 @@ export interface ServerMiddlewareContext {
   /** Target workflow id, when the operation names one (everything but create). */
   workflowId?: string;
   /**
+   * Target/owning n8n project ID when the host already knows it. Project-aware
+   * policies must prefer this value over caller-controlled workflow fields.
+   */
+  projectId?: string;
+  /**
    * Reads the *stored* state of a workflow from upstream. Middlewares that must
    * not trust the request body — an ACL the caller could rewrite in the same
    * call is no ACL — use this instead. Absent when the host cannot reach

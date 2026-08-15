@@ -1,7 +1,7 @@
 import type { Workflow, WorkflowInput } from "@/api/types.ts";
 import { findConfigFile, type LintConfig, loadLintConfig } from "./config.ts";
 import { lintWorkflow } from "./engine.ts";
-import type { RuleWithConfig } from "./registry.ts";
+import type { RuleRegistry, RuleWithConfig } from "./registry.ts";
 import { registerDefaultRules } from "./rules/index.ts";
 import type { Violation } from "./rules/violation.ts";
 
@@ -23,9 +23,12 @@ export interface WriteLintCheckResult {
  * lookup and rule registration are not repeated per file.
  */
 export interface WriteLintContext {
+  /** Global rules retained for backwards-compatible callers and diagnostics. */
   rules: RuleWithConfig[];
   config: LintConfig | null;
   configPath?: string;
+  registry?: RuleRegistry;
+  disabledRules?: string[];
 }
 
 /**
@@ -74,7 +77,13 @@ export function prepareWriteLintContext(
   }
   const registry = registerDefaultRules();
   const rules = registry.enabledRulesWithConfig(config, disableRules);
-  return { rules, config, configPath: resolvedPath };
+  return { rules, config, configPath: resolvedPath, registry, disabledRules: disableRules };
+}
+
+/** Resolves the global layer plus the matching project layer for one workflow. */
+export function rulesForProject(ctx: WriteLintContext, projectId?: string): RuleWithConfig[] {
+  if (!ctx.registry) return ctx.rules;
+  return ctx.registry.enabledRulesWithConfig(ctx.config, ctx.disabledRules, projectId);
 }
 
 /**
@@ -95,11 +104,17 @@ export function checkWorkflowForWrite(
   workflow: Workflow | WorkflowInput | null,
   rawJSON: string | undefined,
   ctx: WriteLintContext,
+  projectId?: string,
 ): WriteLintCheckResult {
   const payload = rawJSON ?? (workflow ? JSON.stringify(workflow) : "");
   let violations: Violation[];
   try {
-    violations = lintWorkflow(workflow as Workflow | null, payload, ctx.rules, ctx.config);
+    violations = lintWorkflow(
+      workflow as Workflow | null,
+      payload,
+      rulesForProject(ctx, projectId),
+      ctx.config,
+    );
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     violations = [

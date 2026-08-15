@@ -1,6 +1,6 @@
 import { describe, expect, it, mock } from "bun:test";
 import { Client } from "@/api/client.ts";
-import { BASE_UPDATED_AT_HEADER } from "@/api/headers.ts";
+import { BASE_UPDATED_AT_HEADER, PROJECT_ID_HEADER } from "@/api/headers.ts";
 import type { WorkflowInput } from "@/api/types.ts";
 import { WorkflowService } from "@/api/workflow-service.ts";
 import type { ClientMiddleware } from "@/middleware/types.ts";
@@ -75,6 +75,30 @@ describe("updateWorkflow base revision", () => {
       );
       await service.updateWorkflow("wf1", INPUT, "2026-03-01T10:00:00.000Z");
       expect(headers[0]?.get(BASE_UPDATED_AT_HEADER)).toBe("rewritten");
+    } finally {
+      restore();
+    }
+  });
+});
+
+describe("createWorkflow project context", () => {
+  it("sends the target project to a policy proxy", async () => {
+    const { headers, restore } = captureRequests();
+    try {
+      const service = new WorkflowService(new Client("https://n8n.example.com", "key"));
+      await service.createWorkflow(INPUT, "project-a");
+      expect(headers[0]?.get(PROJECT_ID_HEADER)).toBe("project-a");
+    } finally {
+      restore();
+    }
+  });
+
+  it("omits the project control header when no target is known", async () => {
+    const { headers, restore } = captureRequests();
+    try {
+      const service = new WorkflowService(new Client("https://n8n.example.com", "key"));
+      await service.createWorkflow(INPUT);
+      expect(headers[0]?.has(PROJECT_ID_HEADER)).toBe(false);
     } finally {
       restore();
     }

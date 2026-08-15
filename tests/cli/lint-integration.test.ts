@@ -486,6 +486,34 @@ describe("CLI lint: banned-node rule", () => {
     expect(banned.length).toBe(0);
   });
 
+  test("--project applies the matching project layer to local files", async () => {
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        projects: {
+          "project-a": {
+            rules: {
+              "banned-node": ["error", { nodes: [{ type: "n8n-nodes-base.executeCommand" }] }],
+            },
+          },
+        },
+      }),
+    );
+
+    const inProject = await runLint(["-f", fixture, "-c", configPath, "--project", "project-a"]);
+    expect(byRule(inProject.output.violations, "banned-node")).toHaveLength(1);
+
+    const inOtherProject = await runLint([
+      "-f",
+      fixture,
+      "-c",
+      configPath,
+      "--project",
+      "project-b",
+    ]);
+    expect(byRule(inOtherProject.output.violations, "banned-node")).toHaveLength(0);
+  });
+
   test("--list-rules includes banned-node", async () => {
     const proc = Bun.spawn(["bun", "run", CLI_ENTRY, "lint", "--list-rules"], {
       stdout: "pipe",

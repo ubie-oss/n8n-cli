@@ -118,8 +118,8 @@ export class Client {
   }
 
   /** Post performs a POST request */
-  async post(path: string, body?: unknown): Promise<string> {
-    return this.doRequest("POST", path, body);
+  async post(path: string, body?: unknown, extraHeaders?: Record<string, string>): Promise<string> {
+    return this.doRequest("POST", path, body, extraHeaders);
   }
 
   /** Put performs a PUT request */

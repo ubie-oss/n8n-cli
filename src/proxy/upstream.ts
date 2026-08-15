@@ -20,7 +20,7 @@
  * On the way back, `Content-Encoding` (and the now-stale `Content-Length`) are
  * dropped from the upstream response — see `normalizeResponseEncoding`.
  */
-import { BASE_UPDATED_AT_HEADER } from "@/api/headers.ts";
+import { BASE_UPDATED_AT_HEADER, PROJECT_ID_HEADER } from "@/api/headers.ts";
 import { runClientPipeline } from "@/middleware/client-pipeline.ts";
 import { claimCoversPath } from "@/middleware/header-claims.ts";
 import type { ClientMiddleware } from "@/middleware/types.ts";
@@ -29,7 +29,10 @@ import type { ClientMiddleware } from "@/middleware/types.ts";
  * Headers the proxy consumes itself. They address this hop, not n8n, so they
  * are dropped for the same reason hop-by-hop headers are.
  */
-const PROXY_CONTROL_HEADERS = [BASE_UPDATED_AT_HEADER.toLowerCase()];
+const PROXY_CONTROL_HEADERS = [
+  BASE_UPDATED_AT_HEADER.toLowerCase(),
+  PROJECT_ID_HEADER.toLowerCase(),
+];
 
 const HOP_BY_HOP_HEADERS = new Set([
   "connection",

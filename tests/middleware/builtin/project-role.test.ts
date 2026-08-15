@@ -97,6 +97,20 @@ describe("project roles", () => {
 });
 
 describe("ProjectRoleChecker", () => {
+  test("prefers an explicit host project over workflow metadata", () => {
+    const checker = new ProjectRoleChecker(options(), {
+      upstream: "http://n8n.invalid",
+      fetch: apiFetch([], []),
+    });
+    expect(
+      checker.resolveProjectId({
+        workflow: workflow(),
+        mode: "proxy",
+        projectId: "target-project",
+      }),
+    ).toBe("target-project");
+  });
+
   test("allows editor on write", async () => {
     const checker = new ProjectRoleChecker(options(), {
       upstream: "http://n8n.invalid",

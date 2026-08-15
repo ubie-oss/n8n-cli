@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { PROJECT_ID_HEADER } from "@/api/headers.ts";
 import { matchWorkflowMutation } from "@/proxy/rest/router.ts";
 import { type ProxyHandle, startProxy } from "@/proxy/server.ts";
 
@@ -71,6 +72,32 @@ const CLEAN_WORKFLOW = JSON.stringify({
   connections: {},
 });
 
+const CODE_WORKFLOW = JSON.stringify({
+  name: "Code WF",
+  active: false,
+  nodes: [
+    {
+      id: "trigger",
+      name: "Trigger",
+      type: "n8n-nodes-base.manualTrigger",
+      typeVersion: 1,
+      position: [0, 0],
+      parameters: {},
+    },
+    {
+      id: "code",
+      name: "Code",
+      type: "n8n-nodes-base.code",
+      typeVersion: 2,
+      position: [200, 0],
+      parameters: { jsCode: "return [];" },
+    },
+  ],
+  connections: {
+    Trigger: { main: [[{ node: "Code", type: "main", index: 0 }]] },
+  },
+});
+
 let tmpDir: string;
 let proxy: ProxyHandle;
 let upstream: MockUpstream;
@@ -78,6 +105,29 @@ let upstream: MockUpstream;
 function writeConfig(rules: Record<string, unknown>): string {
   const configPath = path.join(tmpDir, ".n8nlintrc.json");
   fs.writeFileSync(configPath, JSON.stringify({ rules }));
+  return configPath;
+}
+
+function writeProjectConfig(): string {
+  const configPath = path.join(tmpDir, ".n8nlintrc.json");
+  fs.writeFileSync(
+    configPath,
+    JSON.stringify({
+      rules: {
+        "banned-node": ["error", { nodes: [{ type: "global.node" }] }],
+      },
+      projects: {
+        "project-a": {
+          rules: {
+            "banned-node": [
+              "error",
+              { nodes: [{ type: "n8n-nodes-base.code", reason: "project policy" }] },
+            ],
+          },
+        },
+      },
+    }),
+  );
   return configPath;
 }
 
@@ -285,5 +335,59 @@ describe("proxy: lint config", () => {
 
     expect(res.status).toBe(200);
     expect(upstream.captured).toHaveLength(1);
+  });
+
+  test("create uses the declared project and strips the proxy control header", async () => {
+    const configPath = writeProjectConfig();
+    startWithEnforce("error", configPath);
+
+    const blocked = await fetch(proxyURL("/api/v1/workflows"), {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-n8n-api-key": "k",
+        [PROJECT_ID_HEADER]: "project-a",
+      },
+      body: CODE_WORKFLOW,
+    });
+    expect(blocked.status).toBe(422);
+    expect(upstream.captured).toHaveLength(0);
+
+    const allowed = await fetch(proxyURL("/api/v1/workflows"), {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-n8n-api-key": "k",
+        [PROJECT_ID_HEADER]: "project-b",
+      },
+      body: CODE_WORKFLOW,
+    });
+    expect(allowed.status).toBe(200);
+    expect(upstream.captured).toHaveLength(1);
+    expect(upstream.captured[0]?.headers[PROJECT_ID_HEADER.toLowerCase()]).toBeUndefined();
+  });
+
+  test("update resolves project ownership from the stored workflow", async () => {
+    const configPath = writeProjectConfig();
+    startWithEnforce("error", configPath);
+    upstream.respondWith(
+      200,
+      JSON.stringify({
+        ...JSON.parse(CODE_WORKFLOW),
+        id: "wf-project-a",
+        shared: [{ role: "workflow:owner", projectId: "project-a" }],
+      }),
+    );
+
+    const res = await fetch(proxyURL("/api/v1/workflows/wf-project-a"), {
+      method: "PUT",
+      headers: { "content-type": "application/json", "x-n8n-api-key": "k" },
+      body: CODE_WORKFLOW,
+    });
+
+    expect(res.status).toBe(422);
+    expect(upstream.captured).toHaveLength(1);
+    expect(upstream.captured[0]?.method).toBe("GET");
+    expect(upstream.captured[0]?.pathname).toBe("/api/v1/workflows/wf-project-a");
   });
 });
