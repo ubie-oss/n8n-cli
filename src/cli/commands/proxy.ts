@@ -86,6 +86,18 @@ interface ProxyOptions extends McpCliOptions {
   impersonatorVerifyEnforce?: string;
   impersonatorVerifyRequirement?: string;
   impersonatorVerifyExpectedAudiences?: string;
+  // project-role server middleware — enforces n8n built-in project roles.
+  projectRoleEnforce?: string;
+  projectRoleOnError?: string;
+  projectRoleOnMissingProject?: string;
+  projectRoleIdentitySource?: string;
+  projectRoleIdentityName?: string;
+  projectRoleIdentityDecode?: string;
+  projectRoleIdentityClaim?: string;
+  projectRoleMembersCacheTtlMs?: string;
+  projectRoleInstanceRoleCacheTtlMs?: string;
+  projectRoleTimeoutMs?: string;
+  projectRoleActions?: string;
 }
 
 export function registerProxyCommand(program: Command): void {
@@ -297,6 +309,51 @@ export function registerProxyCommand(program: Command): void {
       "--stale-write-actions <actions>",
       "Comma-separated route actions the guard applies to (default: update)",
     )
+    // project-role — mirrors n8n's built-in project Admin/Editor/Viewer roles.
+    .option(
+      "--project-role-enforce <level>",
+      "project-role enforcement level: off (default), warn, error. Requires user:list on the proxy's service API key for membership lookups. env: N8N_PROJECT_ROLE_ENFORCE",
+    )
+    .option(
+      "--project-role-on-error <mode>",
+      "Behavior when n8n membership lookups fail: deny (default) or allow. env: N8N_PROJECT_ROLE_ON_ERROR",
+    )
+    .option(
+      "--project-role-on-missing-project <mode>",
+      "What to do when the target workflow declares no project (typical on create): allow (default) or deny. env: N8N_PROJECT_ROLE_ON_MISSING_PROJECT",
+    )
+    .option(
+      "--project-role-identity-source <kind>",
+      "Where to read the caller email when oauth-verify did not populate it: header, env, none. env: N8N_PROJECT_ROLE_IDENTITY_SOURCE",
+    )
+    .option(
+      "--project-role-identity-name <name>",
+      "Header or env-var name holding the caller email. env: N8N_PROJECT_ROLE_IDENTITY_NAME",
+    )
+    .option(
+      "--project-role-identity-decode <mode>",
+      "Identity decode strategy: raw, jwt. env: N8N_PROJECT_ROLE_IDENTITY_DECODE",
+    )
+    .option(
+      "--project-role-identity-claim <name>",
+      "JWT claim name when decode=jwt. env: N8N_PROJECT_ROLE_IDENTITY_CLAIM",
+    )
+    .option(
+      "--project-role-members-cache-ttl-ms <ms>",
+      "Project member list cache TTL in milliseconds (default: 60000). env: N8N_PROJECT_ROLE_MEMBERS_CACHE_TTL_MS",
+    )
+    .option(
+      "--project-role-instance-role-cache-ttl-ms <ms>",
+      "Instance user role cache TTL in milliseconds (default: 60000). env: N8N_PROJECT_ROLE_INSTANCE_ROLE_CACHE_TTL_MS",
+    )
+    .option(
+      "--project-role-timeout-ms <ms>",
+      "HTTP timeout for n8n membership lookups in milliseconds (default: 10000). env: N8N_PROJECT_ROLE_TIMEOUT_MS",
+    )
+    .option(
+      "--project-role-actions <actions>",
+      "Comma-separated actions to authorize (default: all). Include read for GET /workflows/:id and MCP read tools. env: N8N_PROJECT_ROLE_ACTIONS",
+    )
     // oauth-verify — verifies incoming Authorization: Bearer via Google tokeninfo.
     .option(
       "--oauth-verify-enforce <level>",
@@ -443,6 +500,17 @@ export function extractMiddlewareCliOpts(opts: ProxyOptions): Record<string, unk
   copy("staleWriteOnMissingBase");
   copy("staleWriteOnError");
   copy("staleWriteActions");
+  copy("projectRoleEnforce");
+  copy("projectRoleOnError");
+  copy("projectRoleOnMissingProject");
+  copy("projectRoleIdentitySource");
+  copy("projectRoleIdentityName");
+  copy("projectRoleIdentityDecode");
+  copy("projectRoleIdentityClaim");
+  copy("projectRoleMembersCacheTtlMs");
+  copy("projectRoleInstanceRoleCacheTtlMs");
+  copy("projectRoleTimeoutMs");
+  copy("projectRoleActions");
   copy("oauthVerifyEnforce");
   copy("oauthVerifyExpectedAudiences");
   copy("oauthVerifyTrustedPrincipals");

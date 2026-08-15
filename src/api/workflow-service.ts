@@ -1,3 +1,4 @@
+import { workflowProjectId } from "@/common/project-id.ts";
 import type { Client } from "./client.ts";
 import { BASE_UPDATED_AT_HEADER } from "./headers.ts";
 import type { ListWorkflowsResponse, TransferInput, Workflow, WorkflowInput } from "./types.ts";
@@ -140,17 +141,6 @@ export class WorkflowService {
    * Returns empty string if the workflow has no shared project info.
    */
   getWorkflowCurrentProjectID(workflow: Workflow | null): string {
-    if (!workflow?.shared?.length) {
-      return "";
-    }
-
-    // Find the owner project
-    const owner = workflow.shared.find((s) => s.role === "workflow:owner");
-    if (owner) {
-      return owner.projectId;
-    }
-
-    // Fallback to first project if no owner found
-    return workflow.shared[0]?.projectId ?? "";
+    return workflowProjectId(workflow);
   }
 }

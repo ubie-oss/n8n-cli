@@ -1,6 +1,8 @@
 import { STALE_WRITE_WARNING_HEADER } from "@/api/headers.ts";
 import type { Workflow } from "@/api/types.ts";
 import { hasAllTags } from "@/common/tags.ts";
+import type { ProjectRoleChecker } from "@/middleware/builtin/project-role/checker.ts";
+import { extractProjectRoleChecker } from "@/middleware/builtin/project-role/middleware.ts";
 import { STALE_WRITE_RULE } from "@/middleware/builtin/stale-write/middleware.ts";
 import { buildClientMiddlewares } from "@/middleware/client-registry.ts";
 import {
@@ -22,6 +24,8 @@ import {
   buildDuplicateResponse,
   buildErrorResponse,
 } from "./response.ts";
+import { evaluateWorkflowReadGate } from "./rest/read-gate.ts";
+import { matchWorkflowRead } from "./rest/read-router.ts";
 import { matchWorkflowMutation, type WorkflowMutation } from "./rest/router.ts";
 import { forwardRequest } from "./upstream.ts";
 
@@ -52,6 +56,7 @@ interface HandlerDeps {
   readiness: ReadinessState;
   /** Built when the operator configured an MCP policy; absent otherwise. */
   mcp: McpGateDeps | null;
+  projectRoleChecker: ProjectRoleChecker | null;
 }
 
 /** Starts the proxy server. Returns a handle so tests can stop it cleanly. */
@@ -80,21 +85,8 @@ export function startProxy(config: ProxyConfig): ProxyHandle {
   // Stitch the legacy --enforce / --lint-config / --disable-rule flags into
   // the lint middleware's CLI options bag. This lets the existing test
   // surface keep working without callers having to change to the new flags.
-  const legacyCliOpts: Record<string, unknown> = {
-    lintEnforce: config.enforce,
-    ...(config.lintConfigPath ? { lintConfig: config.lintConfigPath } : {}),
-    ...(config.disableRules.length ? { lintDisableRule: config.disableRules } : {}),
-    ...(config.middlewareCliOptions ?? {}),
-  };
-
-  const middlewares = buildMiddlewares({
-    enabled,
-    env: process.env,
-    cliOpts: legacyCliOpts,
-  });
-
-  // Resolve and build the client-side (outgoing) middleware chain. Empty by
-  // default — deployments without IAP / shared API key skip this entirely.
+  // Resolve and build the client-side (outgoing) middleware chain first —
+  // project-role membership lookups run through it when listing members.
   const enabledClient = resolveEnabledList({
     cliValue: config.clientMiddlewares?.join(","),
     env: process.env,
@@ -106,6 +98,23 @@ export function startProxy(config: ProxyConfig): ProxyHandle {
     env: process.env,
     cliOpts: config.clientMiddlewareCliOptions ?? {},
   });
+
+  const legacyCliOpts: Record<string, unknown> = {
+    lintEnforce: config.enforce,
+    ...(config.lintConfigPath ? { lintConfig: config.lintConfigPath } : {}),
+    ...(config.disableRules.length ? { lintDisableRule: config.disableRules } : {}),
+    ...(config.middlewareCliOptions ?? {}),
+    projectRoleUpstream: upstream,
+    clientMiddlewares,
+  };
+
+  const middlewares = buildMiddlewares({
+    enabled,
+    env: process.env,
+    cliOpts: legacyCliOpts,
+  });
+
+  const projectRoleChecker = extractProjectRoleChecker(middlewares);
 
   const mcpSettings = config.mcp ?? null;
   const mcp: McpGateDeps | null = mcpSettings
@@ -125,6 +134,7 @@ export function startProxy(config: ProxyConfig): ProxyHandle {
         logger,
         timeoutMs: config.upstreamTimeoutMs,
         clientMiddlewares,
+        projectRoleChecker,
       }
     : null;
 
@@ -185,6 +195,7 @@ export function startProxy(config: ProxyConfig): ProxyHandle {
     clientMiddlewares,
     readiness,
     mcp,
+    projectRoleChecker,
   };
 
   const server = Bun.serve({
@@ -293,6 +304,28 @@ async function handleTransparentForward(
   pathname: string,
   deps: HandlerDeps,
 ): Promise<Response> {
+  const read = matchWorkflowRead(req.method, pathname);
+  if (read && deps.projectRoleChecker) {
+    try {
+      const denial = await evaluateWorkflowReadGate(req, read.id, {
+        checker: deps.projectRoleChecker,
+        fetchStoredWorkflow: (id, apiKey) => fetchStoredWorkflow(id, apiKey, deps),
+      });
+      if (denial?.block) {
+        deps.logger.log({
+          action: "block",
+          method: req.method,
+          path: pathname,
+          status: denial.denial?.status ?? 403,
+          message: denial.denial?.message,
+        });
+        return buildDenialResponse(denial);
+      }
+    } catch (err) {
+      return reportError(err, req, pathname, deps);
+    }
+  }
+
   try {
     const { response, elapsedMs } = await forwardRequest(req, deps.upstream, undefined, {
       timeoutMs: deps.config.upstreamTimeoutMs,
