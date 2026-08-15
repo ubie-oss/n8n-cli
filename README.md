@@ -1184,7 +1184,9 @@ Name `get_workflow_entry` in `--mcp-allow-tools` and the gate publishes a small 
 
 `entry` is resolved exactly as reachability is, so the trigger reported is the node n8n would start from, and its `parameters` carry what building `inputs` needs — a form trigger's `formFields`, a webhook's `httpMethod`.
 
-**It adds, it does not rewrite.** n8n's `get_workflow_details` keeps behaving exactly as n8n serves it; an operator who wants only the small one leaves the large one out of the allowlist. Nothing here makes this proxy responsible for a response shape it does not own. It also costs no upstream call — the gate already holds these facts, because resolving the entry trigger is how it decides reachability. The same scope applies: a workflow outside the policy is refused with the reason, not described.
+The description costs one `GET /api/v1/workflows/{id}`, once per workflow per cache lifetime, and only for a workflow the policy already allows: n8n's workflow *listing* — which is what the gate's index is built from — omits `description` entirely, and only the per-workflow read carries it. If that read fails the tool still answers, without the description: the trigger information is the part a caller cannot get anywhere else.
+
+**It adds, it does not rewrite.** n8n's `get_workflow_details` keeps behaving exactly as n8n serves it; an operator who wants only the small one leaves the large one out of the allowlist. Nothing here makes this proxy responsible for a response shape it does not own. The trigger half costs no upstream call at all — resolving the entry trigger is already how the gate decides reachability. The same scope applies: a workflow outside the policy is refused with the reason, not described.
 
 It must be named in `--mcp-allow-tools` rather than merely permitted by an empty one, so upgrading the proxy never adds a tool to a client's list on its own.
 

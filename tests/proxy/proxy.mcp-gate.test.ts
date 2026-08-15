@@ -89,7 +89,7 @@ const WORKFLOWS = [
 
 /** Mock n8n: the MCP endpoint plus enough of the public API to build an index. */
 function startMockUpstream(
-  options: { sse?: boolean; listFails?: boolean; inflatedCount?: number } = {},
+  options: { sse?: boolean; listFails?: boolean; readFails?: boolean; inflatedCount?: number } = {},
 ): {
   server: ReturnType<typeof Bun.serve>;
   port: number;
@@ -105,7 +105,18 @@ function startMockUpstream(
 
       if (url.pathname === "/api/v1/workflows") {
         if (options.listFails) return new Response("nope", { status: 503 });
+        // Deliberately without `description`: a live 2.32.5 instance omits the
+        // field from the listing entirely, and only the per-workflow read has
+        // it. An index built from this cannot know descriptions.
         return Response.json({ data: WORKFLOWS, nextCursor: null });
+      }
+
+      if (url.pathname.startsWith("/api/v1/workflows/")) {
+        if (options.readFails) return new Response("nope", { status: 503 });
+        const id = url.pathname.slice("/api/v1/workflows/".length);
+        const workflow = WORKFLOWS.find((w) => w.id === id);
+        if (!workflow) return new Response("not found", { status: 404 });
+        return Response.json({ ...workflow, description: `what ${workflow.name} does` });
       }
 
       let request: { id?: unknown; method?: string; params?: { name?: string } } = {};
@@ -662,10 +673,44 @@ describe("MCP gate: get_workflow_entry", () => {
     expect(seen.entry?.parameters).toBeDefined();
   });
 
-  test("answers without going upstream at all", async () => {
+  test("never touches n8n's MCP endpoint", async () => {
     start(policy({ allowTools: ALLOW, entryPathPattern: "__mcp__/*" }));
     await entry("wf-open");
     expect(upstream.captured.some((c) => c.pathname === "/mcp-server/http")).toBe(false);
+  });
+
+  test("carries the description, which the listing does not have", async () => {
+    // The whole promise of this tool is description + entry. n8n's workflow
+    // listing omits `description` entirely — only the per-workflow read has it
+    // — so the index cannot supply it and the gate has to ask.
+    start(policy({ allowTools: ALLOW, entryPathPattern: "__mcp__/*" }));
+    expect(payload(await entry("wf-open")).description).toBe("what [mcp] hospital lookup does");
+  });
+
+  test("the per-workflow read happens once, and only for an allowed workflow", async () => {
+    start(policy({ allowTools: ALLOW, entryPathPattern: "__mcp__/*" }));
+    await entry("wf-open");
+    await entry("wf-open");
+    await entry("wf-tagged-only");
+
+    const reads = upstream.captured.filter((c) => c.pathname.startsWith("/api/v1/workflows/"));
+    expect(reads).toHaveLength(1);
+    expect(reads[0]?.pathname).toBe("/api/v1/workflows/wf-open");
+  });
+
+  test("a description that cannot be read still answers with the entry", async () => {
+    // Trading the useful half for nothing would be the wrong failure: the
+    // trigger information is what the caller cannot get anywhere else.
+    await upstream.server.stop(true);
+    upstream = startMockUpstream({ readFails: true });
+    start(policy({ allowTools: ALLOW, entryPathPattern: "__mcp__/*" }));
+
+    const seen = payload(await entry("wf-open")) as {
+      description?: string;
+      entry?: { name?: string };
+    };
+    expect(seen.description).toBeUndefined();
+    expect(seen.entry?.name).toBe("[MCP] entry");
   });
 
   test("both channels carry the same payload, the way n8n builds its own", async () => {

@@ -19,6 +19,7 @@
  */
 
 import type { Workflow } from "@/api/types.ts";
+import { workflowProjectId } from "@/common/project-id.ts";
 import type { ClientMiddleware } from "@/middleware/types.ts";
 import { forwardRequest } from "../upstream.ts";
 import {
@@ -41,11 +42,20 @@ interface ListResponse {
 export interface WorkflowFacts {
   id: string;
   name: string;
+  /**
+   * Absent until {@link AllowedWorkflowIndex.fillDescription} asks for it: the
+   * workflow listing does not carry descriptions, only the per-workflow read
+   * does.
+   */
   description?: string;
+  /** Whether the per-workflow read has been attempted, successful or not. */
+  descriptionFetched?: boolean;
   tags: string[];
   availableInMCP: boolean;
   /** The trigger n8n would start an MCP execution from, if any. */
   entry: EntryTrigger | null;
+  /** Owning n8n project, when upstream includes shared metadata. */
+  projectId: string;
 }
 
 export interface WorkflowSets {
@@ -169,6 +179,49 @@ export class AllowedWorkflowIndex {
     return this.inFlight;
   }
 
+  /**
+   * Fills in a workflow's description, which the listing does not carry.
+   *
+   * Measured against a live 2.32.5 instance: `GET /api/v1/workflows` answers
+   * without a `description` field at all, while `GET /api/v1/workflows/{id}`
+   * has it. So the index cannot know descriptions, and anything that needs one
+   * has to ask per workflow — which is fine as long as it is only asked for a
+   * workflow the policy already allows.
+   *
+   * Best effort. A workflow described without its description is still worth
+   * returning; failing the whole call over it would trade the useful half for
+   * nothing. Resolves once per workflow per cache lifetime, because the result
+   * is written back onto the cached facts.
+   */
+  async fillDescription(facts: WorkflowFacts): Promise<void> {
+    if (facts.description !== undefined || facts.descriptionFetched) return;
+    facts.descriptionFetched = true;
+
+    try {
+      const url = new URL(
+        `/api/v1/workflows/${encodeURIComponent(facts.id)}`,
+        "http://mcp-gate.invalid",
+      );
+      url.searchParams.set("excludePinnedData", "true");
+      const { response } = await forwardRequest(
+        new Request(url.toString(), {
+          method: "GET",
+          headers: new Headers({ accept: "application/json" }),
+        }),
+        this.deps.upstream,
+        undefined,
+        { timeoutMs: this.deps.timeoutMs, clientMiddlewares: this.deps.clientMiddlewares },
+      );
+      if (!response.ok) return;
+      const body = (await response.json()) as { description?: unknown };
+      if (typeof body.description === "string" && body.description !== "") {
+        facts.description = body.description;
+      }
+    } catch {
+      // Left without a description; see above.
+    }
+  }
+
   private async fetchSets(): Promise<WorkflowSets> {
     const facts = new Map<string, WorkflowFacts>();
     const allowed = new Set<string>();
@@ -239,5 +292,6 @@ function toFacts(workflow: Workflow): WorkflowFacts {
     tags: (workflow.tags ?? []).map((t) => t.name),
     availableInMCP: workflow.settings?.availableInMCP === true,
     entry: findEntryTrigger(workflow.nodes),
+    projectId: workflowProjectId(workflow),
   };
 }

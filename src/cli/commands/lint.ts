@@ -1,6 +1,6 @@
 import type { Command } from "commander";
 import { resolveContext } from "@/cli/root.ts";
-import { workflowProjectId } from "@/common/project.ts";
+import { workflowProjectId } from "@/common/project-id.ts";
 import { hasAllTags, parseTagFilter } from "@/common/tags.ts";
 import { findConfigFile, loadLintConfig } from "@/lint/config.ts";
 import { lintWorkflow } from "@/lint/engine.ts";

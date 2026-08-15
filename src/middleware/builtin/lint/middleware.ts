@@ -1,4 +1,4 @@
-import { workflowProjectId } from "@/common/project.ts";
+import { workflowProjectId } from "@/common/project-id.ts";
 import { hasErrorViolations, lintWorkflow } from "@/lint/engine.ts";
 import type { Violation } from "@/lint/rules/violation.ts";
 import {

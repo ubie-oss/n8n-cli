@@ -1,4 +1,4 @@
-import { workflowProjectId } from "@/common/project.ts";
+import { workflowProjectId } from "@/common/project-id.ts";
 import type { Client } from "./client.ts";
 import { BASE_UPDATED_AT_HEADER, PROJECT_ID_HEADER } from "./headers.ts";
 import type { ListWorkflowsResponse, TransferInput, Workflow, WorkflowInput } from "./types.ts";
@@ -142,6 +142,6 @@ export class WorkflowService {
    * Returns empty string if the workflow has no shared project info.
    */
   getWorkflowCurrentProjectID(workflow: Workflow | null): string {
-    return workflowProjectId(workflow) ?? "";
+    return workflowProjectId(workflow);
   }
 }

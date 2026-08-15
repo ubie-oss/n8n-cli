@@ -2,6 +2,7 @@ import { authzFactory } from "./builtin/authz/factory.ts";
 import { impersonatorVerifyFactory } from "./builtin/impersonator-verify/factory.ts";
 import { lintFactory } from "./builtin/lint/factory.ts";
 import { oauthVerifyFactory } from "./builtin/oauth-verify/factory.ts";
+import { projectRoleFactory } from "./builtin/project-role/factory.ts";
 import { staleWriteFactory } from "./builtin/stale-write/factory.ts";
 import { knownMiddlewareNames, registerFactory } from "./registry.ts";
 
@@ -17,6 +18,7 @@ export function registerBuiltins(): void {
   registerFactory(oauthVerifyFactory);
   registerFactory(impersonatorVerifyFactory);
   registerFactory(staleWriteFactory);
+  registerFactory(projectRoleFactory);
 }
 
 /**

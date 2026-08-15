@@ -15,8 +15,11 @@
  * working exactly as it does; an operator who wants only the small one simply
  * leaves the large one out of `--mcp-allow-tools`.
  *
- * It costs no upstream call: the gate already holds these facts, because it has
- * to resolve the entry trigger to decide reachability at all.
+ * The trigger half costs no upstream call: the gate already holds it, because
+ * it has to resolve the entry trigger to decide reachability at all. The
+ * description costs one per-workflow read, once per cache lifetime — n8n's
+ * workflow listing does not carry descriptions, only the single-workflow
+ * endpoint does.
  */
 
 import type { JsonRpcMessage } from "./jsonrpc.ts";
