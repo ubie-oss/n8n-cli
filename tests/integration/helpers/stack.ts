@@ -49,25 +49,25 @@ export async function startStack(opts: StackOptions = {}): Promise<Stack> {
   }
 
   const mock = startN8nMock(opts);
-  const proxy = startProxy({
-    listen: "127.0.0.1:0",
-    upstream: `http://127.0.0.1:${mock.port}`,
-    enforce: opts.enforce ?? "error",
-    disableRules: [],
-    logFormat: "json",
-    allowDuplicates: opts.allowDuplicates ?? true,
-    ...(opts.middlewares ? { middlewares: opts.middlewares } : {}),
-    ...(opts.middlewareCliOptions ? { middlewareCliOptions: opts.middlewareCliOptions } : {}),
-    ...(opts.clientMiddlewares ? { clientMiddlewares: opts.clientMiddlewares } : {}),
-    ...(opts.clientMiddlewareCliOptions
-      ? { clientMiddlewareCliOptions: opts.clientMiddlewareCliOptions }
-      : {}),
-  });
-
+  let proxy: ProxyHandle | undefined;
   try {
+    proxy = startProxy({
+      listen: "127.0.0.1:0",
+      upstream: `http://127.0.0.1:${mock.port}`,
+      enforce: opts.enforce ?? "error",
+      disableRules: [],
+      logFormat: "json",
+      allowDuplicates: opts.allowDuplicates ?? true,
+      ...(opts.middlewares ? { middlewares: opts.middlewares } : {}),
+      ...(opts.middlewareCliOptions ? { middlewareCliOptions: opts.middlewareCliOptions } : {}),
+      ...(opts.clientMiddlewares ? { clientMiddlewares: opts.clientMiddlewares } : {}),
+      ...(opts.clientMiddlewareCliOptions
+        ? { clientMiddlewareCliOptions: opts.clientMiddlewareCliOptions }
+        : {}),
+    });
     await waitReady(proxy.port);
   } catch (err) {
-    await proxy.stop();
+    await proxy?.stop();
     await mock.stop();
     restoreEnv(previousEnv);
     throw err;
