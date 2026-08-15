@@ -72,6 +72,30 @@ jobs:
       - name: Run tests
         run: bun test
 
+  # Named gate for the CLI → proxy → mock n8n hop. `bun test` above already
+  # includes these files; this job exists so a contract break between the CLI
+  # HTTP client and the proxy shows up as its own required check, not a line
+  # buried in the unit suite.
+  integration:
+    name: Integration
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # ratchet:actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # ratchet:oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Generate schemas
+        run: bun run generate-schemas
+
+      - name: Run CLI → proxy → mock n8n tests
+        run: bun test tests/integration/
+
   licenses:
     name: Third-Party Licenses
     runs-on: ubuntu-latest
@@ -95,7 +119,7 @@ jobs:
   build:
     name: Build
     runs-on: ubuntu-latest
-    needs: [lint, typecheck, test, licenses]
+    needs: [lint, typecheck, test, licenses, integration]
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # ratchet:actions/checkout@v4
 

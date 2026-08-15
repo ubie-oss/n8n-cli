@@ -78,7 +78,7 @@ make cross-compile
 ## Running Tests
 
 ```bash
-# Run all tests (unit + CLI + CLI→proxy→mock stack). This is what CI runs.
+# Run all tests (unit + CLI + CLI→proxy→mock stack)
 make test
 
 # Or directly with Bun
@@ -92,7 +92,7 @@ bun test tests/lint/rules/some-rule.test.ts
 bun test tests/integration/cli-through-proxy.test.ts
 ```
 
-`tests/integration/` stands up the full hop `CLI → proxy → mock n8n` in-process (ephemeral ports, no Docker). It is included in `make test` / the CI `bun test` job, so a contract break between the CLI HTTP client and the proxy fails the same gate as a unit regression.
+`tests/integration/` stands up the full hop `CLI → proxy → mock n8n` in-process (ephemeral ports, no Docker). CI runs it twice on purpose: inside the Test job (`bun test`) and as a dedicated Integration job (`bun test tests/integration/`) that `build` waits on, so a contract break between the CLI HTTP client and the proxy is a required check of its own.
 
 ## Type Checking
 
