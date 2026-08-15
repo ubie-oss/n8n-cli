@@ -42,7 +42,7 @@ test:
 	bun test
 
 test-integration:
-	bun test tests/cli/
+	bun test tests/cli/ tests/integration/
 
 typecheck:
 	bunx tsc --noEmit
