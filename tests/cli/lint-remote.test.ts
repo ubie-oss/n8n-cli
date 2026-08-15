@@ -90,6 +90,26 @@ function writeScheduleOnlyConfig(dir: string): string {
   return configPath;
 }
 
+function writeProjectRulesConfig(dir: string): string {
+  const configPath = path.join(dir, ".n8nlintrc.json");
+  fs.writeFileSync(
+    configPath,
+    JSON.stringify({
+      rules: {
+        "banned-node": ["error", { nodes: [{ type: "global.node" }] }],
+      },
+      projects: {
+        "project-a": {
+          rules: {
+            "banned-node": ["error", { nodes: [{ type: "project.node" }] }],
+          },
+        },
+      },
+    }),
+  );
+  return configPath;
+}
+
 /** Start a mock n8n API server that returns the given workflows. */
 async function startMockServer(
   workflows: Workflow[],
@@ -178,6 +198,48 @@ describe("CLI lint --remote: 基本機能", () => {
       const v = output.violations.find((v) => v.rule === "schedule-trigger-frequency");
       expect(v).toBeDefined();
       expect(v!.file).toBe("My Workflow (wf-1)");
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test("workflow の owner project に対応する追加ルールだけを適用する", async () => {
+    const projectNode = (id: string): Workflow["nodes"][number] => ({
+      id: `node-${id}`,
+      name: `Node ${id}`,
+      type: "project.node",
+      typeVersion: 1,
+      position: [0, 0],
+    });
+    const inProjectA = makeWorkflow({
+      id: "wf-project-a",
+      name: "Project A workflow",
+      nodes: [projectNode("a")],
+      shared: [{ role: "workflow:owner", projectId: "project-a" }],
+    });
+    const inProjectB = makeWorkflow({
+      id: "wf-project-b",
+      name: "Project B workflow",
+      nodes: [projectNode("b")],
+      shared: [{ role: "workflow:owner", projectId: "project-b" }],
+    });
+    ({ server } = await startMockServer([inProjectA, inProjectB]));
+    apiURL = `http://localhost:${server.port}`;
+
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "lint-remote-project-"));
+    const configPath = writeProjectRulesConfig(tmpDir);
+
+    try {
+      const { output, exitCode } = await runLint(["--remote", "-c", configPath], {
+        N8N_API_URL: apiURL,
+        N8N_API_KEY: "test-key",
+      });
+
+      expect(exitCode).toBe(1);
+      const projectFindings = output.violations.filter(
+        (v) => v.rule === "banned-node" && v.message.includes("project.node"),
+      );
+      expect(projectFindings.map((v) => v.file)).toEqual(["Project A workflow (wf-project-a)"]);
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }

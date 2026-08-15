@@ -255,6 +255,7 @@ export class Executor {
         workflow,
         rawJSON: undefined,
         mode: "apply",
+        projectId: this.opts.projectID || undefined,
       });
       op.middlewareViolations = verdict.violations;
       // Preserve `lintViolations` for any consumer that still reads it.
@@ -482,7 +483,10 @@ export class Executor {
       staticData: workflow.staticData,
     };
 
-    const created = await this.workflowService.createWorkflow(input);
+    const created = await this.workflowService.createWorkflow(
+      input,
+      this.opts.projectID || undefined,
+    );
     await this.applyTagsAndProject(created, workflow, op);
     await updateLocalWorkflowFile(wf.path, await this.settledWorkflow(created, op));
   }

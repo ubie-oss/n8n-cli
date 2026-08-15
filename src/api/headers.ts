@@ -18,5 +18,12 @@
  */
 export const BASE_UPDATED_AT_HEADER = "X-N8n-Base-Updated-At";
 
+/**
+ * Intended owner project for a workflow create. The public n8n create payload
+ * does not carry project ownership, so CLI clients declare the project to a
+ * policy proxy on this hop; the proxy strips the header before forwarding.
+ */
+export const PROJECT_ID_HEADER = "X-N8n-Project-Id";
+
 /** Set on a forwarded response when the stale-write guard runs in `warn` mode. */
 export const STALE_WRITE_WARNING_HEADER = "X-N8n-Stale-Write-Warning";

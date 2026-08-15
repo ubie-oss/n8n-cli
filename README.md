@@ -214,6 +214,7 @@ n8n-cli lint [options]
 | `--list-rules` | List all available rules and exit |
 | `-o, --output <format>` | Output format: `text`, `json` (default: `text`) |
 | `--tags <tags>` | Filter by tags (comma-separated, AND condition) |
+| `--project <id>` | Project ID context for local files. Remote lint detects ownership per workflow |
 
 #### Lint Configuration (`.n8nlintrc.json`)
 
@@ -232,6 +233,40 @@ Create a `.n8nlintrc.json` file to configure lint rules. Each rule can be set to
   }
 }
 ```
+
+Rules under the top-level `rules` key are global. They continue to apply to
+every workflow. Add a `projects` block keyed by n8n Project ID to layer stricter
+or project-specific policy on top:
+
+```json
+{
+  "rules": {
+    "no-plaintext-secrets": "error",
+    "banned-node": ["error", {
+      "nodes": [{ "type": "n8n-nodes-base.executeCommand" }]
+    }]
+  },
+  "projects": {
+    "pLx9cQ2mNv7aB1dK": {
+      "rules": {
+        "banned-node": ["error", {
+          "nodes": [{ "type": "n8n-nodes-base.code", "reason": "Use reviewed nodes only" }]
+        }],
+        "schedule-trigger-frequency": ["error", { "minInterval": "daily" }]
+      }
+    }
+  }
+}
+```
+
+The global and matching project layers both run. A project-level `"off"` only
+disables that project-layer entry; it never weakens a global rule. If both
+layers produce the same finding, the output contains one finding with the
+stricter severity.
+
+`lint --remote` reads the owner from each workflow's `shared` metadata. For
+local definitions, pass `--project <id>` when that metadata is absent. `apply`
+uses its existing `--project` / default-project setting.
 
 #### Lint Rules with Options
 
@@ -1007,6 +1042,13 @@ n8n-cli proxy [options]
 - `PUT /api/v1/workflows/:id` (update)
 
 All other paths (including the n8n editor's internal `/rest/*` routes) are forwarded transparently. The `X-N8N-API-KEY` header is passed through as-is.
+
+When project-scoped lint rules are configured, updates are matched to the
+owner Project ID read from the stored upstream workflow. Creates do not carry
+ownership in n8n's public workflow payload, so n8n-cli sends
+`X-N8n-Project-Id` when `apply` has a target project. The proxy consumes and
+strips this control header. A create without a declared project receives only
+the global rule layer.
 
 **Example: run the proxy in front of a production n8n**
 

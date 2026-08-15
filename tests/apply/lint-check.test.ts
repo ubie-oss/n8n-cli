@@ -45,6 +45,7 @@ function mockWorkflowService(opts: { existing?: Workflow[] } = {}): {
       calls.updates.push({ id, input });
       return { ...(input as object), id } as Workflow;
     },
+    transferWorkflow: async () => {},
     getWorkflowCurrentProjectID: () => "",
   } as unknown as WorkflowService;
   return { service, calls };
@@ -136,6 +137,46 @@ describe("apply pre-write lint check", () => {
 
     expect(result.errorCount).toBe(0);
     expect(result.createCount).toBe(1);
+    expect(calls.creates).toHaveLength(1);
+  });
+
+  test("applies the target project's rules in addition to global rules", async () => {
+    const file = path.join(tmpDir, "clean.json");
+    fs.writeFileSync(file, JSON.stringify(goodWorkflow()));
+    // Keep the explicitly selected config out of the scanner's .json inputs.
+    const configPath = path.join(tmpDir, "project-rules.config");
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        projects: {
+          "project-a": {
+            rules: {
+              "banned-node": [
+                "error",
+                { nodes: [{ type: "n8n-nodes-base.start", reason: "project policy" }] },
+              ],
+            },
+          },
+        },
+      }),
+    );
+
+    const { service, calls } = mockWorkflowService();
+    const blocked = await new Executor(service, {
+      ...opts,
+      projectID: "project-a",
+      lintConfigPath: configPath,
+    }).execute();
+    expect(blocked.errorCount).toBe(1);
+    expect(blocked.operations[0]?.error?.message).toContain("project policy");
+    expect(calls.creates).toHaveLength(0);
+
+    const allowed = await new Executor(service, {
+      ...opts,
+      projectID: "project-b",
+      lintConfigPath: configPath,
+    }).execute();
+    expect(allowed.errorCount).toBe(0);
     expect(calls.creates).toHaveLength(1);
   });
 

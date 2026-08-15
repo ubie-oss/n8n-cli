@@ -1,6 +1,11 @@
+import { workflowProjectId } from "@/common/project.ts";
 import { hasErrorViolations, lintWorkflow } from "@/lint/engine.ts";
 import type { Violation } from "@/lint/rules/violation.ts";
-import { prepareWriteLintContext, type WriteLintContext } from "@/lint/write-check.ts";
+import {
+  prepareWriteLintContext,
+  rulesForProject,
+  type WriteLintContext,
+} from "@/lint/write-check.ts";
 import type {
   MiddlewareVerdict,
   ServerMiddleware,
@@ -55,7 +60,7 @@ export class LintMiddleware implements ServerMiddleware {
     );
   }
 
-  evaluate(ctx: ServerMiddlewareContext): MiddlewareVerdict {
+  async evaluate(ctx: ServerMiddlewareContext): Promise<MiddlewareVerdict> {
     if (this.options.enforce === "off") {
       return { block: false, violations: [] };
     }
@@ -66,9 +71,15 @@ export class LintMiddleware implements ServerMiddleware {
     }
 
     const rawJSON = ctx.rawJSON ?? (ctx.workflow ? JSON.stringify(ctx.workflow) : "");
+    const projectId = await this.resolveProjectId(ctx);
     let violations: Violation[];
     try {
-      violations = lintWorkflow(ctx.workflow, rawJSON, this.ctx!.rules, this.ctx!.config);
+      violations = lintWorkflow(
+        ctx.workflow,
+        rawJSON,
+        rulesForProject(this.ctx!, projectId),
+        this.ctx!.config,
+      );
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       violations = [
@@ -99,6 +110,19 @@ export class LintMiddleware implements ServerMiddleware {
         } and was not forwarded to n8n`,
       },
     };
+  }
+
+  private async resolveProjectId(ctx: ServerMiddlewareContext): Promise<string | undefined> {
+    if (ctx.projectId) return ctx.projectId;
+
+    // API responses and exported local definitions may already carry their
+    // ownership. In proxy mode an update body is caller-controlled and omits
+    // `shared`, so use the stored workflow instead.
+    if (ctx.mode !== "proxy") return workflowProjectId(ctx.workflow);
+    if (!ctx.workflowId || !ctx.fetchStoredWorkflow) return undefined;
+    if (!this.ctx?.config?.projectRulesConfig.size) return undefined;
+
+    return workflowProjectId(await ctx.fetchStoredWorkflow(ctx.workflowId));
   }
 }
 

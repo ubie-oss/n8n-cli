@@ -1,5 +1,6 @@
 import type { Command } from "commander";
 import { resolveContext } from "@/cli/root.ts";
+import { workflowProjectId } from "@/common/project.ts";
 import { hasAllTags, parseTagFilter } from "@/common/tags.ts";
 import { findConfigFile, loadLintConfig } from "@/lint/config.ts";
 import { lintWorkflow } from "@/lint/engine.ts";
@@ -7,6 +8,7 @@ import { formatJSON } from "@/lint/output/json.ts";
 import type { LintResult } from "@/lint/output/result.ts";
 import { hasErrors } from "@/lint/output/result.ts";
 import { formatText } from "@/lint/output/text.ts";
+import type { RuleRegistry } from "@/lint/registry.ts";
 import { registerDefaultRules } from "@/lint/rules/index.ts";
 import { loadFileForLint, scanFiles } from "@/lint/scanner.ts";
 
@@ -28,6 +30,7 @@ export function registerLintCommand(program: Command): void {
     .option("--list-rules", "List all available rules and exit")
     .option("-o, --output <format>", "Output format: text, json", "text")
     .option("--tags <tags>", "Filter by tags (comma-separated, AND condition)")
+    .option("--project <id>", "Project ID context for local workflow files")
     .action(async (opts, command) => {
       const registry = registerDefaultRules();
 
@@ -50,9 +53,6 @@ export function registerLintCommand(program: Command): void {
       }
       const config = loadLintConfig(resolvedConfigPath);
 
-      // Get enabled rules
-      const enabledRules = registry.enabledRulesWithConfig(config, opts.disableRule);
-
       // Parse tag filter (CLI option takes precedence over environment variable)
       const tagsOption = opts.tags as string | undefined;
       const tagsEnv = process.env.CHECKS_FILTER_BY_TAGS;
@@ -71,6 +71,12 @@ export function registerLintCommand(program: Command): void {
           console.error("Error: --remote cannot be used with --dir or --file");
           process.exit(1);
         }
+        if (opts.project) {
+          console.error(
+            "Error: --project cannot be used with --remote; remote ownership is detected per workflow",
+          );
+          process.exit(1);
+        }
 
         const ctx = resolveContext(command.parent!);
         const workflows = await ctx.workflowService.listAllWorkflows({
@@ -80,10 +86,10 @@ export function registerLintCommand(program: Command): void {
 
         const uiURL = opts.uiUrl ?? process.env.N8N_UI_URL ?? deriveUIURL(ctx.config.apiURL);
 
-        await lintRemote(workflows, enabledRules, config, uiURL, opts);
+        await lintRemote(workflows, registry, config, opts.disableRule, uiURL, opts);
       } else {
         // Local mode: read files from filesystem
-        await lintLocal(enabledRules, config, filterByTags, opts);
+        await lintLocal(registry, config, opts.disableRule, filterByTags, opts);
       }
     });
 }
@@ -111,8 +117,9 @@ function workflowURL(baseURL: string, id: string | undefined): string | undefine
 /** Lint workflows fetched from the n8n API. */
 async function lintRemote(
   workflows: import("@/api/types.ts").Workflow[],
-  enabledRules: ReturnType<ReturnType<typeof registerDefaultRules>["enabledRulesWithConfig"]>,
+  registry: RuleRegistry,
   config: ReturnType<typeof loadLintConfig>,
+  disabledRules: string[] | undefined,
   uiURL: string,
   opts: { output?: string },
 ): Promise<void> {
@@ -130,7 +137,12 @@ async function lintRemote(
     const rawJSON = JSON.stringify(workflow);
     const url = workflowURL(uiURL, workflow.id);
 
-    const violations = lintWorkflow(workflow, rawJSON, enabledRules, config);
+    const rules = registry.enabledRulesWithConfig(
+      config,
+      disabledRules,
+      workflowProjectId(workflow),
+    );
+    const violations = lintWorkflow(workflow, rawJSON, rules, config);
     for (const v of violations) {
       result.violations.push({ ...v, file: v.file ?? displayName, url });
       failedWorkflows.add(displayName);
@@ -153,10 +165,11 @@ async function lintRemote(
 
 /** Lint workflow files from the local filesystem. */
 async function lintLocal(
-  enabledRules: ReturnType<ReturnType<typeof registerDefaultRules>["enabledRulesWithConfig"]>,
+  registry: RuleRegistry,
   config: ReturnType<typeof loadLintConfig>,
+  disabledRules: string[] | undefined,
   filterByTags: string[],
-  opts: { dir?: string; file?: string[]; output?: string },
+  opts: { dir?: string; file?: string[]; output?: string; project?: string },
 ): Promise<void> {
   let files: string[] = [];
   if (opts.file) {
@@ -216,7 +229,9 @@ async function lintLocal(
       }
     }
 
-    const violations = lintWorkflow(workflow, rawJSON, enabledRules, config);
+    const projectId = opts.project ?? workflowProjectId(workflow);
+    const rules = registry.enabledRulesWithConfig(config, disabledRules, projectId);
+    const violations = lintWorkflow(workflow, rawJSON, rules, config);
     for (const v of violations) {
       result.violations.push({ ...v, file: v.file ?? filePath });
       failedFiles.add(filePath);
