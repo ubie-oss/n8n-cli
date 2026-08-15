@@ -4,6 +4,12 @@ import type { Violation } from "./violation.ts";
 /** Severity represents the severity level of a rule violation */
 export type Severity = "error" | "warning";
 
+/** Batch-level data available to rules that need to inspect related workflows. */
+export interface LintContext {
+  workflows: Workflow[];
+  workflowsById?: Map<string, Workflow>;
+}
+
 /** Rule defines the interface that all lint rules must implement */
 export interface Rule {
   /** Unique kebab-case identifier for the rule */
@@ -17,5 +23,10 @@ export interface Rule {
    * @param workflow Parsed workflow, or null if JSON parsing failed
    * @param rawJSON Raw JSON string for rules that need line number extraction
    */
-  check(workflow: Workflow | null, rawJSON: string, options?: Record<string, unknown>): Violation[];
+  check(
+    workflow: Workflow | null,
+    rawJSON: string,
+    options?: Record<string, unknown>,
+    context?: LintContext,
+  ): Violation[];
 }

@@ -1,3 +1,4 @@
+import type { Node } from "@/api/types.ts";
 import type { NodeTypeSchema } from "./node-params-schema.ts";
 import type { OutputSchema } from "./node-schema.ts";
 
@@ -27,7 +28,11 @@ export const outputSchemaOverrides: Record<string, OutputSchema> = {
     dynamicFields: false,
     parameterDerivedFields: aggregateOutputFields,
   },
-  "n8n-nodes-base.set": { cardinality: "pass-through", dynamicFields: true },
+  "n8n-nodes-base.set": {
+    cardinality: "pass-through",
+    dynamicFields: true,
+    nodeDerivedFields: setOutputFields,
+  },
   "n8n-nodes-base.filter": {
     cardinality: "pass-through",
     dynamicFields: true,
@@ -90,6 +95,32 @@ function aggregateOutputFields(params: Record<string, unknown>): string[] {
       ? params.destinationFieldName
       : "data";
   return [destField];
+}
+
+/** Returns the fields a Set node keeps when it is configured to drop its input fields. */
+function setOutputFields(node: Node): string[] | null {
+  const params = (node.parameters as Record<string, unknown>) ?? {};
+
+  // Set v3.3+ renamed the setting to includeOtherFields and defaults it to false.
+  // v3.0-3.2 used include=none for the equivalent behavior.
+  const dropsInputFields =
+    node.typeVersion >= 3.3
+      ? params.includeOtherFields !== true
+      : node.typeVersion >= 3
+        ? params.include === "none"
+        : params.keepOnlySet === true;
+  if (!dropsInputFields) return null;
+
+  const assignments = (params.assignments as Record<string, unknown> | undefined)?.assignments;
+  if (!Array.isArray(assignments)) return null;
+
+  const fields = assignments.flatMap((assignment) => {
+    if (!assignment || typeof assignment !== "object") return [];
+    const name = (assignment as Record<string, unknown>).name;
+    if (typeof name !== "string" || name.length === 0) return [];
+    return [name.split(".")[0]!];
+  });
+  return [...new Set(fields)];
 }
 
 /**
