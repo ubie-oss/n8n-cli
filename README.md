@@ -272,28 +272,69 @@ uses its existing `--project` / default-project setting.
 
 ##### `banned-node`
 
-Detects usage of banned node types. Requires the array config format to specify which nodes are banned.
+Detects usage of banned node types and enforces per-node parameter policies. Requires the array config format to specify options.
 
 | Option | Type | Description |
 |--------|------|-------------|
-| `nodes` | `Array<{ type: string; reason?: string }>` | List of banned node types |
+| `deny` | `Array<Matcher>` | Node types banned outright. `deny` wins over `allow` |
+| `allow` | `Array<Matcher>` | When non-empty, switches the rule into **allowlist mode**: every node must match at least one entry, otherwise it is banned. Entries may still be narrowed by `params` |
+| `params` | `Record<node-matcher, ParamsPolicy>` | Per-node parameter policy (see below). Keys are node type matchers merged in order of specificity (broadest first, exact last) |
 
-- `type` — the `node.type` identifier (e.g., `n8n-nodes-base.executeCommand`)
-- `reason` — optional; included in the violation message when provided
+A `Matcher` is `{ "type": "..." }` (exact) or `{ "pattern": "...", "match": "exact" \| "glob" \| "regex" }` (`match` defaults to `"glob"`). `deny` entries may carry a `reason`. The legacy `nodes: [{ type, reason }]` option is an alias for `deny`.
+
+A `ParamsPolicy`:
+
+| Option | Type | Description |
+|--------|------|-------------|
+| `allowParams` | `string[]` | When present, every **top-level** parameter name must match at least one pattern. Patterns match the parameter key (e.g. `additional*`), not a path into it |
+| `denyParams` | `string[]` | Top-level parameter names matching any pattern are violations. To forbid a nested key, use `values` with an empty `allow` list |
+| `expressions` | `"allow"` \| `"deny"` | Default policy for expression values on this node. Expression values are strings beginning with `=` or containing `{{ ... }}`. Default: `"allow"` |
+| `values` | `Record<path, ValueRule>` | Value-level rules keyed by dot-path (`channelId.value`) supporting `*` globs and `/regex/`. For each field (`allow`, `pattern`, `expressions`) the most specific matching path rule that defines that field wins, so a broad rule and a narrow rule compose rather than shadow each other. Code-bearing params (`jsCode`, `inputSchema`) are exempt from expression checks |
+
+A `ValueRule` combines three orthogonal constraints:
+
+| Option | Type | Description |
+|--------|------|-------------|
+| `allow` | `string[]` | Exact values the parameter may hold. An empty array forbids the path entirely |
+| `pattern` | `string` | A glob (default) or, with `match: "regex"`, a regular expression the value must match |
+| `expressions` | `"allow"` \| `"deny"` | Overrides the node's `expressions` policy for just that path |
+
+Expression values skip the literal `allow` / `pattern` checks because they are dynamic; the expressions policy decides their fate instead. Invalid matchers, regexes and option values are reported as `error`-severity config violations.
 
 ```json
 {
   "rules": {
     "banned-node": ["error", {
-      "nodes": [
+      "deny": [
         { "type": "n8n-nodes-base.executeCommand", "reason": "Security risk: arbitrary command execution" },
-        { "type": "n8n-nodes-base.code", "reason": "Use HTTP Request node instead" },
-        { "type": "n8n-nodes-base.ssh" }
-      ]
+        { "pattern": "n8n-nodes-base.*Command", "match": "glob" },
+        { "pattern": "n8n-nodes-base\\.(code|function)", "match": "regex" }
+      ],
+      "allow": [
+        { "type": "n8n-nodes-base.slack" },
+        { "type": "n8n-nodes-base.httpRequest" }
+      ],
+      "params": {
+        "*": { "expressions": "deny" },
+        "n8n-nodes-base.slack": {
+          "allowParams": ["resource", "operation", "channelId", "text", "additionalFields"],
+          "denyParams": ["messageType"],
+          "values": {
+            "channelId.value": { "allow": ["#general", "#ops"] },
+            "text": { "expressions": "allow" }
+          }
+        },
+        "n8n-nodes-base.httpRequest": {
+          "allowParams": ["url", "method"],
+          "values": { "url": { "pattern": "^https://", "match": "regex" } }
+        }
+      }
     }]
   }
 }
 ```
+
+The example above bans `executeCommand`, all `*Command` glob matches and the Code/Function nodes; only Slack and HTTP Request are allowed; expressions are forbidden everywhere except `text` on Slack; Slack may only post to `#general` or `#ops`; and HTTP Request may only target `https://` URLs.
 
 ##### `no-plaintext-secrets`
 

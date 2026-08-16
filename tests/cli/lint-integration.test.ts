@@ -591,3 +591,113 @@ describe("CLI lint: banned-node rule", () => {
     expect(stdout).toContain("banned-node");
   });
 });
+
+// ---------------------------------------------------------------------------
+// extended banned-node policy via config file
+// (allowlist + per-node parameter policies + expression policy)
+// ---------------------------------------------------------------------------
+
+describe("CLI lint: banned-node policy", () => {
+  const fixture = resolve(FIXTURE_DIR, "lint-node-policy.yaml");
+  let tmpDir: string;
+  let configPath: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "lint-node-policy-"));
+    configPath = path.join(tmpDir, ".n8nlintrc.json");
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  test("allowlist bans every node outside it", async () => {
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        rules: {
+          "banned-node": ["error", { allow: [{ type: "n8n-nodes-base.slack" }] }],
+        },
+      }),
+    );
+    const { output } = await runLint(["-f", fixture, "-c", configPath]);
+    const banned = byRule(output.violations, "banned-node");
+    expect(banned.filter((v) => v.message.includes("not in the allowlist"))).toHaveLength(3);
+    // Slack is the only listed type and is itself allowed.
+    expect(banned.some((v) => v.message.includes("Slack Notify"))).toBe(false);
+  });
+
+  test("value allowlist flags an out-of-policy channel name", async () => {
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        rules: {
+          "banned-node": [
+            "error",
+            {
+              params: {
+                "n8n-nodes-base.slack": {
+                  values: { "channelId.value": { allow: ["#general", "#ops"] } },
+                },
+              },
+            },
+          ],
+        },
+      }),
+    );
+    const { output } = await runLint(["-f", fixture, "-c", configPath]);
+    const banned = byRule(output.violations, "banned-node");
+    expect(banned).toHaveLength(1);
+    expect(banned[0]!.message).toContain("channelId.value");
+    expect(banned[0]!.message).toContain("#random");
+  });
+
+  test("full policy: allowlist + params + expressions together", async () => {
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        rules: {
+          "banned-node": [
+            "error",
+            {
+              allow: [
+                { type: "n8n-nodes-base.manualTrigger" },
+                { type: "n8n-nodes-base.slack" },
+                { type: "n8n-nodes-base.httpRequest" },
+              ],
+              params: {
+                "*": { expressions: "deny" },
+                "n8n-nodes-base.slack": {
+                  allowParams: ["resource", "operation", "channelId", "text", "additionalFields"],
+                  values: {
+                    "channelId.value": { allow: ["#general", "#ops"] },
+                    text: { expressions: "allow" },
+                  },
+                },
+                "n8n-nodes-base.httpRequest": {
+                  allowParams: ["url", "method"],
+                  values: { url: { pattern: "https://example.com/*", match: "glob" } },
+                },
+              },
+            },
+          ],
+        },
+      }),
+    );
+    const { output } = await runLint(["-f", fixture, "-c", configPath]);
+    const banned = byRule(output.violations, "banned-node");
+    expect(banned).toHaveLength(3);
+
+    const messages = banned.map((v) => v.message);
+    // Code node is outside the allowlist.
+    expect(
+      messages.some((m) => m.includes("Code Node") && m.includes("not in the allowlist")),
+    ).toBe(true);
+    // Slack channel is outside the value allowlist.
+    expect(messages.some((m) => m.includes("channelId.value"))).toBe(true);
+    // The expression in additionalFields.iconEmoji hits the '*' deny default.
+    expect(messages.some((m) => m.includes("additionalFields.iconEmoji"))).toBe(true);
+    // The text expression is explicitly allowed by the per-path override.
+    expect(messages.some((m) => m.includes('parameter "text"'))).toBe(false);
+  });
+});
