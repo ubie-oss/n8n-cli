@@ -13,6 +13,8 @@ export interface OutputSchema {
   dynamicFields: boolean;
   /** Derive fields from node parameters */
   parameterDerivedFields?: (params: Record<string, unknown>) => string[];
+  /** Derive fields from the complete node when version/settings affect the output shape. */
+  nodeDerivedFields?: (node: Node) => string[] | null;
   /** Derive cardinality from node parameters (overrides static cardinality) */
   parameterDerivedCardinality?: (params: Record<string, unknown>) => OutputCardinality;
 }
@@ -64,6 +66,7 @@ export function getOutputSchema(nodeType: string): OutputSchema | undefined {
 export function getKnownOutputFields(node: Node): string[] | null {
   const schema = getOutputSchema(node.type);
   if (!schema) return null;
+  if (schema.nodeDerivedFields) return schema.nodeDerivedFields(node);
   if (schema.dynamicFields) return null;
   if (schema.fixedFields) return schema.fixedFields;
   if (schema.parameterDerivedFields) {

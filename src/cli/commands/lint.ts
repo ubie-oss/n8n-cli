@@ -130,6 +130,12 @@ async function lintRemote(
   };
 
   const failedWorkflows = new Set<string>();
+  const lintContext = {
+    workflows,
+    workflowsById: new Map(
+      workflows.flatMap((workflow) => (workflow.id ? [[workflow.id, workflow]] : [])),
+    ),
+  };
 
   for (const workflow of workflows) {
     result.filesChecked++;
@@ -142,7 +148,7 @@ async function lintRemote(
       disabledRules,
       workflowProjectId(workflow),
     );
-    const violations = lintWorkflow(workflow, rawJSON, rules, config);
+    const violations = lintWorkflow(workflow, rawJSON, rules, config, lintContext);
     for (const v of violations) {
       result.violations.push({ ...v, file: v.file ?? displayName, url });
       failedWorkflows.add(displayName);
@@ -194,10 +200,25 @@ async function lintLocal(
 
   const failedFiles = new Set<string>();
 
-  for (const filePath of files) {
+  // Load the batch first so cross-workflow rules can resolve referenced workflow IDs.
+  const outcomes = await Promise.all(
+    files.map((filePath) => loadFileForLint(filePath, filterByTags)),
+  );
+  const workflows = outcomes.flatMap((outcome) =>
+    outcome.status === "loaded" && outcome.data.workflow ? [outcome.data.workflow] : [],
+  );
+  const lintContext = {
+    workflows,
+    workflowsById: new Map(
+      workflows.flatMap((workflow) => (workflow.id ? [[workflow.id, workflow]] : [])),
+    ),
+  };
+
+  for (let fileIndex = 0; fileIndex < files.length; fileIndex++) {
+    const filePath = files[fileIndex]!;
     result.filesChecked++;
 
-    const outcome = await loadFileForLint(filePath, filterByTags);
+    const outcome = outcomes[fileIndex]!;
     if (outcome.status === "skipped") {
       result.violations.push({
         file: filePath,
@@ -231,7 +252,7 @@ async function lintLocal(
 
     const projectId = opts.project ?? workflowProjectId(workflow);
     const rules = registry.enabledRulesWithConfig(config, disabledRules, projectId);
-    const violations = lintWorkflow(workflow, rawJSON, rules, config);
+    const violations = lintWorkflow(workflow, rawJSON, rules, config, lintContext);
     for (const v of violations) {
       result.violations.push({ ...v, file: v.file ?? filePath });
       failedFiles.add(filePath);

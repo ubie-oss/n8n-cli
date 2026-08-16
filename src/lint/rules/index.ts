@@ -2,7 +2,15 @@ import { RuleRegistry } from "../registry.ts";
 import { aiAgentOutputRefRule } from "./ai-agent-output-ref.ts";
 import { bannedNodeRule } from "./banned-node.ts";
 import { connectionRefRule } from "./connection-ref.ts";
+import {
+  executeWorkflowInputsExtraRule,
+  executeWorkflowInputsMissingRule,
+} from "./execute-workflow-inputs.ts";
 import { expressionModePrefixRule } from "./expression-mode-prefix.ts";
+import {
+  externalNodeRepeatedCallRule,
+  externalNodeStaticRepeatedCallRule,
+} from "./external-node-execution.ts";
 import { filterOperatorValidRule } from "./filter-operator-valid.ts";
 import { implicitJsonRefRule } from "./implicit-json-ref.ts";
 import { jsonSyntaxRule } from "./json-syntax.ts";
@@ -26,6 +34,10 @@ export function registerDefaultRules(): RuleRegistry {
   registry.register(orphanedNodeRule);
   registry.register(implicitJsonRefRule);
   registry.register(expressionModePrefixRule);
+  registry.register(externalNodeRepeatedCallRule);
+  registry.register(externalNodeStaticRepeatedCallRule);
+  registry.register(executeWorkflowInputsExtraRule);
+  registry.register(executeWorkflowInputsMissingRule);
   registry.register(aiAgentOutputRefRule);
   registry.register(nodeParamsRule);
   registry.register(nodeRefFieldCheckRule);

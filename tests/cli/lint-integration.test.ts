@@ -284,6 +284,71 @@ describe("CLI lint: multiple files", () => {
   });
 });
 
+describe("CLI lint: execute workflow inputs across files", () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "lint-workflow-inputs-"));
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  test("resolves the called workflow from the same lint batch", async () => {
+    const callerPath = path.join(tmpDir, "caller.json");
+    const calleePath = path.join(tmpDir, "callee.json");
+    fs.writeFileSync(
+      callerPath,
+      JSON.stringify({
+        id: "caller",
+        name: "Caller",
+        active: false,
+        nodes: [
+          {
+            id: "execute",
+            name: "Execute child",
+            type: "n8n-nodes-base.executeWorkflow",
+            typeVersion: 1,
+            position: [0, 0],
+            parameters: {
+              workflowId: { value: "callee" },
+              workflowInputs: { value: { expected: "ok", extra: "no" } },
+            },
+          },
+        ],
+        connections: {},
+      }),
+    );
+    fs.writeFileSync(
+      calleePath,
+      JSON.stringify({
+        id: "callee",
+        name: "Callee",
+        active: false,
+        nodes: [
+          {
+            id: "trigger",
+            name: "When called",
+            type: "n8n-nodes-base.executeWorkflowTrigger",
+            typeVersion: 1,
+            position: [0, 0],
+            parameters: {
+              workflowInputs: { values: [{ name: "expected" }, { name: "missing" }] },
+            },
+          },
+        ],
+        connections: {},
+      }),
+    );
+
+    const { output, exitCode } = await runLint(["-f", callerPath, calleePath]);
+    expect(exitCode).toBe(1);
+    expect(byRule(output.violations, "execute-workflow-inputs-extra")).toHaveLength(1);
+    expect(byRule(output.violations, "execute-workflow-inputs-missing")).toHaveLength(1);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // --disable-rule
 // ---------------------------------------------------------------------------

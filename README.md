@@ -390,6 +390,20 @@ n8n's `Available in MCP` toggle is per-workflow and anyone with edit rights can 
 
 #### Other Lint Rules
 
+##### `execute-workflow-inputs-extra` / `execute-workflow-inputs-missing`
+
+Compare an Execute Sub-workflow node's `workflowInputs.value` keys with the input names declared by the called workflow's Execute Sub-workflow Trigger. Extra caller keys are errors; declared inputs omitted by the caller are warnings. Dynamic workflow IDs and workflows that accept all input data are skipped.
+
+The called workflow must be part of the same lint batch. Use `--remote`, `--dir`, or pass both files to `--file` so the linter can resolve the workflow ID.
+
+##### `node-ref-field-check`
+
+Checks explicit references such as `$('Node').item.json.foo` against known output fields. For Set nodes configured without **Include Other Input Fields**, assignment names are treated as the complete output schema, so references to fields that the Set node drops are reported as warnings.
+
+##### `external-node-repeated-call` / `external-node-static-repeated-call`
+
+Detect BigQuery, HTTP Request, Notion, and Slack nodes that can receive multiple items from an upstream `1:N` node while **Execute Once** is disabled. A call that references upstream input is a warning. Repeating the same input-independent call is an error. Pass-through nodes between the `1:N` producer and external node are followed.
+
 ##### `filter-operator-valid`
 
 Validates that If / Filter node conditions (typeVersion >= 2) use valid operator operations. For example, it flags `isNotEmpty` and suggests `notEmpty` instead. Invalid operations silently evaluate to `false` at runtime, making bugs hard to detect.

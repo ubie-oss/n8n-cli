@@ -163,6 +163,70 @@ describe("node-ref-field-check rule", () => {
     expect(nodeRefFieldCheckRule.check(wf, "").length).toBe(0);
   });
 
+  test("Set without includeOtherFields reports a field it drops", () => {
+    const wf: Workflow = {
+      name: "Test",
+      active: false,
+      nodes: [
+        {
+          id: "1",
+          name: "Set",
+          type: "n8n-nodes-base.set",
+          typeVersion: 3.4,
+          position: [0, 0],
+          parameters: {
+            assignments: { assignments: [{ name: "kept", value: "ok", type: "string" }] },
+          },
+        },
+        {
+          id: "2",
+          name: "Consumer",
+          type: "n8n-nodes-base.httpRequest",
+          typeVersion: 4,
+          position: [200, 0],
+          parameters: { url: "={{ $('Set').item.json.dropped }}" },
+        },
+      ],
+      connections: { Set: { main: [[{ node: "Consumer", type: "main", index: 0 }]] } },
+    };
+
+    const violations = nodeRefFieldCheckRule.check(wf, "");
+    expect(violations).toHaveLength(1);
+    expect(violations[0]?.message).toContain("dropped");
+    expect(violations[0]?.message).toContain("kept");
+  });
+
+  test("Set with includeOtherFields keeps unknown input fields", () => {
+    const wf: Workflow = {
+      name: "Test",
+      active: false,
+      nodes: [
+        {
+          id: "1",
+          name: "Set",
+          type: "n8n-nodes-base.set",
+          typeVersion: 3.4,
+          position: [0, 0],
+          parameters: {
+            includeOtherFields: true,
+            assignments: { assignments: [{ name: "kept", value: "ok", type: "string" }] },
+          },
+        },
+        {
+          id: "2",
+          name: "Consumer",
+          type: "n8n-nodes-base.httpRequest",
+          typeVersion: 4,
+          position: [200, 0],
+          parameters: { url: "={{ $('Set').item.json.inputField }}" },
+        },
+      ],
+      connections: { Set: { main: [[{ node: "Consumer", type: "main", index: 0 }]] } },
+    };
+
+    expect(nodeRefFieldCheckRule.check(wf, "")).toHaveLength(0);
+  });
+
   test("unknown node type - no violation (skip check)", () => {
     const wf: Workflow = {
       name: "Test",

@@ -1,6 +1,7 @@
 import type { Workflow } from "@/api/types.ts";
 import type { LintConfig } from "./config.ts";
 import type { RuleWithConfig } from "./registry.ts";
+import type { LintContext } from "./rules/rule.ts";
 import type { Violation } from "./rules/violation.ts";
 
 /**
@@ -23,11 +24,12 @@ export function lintWorkflow(
   rawJSON: string,
   enabledRules: RuleWithConfig[],
   _config: LintConfig | null,
+  context?: LintContext,
 ): Violation[] {
   const violations: Violation[] = [];
   const violationIndex = new Map<string, number>();
   for (const { rule, severity, options } of enabledRules) {
-    const found = rule.check(workflow, rawJSON, options);
+    const found = rule.check(workflow, rawJSON, options, context);
     for (const v of found) {
       const violation = { ...v, severity };
       const key = JSON.stringify({ ...violation, severity: undefined });
