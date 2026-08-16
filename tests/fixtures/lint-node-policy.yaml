@@ -1,0 +1,54 @@
+# Workflow exercising the extended banned-node policy:
+# allowlist + per-node parameter policies + expression policy.
+id: lint-node-policy-001
+name: Node Policy Test
+active: false
+nodes:
+  - id: "trigger-1"
+    name: Manual Trigger
+    type: n8n-nodes-base.manualTrigger
+    typeVersion: 1
+    position: [0, 0]
+    parameters: {}
+
+  # Allowed node, but channelId.value is outside the allowlist and
+  # additionalFields.iconEmoji carries an expression -> violations.
+  # text is an expression too, but the policy explicitly allows it.
+  - id: "slack-1"
+    name: Slack Notify
+    type: n8n-nodes-base.slack
+    typeVersion: 2
+    position: [200, 0]
+    parameters:
+      resource: "message"
+      operation: "post"
+      channelId:
+        __rl: true
+        value: "#random"
+        mode: "name"
+        cachedResultName: "#random"
+      text: "hello ={{ $json.text }}"
+      additionalFields:
+        fallback: "hi"
+        iconEmoji: "={{ $json.emoji }}"
+
+  # Allowed node with clean parameters -> no violations.
+  - id: "http-1"
+    name: HTTP Request
+    type: n8n-nodes-base.httpRequest
+    typeVersion: 4
+    position: [400, 0]
+    parameters:
+      url: "https://example.com/api"
+      method: "GET"
+
+  # NOT in the allowlist -> violation.
+  - id: "code-1"
+    name: Code Node
+    type: n8n-nodes-base.code
+    typeVersion: 1
+    position: [600, 0]
+    parameters:
+      jsCode: "return [];"
+
+connections: {}
