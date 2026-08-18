@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { registerFactory } from "@/middleware/registry.ts";
+import type { ServerMiddleware, ServerMiddlewareFactory } from "@/middleware/types.ts";
 import type { EnforceLevel } from "@/proxy/config.ts";
 import type { McpPolicy } from "@/proxy/mcp/policy.ts";
 import { type ProxyHandle, startProxy } from "@/proxy/server.ts";
@@ -184,7 +186,14 @@ function policy(overrides: Partial<McpPolicy> = {}): McpPolicy {
 let upstream: ReturnType<typeof startMockUpstream>;
 let proxy: ProxyHandle;
 
-function start(mcpPolicy: McpPolicy, enforce: EnforceLevel = "error"): void {
+function start(
+  mcpPolicy: McpPolicy,
+  enforce: EnforceLevel = "error",
+  extra: {
+    middlewares?: string[];
+    middlewareCliOptions?: Record<string, unknown>;
+  } = {},
+): void {
   proxy = startProxy({
     listen: "127.0.0.1:0",
     upstream: `http://127.0.0.1:${upstream.port}`,
@@ -193,13 +202,18 @@ function start(mcpPolicy: McpPolicy, enforce: EnforceLevel = "error"): void {
     logFormat: "json",
     allowDuplicates: true,
     mcp: { enforce, policy: mcpPolicy, cacheTtlMs: 60_000 },
+    ...extra,
   });
 }
 
-async function call(method: string, params?: unknown): Promise<Record<string, unknown>> {
+async function call(
+  method: string,
+  params?: unknown,
+  headers: Record<string, string> = {},
+): Promise<Record<string, unknown>> {
   const res = await fetch(`http://127.0.0.1:${proxy.port}/mcp-server/http`, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", ...headers },
     body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
   });
   const text = await res.text();
@@ -892,5 +906,56 @@ describe("MCP gate: what it leaves alone", () => {
     start(policy({ denyTools: ["*"] }));
     const res = await fetch(`http://127.0.0.1:${proxy.port}/api/v1/workflows`);
     expect(res.status).toBe(200);
+  });
+});
+
+function identityStubFactory(): ServerMiddlewareFactory<object> {
+  return {
+    name: "identity-stub",
+    loadFromEnv: () => ({}),
+    loadFromCLI: () => ({}),
+    build: (): ServerMiddleware => ({
+      name: "identity-stub",
+      evaluate(ctx) {
+        const email = ctx.request?.headers.get("x-impersonator-email");
+        if (email) {
+          ctx.identity = email;
+          ctx.auth = { effective: { email, layer: "impersonator" } };
+        }
+        return { block: false, violations: [] };
+      },
+    }),
+  };
+}
+
+describe("MCP gate: body-less middleware chain", () => {
+  test("get_workflow_details is refused when project-role cannot resolve identity", async () => {
+    start(policy({ allowTools: ["get_workflow_details"], workflowTags: ["mcp"] }), "error", {
+      middlewares: ["project-role"],
+      middlewareCliOptions: { projectRoleEnforce: "error" },
+    });
+    const reply = await call("tools/call", {
+      name: "get_workflow_details",
+      arguments: { workflowId: "wf-open" },
+    });
+    const result = reply.result as { isError?: boolean; content: Array<{ text: string }> };
+    expect(result.isError).toBe(true);
+    expect(result.content[0]?.text).toContain("Actor identity could not be resolved");
+    expect(upstream.captured.some((c) => c.pathname === "/mcp-server/http")).toBe(false);
+  });
+
+  test("get_workflow_details proceeds when a prior middleware populated identity", async () => {
+    registerFactory(identityStubFactory());
+    start(policy({ allowTools: ["get_workflow_details"], workflowTags: ["mcp"] }), "error", {
+      middlewares: ["identity-stub", "project-role"],
+      middlewareCliOptions: { projectRoleEnforce: "error" },
+    });
+    const reply = await call(
+      "tools/call",
+      { name: "get_workflow_details", arguments: { workflowId: "wf-open" } },
+      { "x-impersonator-email": "viewer@example.com" },
+    );
+    expect((reply.result as { isError?: boolean }).isError).toBeUndefined();
+    expect(upstream.captured.some((c) => c.pathname === "/mcp-server/http")).toBe(true);
   });
 });

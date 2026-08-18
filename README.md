@@ -1095,8 +1095,11 @@ n8n-cli proxy [options]
 
 - `POST /api/v1/workflows` (create)
 - `PUT /api/v1/workflows/:id` (update)
+- `GET /api/v1/workflows/:id` (read — runs the body-less middleware chain, so lint is skipped but identity and authorization gates still apply)
 
-All other paths (including the n8n editor's internal `/rest/*` routes) are forwarded transparently. The `X-N8N-API-KEY` header is passed through as-is.
+All other paths (including the n8n editor's internal `/rest/*` routes and workflow *list* GETs) are forwarded transparently. The `X-N8N-API-KEY` header is passed through as-is.
+
+Body-less routes share one pipeline with writes: `oauth-verify` and `impersonator-verify` populate `ctx.identity`, then later gates such as `project-role` read it. A GET that skipped that chain would see an empty identity even when the caller sent a valid impersonator token.
 
 When project-scoped lint rules are configured, updates are matched to the
 owner Project ID read from the stored upstream workflow. Creates do not carry
@@ -1254,6 +1257,8 @@ It must be named in `--mcp-allow-tools` rather than merely permitted by an empty
 **Deliberately not options.** The endpoint path is fixed at `/mcp-server/`, because n8n fixes it and a flag would only be a way to point the gate at the wrong path and quietly stop gating. And the gate does not re-check `settings.availableInMCP`: n8n already refuses `execute_workflow` and `get_workflow_details` for a workflow without it, so the check would add configuration and no enforcement. Use the tag for what n8n's toggle cannot give you — a decision that shows up in review.
 
 **Which tools take a workflow id.** A built-in table covers the workflow-scoped tools — `execute_workflow`, `test_workflow`, `prepare_workflow_pin_data`, `get_workflow_details`, `get_workflow_history`, `get_workflow_version`, `restore_workflow_version`, `update_workflow`, `publish_workflow`, `unpublish_workflow`, `archive_workflow` — reading `workflowId` and then `id`. It is not configurable and it is not the only check: the gate separately scans **every** argument value, nested ones included, against the set of workflow ids that exist upstream. So a tool n8n renames, a parameter this release read wrong, or a tool it has never heard of cannot carry a forbidden workflow id past the gate — the table only decides how precise the refusal message is, and whether a call that names no workflow at all is refused.
+
+Those same workflow-scoped calls then run the body-less server-middleware chain (the same one `GET /api/v1/workflows/:id` uses), so `oauth-verify` / `impersonator-verify` can populate caller identity before `project-role` reads it.
 
 > **Build `--mcp-allow-tools` from a real `tools/list` against your own instance.** n8n renames these tools between versions — a 2.32.5 instance serves `list_tags`, `get_execution`, `search_executions` and `prepare_test_pin_data`, where later code renames them to `list_workflow_tags`, `get_workflow_execution`, `search_workflow_executions` and `prepare_workflow_pin_data`. Neither the documentation nor a checkout of n8n's default branch tells you which set *your* server publishes. A name that does not exist costs nothing; a real tool missing from the allowlist is silently withheld, so listing both spellings is the safe move.
 

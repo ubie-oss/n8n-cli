@@ -1,8 +1,6 @@
 import { PROJECT_ID_HEADER, STALE_WRITE_WARNING_HEADER } from "@/api/headers.ts";
 import type { Workflow } from "@/api/types.ts";
 import { hasAllTags } from "@/common/tags.ts";
-import type { ProjectRoleChecker } from "@/middleware/builtin/project-role/checker.ts";
-import { extractProjectRoleChecker } from "@/middleware/builtin/project-role/middleware.ts";
 import { STALE_WRITE_RULE } from "@/middleware/builtin/stale-write/middleware.ts";
 import { buildClientMiddlewares } from "@/middleware/client-registry.ts";
 import {
@@ -24,7 +22,7 @@ import {
   buildDuplicateResponse,
   buildErrorResponse,
 } from "./response.ts";
-import { evaluateWorkflowReadGate } from "./rest/read-gate.ts";
+import { evaluateBodylessPipeline } from "./rest/read-gate.ts";
 import { matchWorkflowRead } from "./rest/read-router.ts";
 import { matchWorkflowMutation, type WorkflowMutation } from "./rest/router.ts";
 import { forwardRequest } from "./upstream.ts";
@@ -56,7 +54,6 @@ interface HandlerDeps {
   readiness: ReadinessState;
   /** Built when the operator configured an MCP policy; absent otherwise. */
   mcp: McpGateDeps | null;
-  projectRoleChecker: ProjectRoleChecker | null;
 }
 
 /** Starts the proxy server. Returns a handle so tests can stop it cleanly. */
@@ -114,8 +111,6 @@ export function startProxy(config: ProxyConfig): ProxyHandle {
     cliOpts: legacyCliOpts,
   });
 
-  const projectRoleChecker = extractProjectRoleChecker(middlewares);
-
   const mcpSettings = config.mcp ?? null;
   const mcp: McpGateDeps | null = mcpSettings
     ? {
@@ -134,7 +129,13 @@ export function startProxy(config: ProxyConfig): ProxyHandle {
         logger,
         timeoutMs: config.upstreamTimeoutMs,
         clientMiddlewares,
-        projectRoleChecker,
+        middlewares,
+        fetchStoredWorkflow: (id, apiKey) =>
+          lookupStoredWorkflow(id, apiKey, {
+            upstream,
+            timeoutMs: config.upstreamTimeoutMs,
+            clientMiddlewares,
+          }),
       }
     : null;
 
@@ -195,7 +196,6 @@ export function startProxy(config: ProxyConfig): ProxyHandle {
     clientMiddlewares,
     readiness,
     mcp,
-    projectRoleChecker,
   };
 
   const server = Bun.serve({
@@ -305,21 +305,26 @@ async function handleTransparentForward(
   deps: HandlerDeps,
 ): Promise<Response> {
   const read = matchWorkflowRead(req.method, pathname);
-  if (read && deps.projectRoleChecker) {
+  if (read) {
     try {
-      const denial = await evaluateWorkflowReadGate(req, read.id, {
-        checker: deps.projectRoleChecker,
-        fetchStoredWorkflow: (id, apiKey) => fetchStoredWorkflow(id, apiKey, deps),
+      const verdict = await evaluateBodylessPipeline(deps.middlewares, {
+        workflow: null,
+        request: req,
+        mode: "proxy",
+        action: "read",
+        workflowId: read.id,
+        fetchStoredWorkflow: (id) =>
+          fetchStoredWorkflow(id, req.headers.get("x-n8n-api-key"), deps),
       });
-      if (denial?.block) {
+      if (verdict.block) {
         deps.logger.log({
           action: "block",
           method: req.method,
           path: pathname,
-          status: denial.denial?.status ?? 403,
-          message: denial.denial?.message,
+          status: verdict.denial?.status ?? 403,
+          message: verdict.denial?.message,
         });
-        return buildDenialResponse(denial);
+        return buildDenialResponse(verdict);
       }
     } catch (err) {
       return reportError(err, req, pathname, deps);
@@ -393,22 +398,21 @@ async function handleWorkflowMutation(
   // its own spec; the proxy doesn't need to know which middleware needs
   // identity or which header it lives on.
   // Middleware that judges the definition must not run where there is none.
-  const applicable = mutation.bodyIsWorkflow
-    ? deps.middlewares
-    : deps.middlewares.filter((m) => !m.readsWorkflowBody);
-
-  const verdict = await runPipeline(applicable, {
+  const pipelineCtx = {
     workflow,
     // Middleware that reads a body only makes sense where one exists.
     rawJSON: mutation.bodyIsWorkflow ? rawJSON : undefined,
     request: req,
-    mode: "proxy",
+    mode: "proxy" as const,
     action: mutation.action,
     workflowId: mutation.id,
     projectId:
       mutation.action === "create" ? (req.headers.get(PROJECT_ID_HEADER) ?? undefined) : undefined,
-    fetchStoredWorkflow: (id) => fetchStoredWorkflow(id, apiKey, deps),
-  });
+    fetchStoredWorkflow: (id: string) => fetchStoredWorkflow(id, apiKey, deps),
+  };
+  const verdict = mutation.bodyIsWorkflow
+    ? await runPipeline(deps.middlewares, pipelineCtx)
+    : await evaluateBodylessPipeline(deps.middlewares, pipelineCtx);
 
   const workflowName = workflow?.name;
 
@@ -519,21 +523,27 @@ async function handleWorkflowMutation(
  * anything else so the caller can apply its own fail-open/closed policy rather
  * than mistaking an outage for "no ACL".
  */
-async function fetchStoredWorkflow(
+interface StoredWorkflowLookup {
+  upstream: string;
+  timeoutMs?: number;
+  clientMiddlewares: ClientMiddleware[];
+}
+
+async function lookupStoredWorkflow(
   id: string,
   apiKey: string | null,
-  deps: HandlerDeps,
+  lookup: StoredWorkflowLookup,
 ): Promise<Workflow | null> {
-  const url = `${deps.upstream}/api/v1/workflows/${encodeURIComponent(id)}`;
+  const url = `${lookup.upstream}/api/v1/workflows/${encodeURIComponent(id)}`;
   const headers = new Headers({ accept: "application/json" });
   if (apiKey) headers.set("x-n8n-api-key", apiKey);
   const { response } = await forwardRequest(
     new Request(url, { method: "GET", headers }),
-    deps.upstream,
+    lookup.upstream,
     undefined,
     {
-      timeoutMs: deps.config.upstreamTimeoutMs,
-      clientMiddlewares: deps.clientMiddlewares,
+      timeoutMs: lookup.timeoutMs,
+      clientMiddlewares: lookup.clientMiddlewares,
     },
   );
   if (response.status === 404) return null;
@@ -541,6 +551,18 @@ async function fetchStoredWorkflow(
     throw new Error(`upstream returned HTTP ${response.status} for workflow ${id}`);
   }
   return (await response.json()) as Workflow;
+}
+
+async function fetchStoredWorkflow(
+  id: string,
+  apiKey: string | null,
+  deps: HandlerDeps,
+): Promise<Workflow | null> {
+  return lookupStoredWorkflow(id, apiKey, {
+    upstream: deps.upstream,
+    timeoutMs: deps.config.upstreamTimeoutMs,
+    clientMiddlewares: deps.clientMiddlewares,
+  });
 }
 
 function reportError(err: unknown, req: Request, pathname: string, deps: HandlerDeps): Response {

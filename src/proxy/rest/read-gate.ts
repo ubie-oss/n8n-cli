@@ -1,63 +1,26 @@
-import type { Workflow } from "@/api/types.ts";
-import { workflowProjectId } from "@/common/project-id.ts";
-import type { ProjectRoleChecker } from "@/middleware/builtin/project-role/checker.ts";
-import type { PipelineVerdict } from "@/middleware/types.ts";
-
-export interface ReadGateDeps {
-  checker: ProjectRoleChecker;
-  fetchStoredWorkflow: (id: string, apiKey: string | null) => Promise<Workflow | null>;
-}
+import { runPipeline } from "@/middleware/pipeline.ts";
+import type {
+  PipelineVerdict,
+  ServerMiddleware,
+  ServerMiddlewareContext,
+} from "@/middleware/types.ts";
 
 /**
- * Runs the project-role checker for a GET /api/v1/workflows/:id request.
- * Returns a pipeline-shaped denial when the caller lacks viewer access.
+ * Runs the body-less middleware chain against a request that names one
+ * workflow (GET /workflows/:id, MCP tool calls).
+ *
+ * Same filter as tags / delete / activate: lint stays out because there is
+ * no definition to judge. oauth-verify and impersonator-verify still run, so
+ * they can populate `ctx.identity` before project-role reads it.
+ *
+ * Identity is left unset on `ctx` here — each middleware resolves or writes
+ * it. That is the same contract the write path uses.
  */
-export async function evaluateWorkflowReadGate(
-  req: Request,
-  workflowId: string,
-  deps: ReadGateDeps,
-): Promise<PipelineVerdict | null> {
-  const checker = deps.checker;
-  if (!checker.shouldApplyToAction("read")) return null;
-
-  const ctx = {
-    workflow: null,
-    request: req,
-    mode: "proxy" as const,
-    action: "read",
-    workflowId,
-    fetchStoredWorkflow: (id: string) =>
-      deps.fetchStoredWorkflow(id, req.headers.get("x-n8n-api-key")),
-  };
-
-  const email = checker.resolveEmail(ctx);
-  if (!email) {
-    return denial("project-role-missing-identity", "Actor identity could not be resolved");
-  }
-
-  let stored: Workflow | null;
-  try {
-    stored = await deps.fetchStoredWorkflow(workflowId, req.headers.get("x-n8n-api-key"));
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    return denial("project-role-stored-lookup-error", message);
-  }
-
-  const projectId = workflowProjectId(stored);
-  const verdict = await checker.check({ email, projectId, level: "read" });
-  if (verdict.allowed) return null;
-  return denial(verdict.rule, verdict.reason ?? "Project role check failed");
-}
-
-function denial(rule: string, message: string): PipelineVerdict {
-  return {
-    block: true,
-    blockedBy: "project-role",
-    violations: [{ rule, severity: "error", message }],
-    denial: {
-      status: 403,
-      error: "workflow_project_role_denied",
-      message,
-    },
-  };
+export async function evaluateBodylessPipeline(
+  middlewares: ServerMiddleware[],
+  ctx: ServerMiddlewareContext,
+): Promise<PipelineVerdict> {
+  const applicable = middlewares.filter((m) => !m.readsWorkflowBody);
+  if (applicable.length === 0) return { block: false, violations: [] };
+  return runPipeline(applicable, ctx);
 }
