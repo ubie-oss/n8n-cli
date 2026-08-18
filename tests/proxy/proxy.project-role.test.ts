@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { registerFactory } from "@/middleware/registry.ts";
+import type { ServerMiddleware, ServerMiddlewareFactory } from "@/middleware/types.ts";
 import { matchWorkflowRead } from "@/proxy/rest/read-router.ts";
 import { type ProxyHandle, startProxy } from "@/proxy/server.ts";
 
@@ -188,5 +190,97 @@ describe("proxy project-role enforcement", () => {
     });
     expect(res.status).toBe(200);
     expect(upstream.captured.some((c) => c.method === "PUT")).toBe(true);
+  });
+});
+
+/**
+ * Stands in for oauth-verify / impersonator-verify: writes a verified email
+ * onto ctx so a later project-role with identity.source=none can see it.
+ * The production bug was GET skipping that chain, so identity stayed empty.
+ */
+function identityStubFactory(): ServerMiddlewareFactory<object> {
+  return {
+    name: "identity-stub",
+    loadFromEnv: () => ({}),
+    loadFromCLI: () => ({}),
+    build: (): ServerMiddleware => ({
+      name: "identity-stub",
+      evaluate(ctx) {
+        const email = ctx.request?.headers.get("x-impersonator-email");
+        if (email) {
+          ctx.identity = email;
+          ctx.auth = { effective: { email, layer: "impersonator" } };
+        }
+        return { block: false, violations: [] };
+      },
+    }),
+  };
+}
+
+function startProxyWithVerifiedIdentity(): ProxyHandle {
+  registerFactory(identityStubFactory());
+  proxy = startProxy({
+    listen: "127.0.0.1:0",
+    upstream: `http://127.0.0.1:${upstream.port}`,
+    enforce: "off",
+    disableRules: [],
+    logFormat: "json",
+    allowDuplicates: true,
+    middlewares: ["identity-stub", "project-role"],
+    middlewareCliOptions: {
+      projectRoleEnforce: "error",
+    },
+  });
+  return proxy;
+}
+
+describe("proxy project-role identity from earlier middleware", () => {
+  test("GET succeeds when a prior middleware populated ctx.identity", async () => {
+    startProxyWithVerifiedIdentity();
+    const res = await fetch(`http://127.0.0.1:${proxy.port}/api/v1/workflows/wf1`, {
+      headers: { "x-impersonator-email": "viewer@example.com" },
+    });
+    expect(res.status).toBe(200);
+  });
+
+  test("GET is denied when identity source is none and nothing populated ctx.identity", async () => {
+    proxy = startProxy({
+      listen: "127.0.0.1:0",
+      upstream: `http://127.0.0.1:${upstream.port}`,
+      enforce: "off",
+      disableRules: [],
+      logFormat: "json",
+      allowDuplicates: true,
+      middlewares: ["project-role"],
+      middlewareCliOptions: {
+        projectRoleEnforce: "error",
+      },
+    });
+    const res = await fetch(`http://127.0.0.1:${proxy.port}/api/v1/workflows/wf1`);
+    expect(res.status).toBe(403);
+    const body = (await res.json()) as {
+      error: string;
+      violations: Array<{ rule: string }>;
+    };
+    expect(body.error).toBe("workflow_project_role_denied");
+    expect(body.violations[0]?.rule).toBe("project-role-missing-identity");
+  });
+
+  test("PUT also sees identity populated by a prior middleware", async () => {
+    upstream.server.stop(true);
+    upstream = startMockUpstream({
+      members: [{ email: "editor@example.com", role: "project:editor" }],
+      workflows: { wf1: STORED_WORKFLOW },
+    });
+    startProxyWithVerifiedIdentity();
+    const res = await fetch(`http://127.0.0.1:${proxy.port}/api/v1/workflows/wf1`, {
+      method: "PUT",
+      headers: {
+        "content-type": "application/json",
+        "x-impersonator-email": "editor@example.com",
+      },
+      body: JSON.stringify({ name: "Demo", active: false, nodes: [], connections: {} }),
+    });
+    expect(res.status).toBe(200);
   });
 });

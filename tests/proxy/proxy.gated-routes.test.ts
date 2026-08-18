@@ -149,6 +149,13 @@ describe("proxy: every gated route", () => {
       expectStatus: 200,
     },
     {
+      label: "read",
+      method: "GET",
+      path: "/api/v1/workflows/wf1",
+      action: "read",
+      expectStatus: 200,
+    },
+    {
       label: "deactivate",
       method: "POST",
       path: "/api/v1/workflows/wf1/deactivate",
@@ -278,7 +285,6 @@ describe("proxy: what each route hands to middleware", () => {
 describe("proxy: ungated paths are untouched", () => {
   const passthrough: Array<[string, string]> = [
     ["GET", "/api/v1/workflows"],
-    ["GET", "/api/v1/workflows/wf1"],
     ["GET", "/api/v1/tags"],
     ["POST", "/api/v1/tags"],
     ["GET", "/api/v1/executions"],

@@ -12,7 +12,8 @@ const READ_PATTERN = /^\/api\/v1\/workflows\/([^/]+)$/;
 
 /**
  * Matches GET requests for a single workflow by id. List endpoints and
- * unrelated paths return null and are forwarded without a project-role check.
+ * unrelated paths return null and are forwarded without the body-less
+ * middleware chain (oauth-verify, project-role, ...).
  */
 export function matchWorkflowRead(method: string, pathname: string): WorkflowRead | null {
   if (method.toUpperCase() !== "GET") return null;

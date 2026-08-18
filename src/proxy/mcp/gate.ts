@@ -18,10 +18,12 @@
  * server-to-client `GET` stream, session teardown — is forwarded untouched.
  */
 
-import type { ProjectRoleChecker } from "@/middleware/builtin/project-role/checker.ts";
+import type { Workflow } from "@/api/types.ts";
 import { mcpToolAccessLevel } from "@/middleware/builtin/project-role/mcp-tools.ts";
+import type { ServerMiddleware } from "@/middleware/types.ts";
 import type { EnforceLevel } from "../config.ts";
 import type { Logger } from "../logging.ts";
+import { evaluateBodylessPipeline } from "../rest/read-gate.ts";
 import { forwardRequest } from "../upstream.ts";
 import {
   ENTRY_TOOL_DEFINITION,
@@ -57,8 +59,14 @@ export interface McpGateDeps {
   logger: Logger;
   timeoutMs?: number;
   clientMiddlewares?: import("@/middleware/types.ts").ClientMiddleware[];
-  /** When set, workflow-scoped tool calls also require n8n project membership. */
-  projectRoleChecker?: ProjectRoleChecker | null;
+  /**
+   * The same server-middleware chain the REST write path runs. Workflow-scoped
+   * tool calls go through the body-less subset (oauth-verify, impersonator-verify,
+   * project-role, ...) so identity is populated before authorization.
+   */
+  middlewares?: ServerMiddleware[];
+  /** Stored-workflow lookup for middlewares that must not trust the tool args. */
+  fetchStoredWorkflow?: (id: string, apiKey: string | null) => Promise<Workflow | null>;
 }
 
 /**
@@ -353,29 +361,32 @@ async function refuse(
     );
   }
 
-  if (deps.projectRoleChecker && target !== undefined) {
+  if (deps.middlewares && deps.middlewares.length > 0 && target !== undefined) {
     const level = mcpToolAccessLevel(tool);
     if (level) {
       const facts = sets.facts.get(target);
-      const projectId = facts?.projectId ?? "";
-      const email = deps.projectRoleChecker.resolveEmail({
+      const verdict = await evaluateBodylessPipeline(deps.middlewares, {
         workflow: null,
         request: req,
         mode: "proxy",
+        action: level === "write" ? "update" : "read",
+        workflowId: target,
+        projectId: facts?.projectId || undefined,
+        fetchStoredWorkflow: deps.fetchStoredWorkflow
+          ? (id) => deps.fetchStoredWorkflow!(id, req.headers.get("x-n8n-api-key"))
+          : undefined,
       });
-      if (!email) {
-        log(deps, pathname, "project-role: missing identity", tool);
-        return toolErrorResult(
-          message.id,
-          "This proxy could not resolve the caller identity required for n8n project authorization.",
+      if (verdict.block) {
+        log(
+          deps,
+          pathname,
+          `middleware denied: ${verdict.blockedBy ?? "pipeline"}: ${verdict.denial?.message ?? verdict.violations[0]?.message ?? "blocked"}`,
+          tool,
         );
-      }
-      const verdict = await deps.projectRoleChecker.check({ email, projectId, level });
-      if (!verdict.allowed) {
-        log(deps, pathname, `project-role denied: ${verdict.reason ?? verdict.rule}`, tool);
         return toolErrorResult(
           message.id,
-          verdict.reason ?? "This caller lacks the n8n project role required for that tool.",
+          verdict.denial?.message ??
+            "This proxy refused that tool call under its middleware policy.",
         );
       }
     }
