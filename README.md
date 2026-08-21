@@ -1073,6 +1073,7 @@ n8n-cli proxy [options]
 | `--enforce <level>` | `off`, `warn`, or `error` (default: `error`) |
 | `--disable-rule <rules...>` | Disable specific rules (can be repeated) |
 | `--log-format <fmt>` | Log format: `text` or `json` (default: `text`) |
+| `--log-identity` | Include caller identity (email) in log lines. Off by default because emails are PII; see [Logging](#proxy-logging). env: `N8N_PROXY_LOG_IDENTITY` |
 | `--allow-duplicates` | Skip the upstream duplicate-name check (the check is on by default) |
 | `--duplicate-ttl <ms>` | TTL for the cached upstream workflow-name index (default: 60000) |
 | `--upstream-timeout <ms>` | Per-request upstream timeout in milliseconds (default: 30000, 0 disables) |
@@ -1134,6 +1135,62 @@ Clients then point at `http://proxy-host:8080` instead of n8n directly. From the
 **Apply-style safety checks:** beyond lint, the proxy mirrors the same default-on duplicate-name safety that `apply` enforces. On every `POST /api/v1/workflows` the proxy fetches the upstream workflow list (cached for `--duplicate-ttl` milliseconds) and rejects creates that collide with an existing remote name. Under `--enforce error` this returns 409; under `--enforce warn` an `X-N8n-Duplicate-Warning` header is attached to the forwarded response. Pass `--allow-duplicates` to disable the check entirely (e.g. during a one-off bulk import). Lookups run under the caller's own `X-N8N-API-KEY` so duplicate detection never escalates privileges.
 
 **Rollout tip:** start with `--enforce warn` to audit the violation distribution in production logs, then flip to `--enforce error` once the team has cleaned up existing violations.
+
+#### Logging
+
+<a id="proxy-logging"></a>
+
+Every request the proxy handles produces one structured log line on stdout, and every line shares a fixed `logger: "n8n-cli-proxy"` field so the whole stream can be selected with a single filter — Cloud Logging: `jsonPayload.logger == "n8n-cli-proxy"`, jq: `. | select(.logger == "n8n-cli-proxy")`. With `--log-format json` each line is a single JSON object:
+
+```json
+{
+  "ts": "2026-08-18T12:00:00.000Z",
+  "logger": "n8n-cli-proxy",
+  "level": "error",
+  "event": "request",
+  "requestId": "9f6d…",
+  "surface": "rest-write",
+  "operation": "create",
+  "action": "block",
+  "method": "POST",
+  "path": "/api/v1/workflows",
+  "status": 422,
+  "upstreamMs": 3,
+  "workflowId": "wf-1",
+  "workflowName": "payroll export",
+  "projectId": "proj-1",
+  "violations": [
+    { "rule": "required-fields", "severity": "error", "message": "Missing required field: \"name\"" }
+  ],
+  "identity": "user@example.com",
+  "identitySource": "oauth-verify",
+  "identityVerified": true,
+  "message": "blocked by middleware lint"
+}
+```
+
+| Field | Meaning |
+|-------|---------|
+| `logger` | Fixed marker (`n8n-cli-proxy`) — the batch filter key. |
+| `level` | Derived from the outcome: `info` (pass/forward), `warn` (warn), `error` (block/error). |
+| `event` | `request` = the terminal access-log line; `policy` = a supplementary policy detail (e.g. the MCP gate narrowing a listing) emitted under the same request. |
+| `requestId` | Correlation id, also returned to the client in the `x-n8n-cli-request-id` response header. Every line of one request shares it. |
+| `surface` | `rest-write`, `rest-read`, `mcp`, or `transparent`. |
+| `operation` | The route action being performed: `create`, `update`, `delete`, `activate`, `tags`, `read`. |
+| `action` | The outcome: `pass`, `block`, `warn`, `forward`, `error`. |
+| `violations` | Middleware findings (rule / severity / message), when any. |
+| `tool` / `rpc` | MCP tool name and JSON-RPC method, on MCP lines. |
+
+Identity fields (`identity`, `identitySource`, `identityVerified`) are emitted **only when `--log-identity` is set** (or `N8N_PROXY_LOG_IDENTITY`). They are PII, so the proxy leaves them out by default. When enabled, the best identity the request offers is logged, tagged by how it was obtained:
+
+| `identitySource` | Meaning |
+|------------------|---------|
+| `oauth-verify` | `Authorization: Bearer` id_token verified against Google tokeninfo (`identityVerified: true`). |
+| `impersonator-verify` | The `X-Impersonator-Id-Token` side header verified on behalf of a trusted principal (`identityVerified: true`). |
+| `middleware` | Some middleware wrote `ctx.identity` (source ambiguity kept; unverified). |
+| `iap-header` | The ambient `X-Goog-Authenticated-User-Email` header injected by an authenticating gateway (GCP IAP / GLB) in front of the proxy. **Ambient, not verified** — trust it only when direct access to the proxy is blocked at the network level. |
+
+Known limitation: middleware short-circuits at the first blocker, so a request blocked by an early middleware (e.g. `lint`) never reaches the identity-verifying middleware that follows it in the chain — its log line may carry no identity beyond the ambient IAP header. This is a property of the chain order the operator configured, not a logging bug.
 
 #### Stale-write guard
 

@@ -20,9 +20,14 @@
 
 import type { Workflow } from "@/api/types.ts";
 import { mcpToolAccessLevel } from "@/middleware/builtin/project-role/mcp-tools.ts";
-import type { ServerMiddleware } from "@/middleware/types.ts";
+import type { ServerMiddleware, ServerMiddlewareContext } from "@/middleware/types.ts";
 import type { EnforceLevel } from "../config.ts";
-import type { Logger } from "../logging.ts";
+import {
+  type LogEvent,
+  type Logger,
+  type ResolvedLogIdentity,
+  resolveLogIdentity,
+} from "../logging.ts";
 import { evaluateBodylessPipeline } from "../rest/read-gate.ts";
 import { forwardRequest } from "../upstream.ts";
 import {
@@ -56,7 +61,6 @@ export interface McpGateDeps {
   policy: McpPolicy;
   enforce: EnforceLevel;
   index: AllowedWorkflowIndex;
-  logger: Logger;
   timeoutMs?: number;
   clientMiddlewares?: import("@/middleware/types.ts").ClientMiddleware[];
   /**
@@ -67,6 +71,8 @@ export interface McpGateDeps {
   middlewares?: ServerMiddleware[];
   /** Stored-workflow lookup for middlewares that must not trust the tool args. */
   fetchStoredWorkflow?: (id: string, apiKey: string | null) => Promise<Workflow | null>;
+  /** Whether caller identity may be included in log lines (opt-in). */
+  logIdentity: boolean;
 }
 
 /**
@@ -90,40 +96,42 @@ export function isMcpPath(pathname: string): boolean {
  * small batch), not a stream, so there is nothing to lose by buffering it, and
  * the decision needs the whole thing.
  */
-export async function handleMcpRequest(req: Request, deps: McpGateDeps): Promise<Response> {
-  const pathname = new URL(req.url).pathname;
-
+export async function handleMcpRequest(
+  req: Request,
+  deps: McpGateDeps,
+  reqLog: Logger,
+): Promise<Response> {
   // `off` keeps the route registered — so the path still forwards — while the
   // policy stops applying. Useful to switch the gate out without redeploying a
   // different route table.
   if (deps.enforce === "off") {
-    return forward(req, undefined, pathname, deps);
+    return forward(req, undefined, deps, reqLog);
   }
 
   // Only a POST carries a JSON-RPC request. GET (the server-to-client SSE
   // stream) and DELETE (session teardown) are pure transport.
   if (req.method !== "POST") {
-    return forward(req, undefined, pathname, deps);
+    return forward(req, undefined, deps, reqLog);
   }
 
   const rawJSON = await req.text();
   const parsed = parseJsonRpc(rawJSON);
   if (!parsed) {
     // Not something we can reason about; n8n can reject it on its own terms.
-    return forward(req, rawJSON, pathname, deps);
+    return forward(req, rawJSON, deps, reqLog);
   }
 
   // Answered here, never forwarded: n8n has no such tool. Before the refusal
   // pass, because the same workflow scope decides both and this needs the facts
   // rather than a yes/no.
   if (deps.enforce === "error" && publishesEntryTool(deps.policy)) {
-    const answered = await answerEntryTool(parsed, pathname, deps);
+    const answered = await answerEntryTool(parsed, deps, reqLog);
     if (answered) return answered;
   }
 
   const refusals: JsonRpcMessage[] = [];
   for (const message of parsed.messages) {
-    const refusal = await refuse(message, pathname, deps, req);
+    const refusal = await refuse(message, deps, req, reqLog);
     if (refusal) refusals.push(refusal);
   }
 
@@ -157,7 +165,7 @@ export async function handleMcpRequest(req: Request, deps: McpGateDeps): Promise
     return jsonRpcResponse(refusals, parsed.isBatch);
   }
 
-  const response = await forward(req, narrowedJSON ?? rawJSON, pathname, deps);
+  const response = await forward(req, narrowedJSON ?? rawJSON, deps, reqLog);
 
   // Under `warn` nothing is rewritten: the point of warn is to find out what
   // the policy would break, and a client that never sees a tool or a workflow
@@ -172,7 +180,7 @@ export async function handleMcpRequest(req: Request, deps: McpGateDeps): Promise
     : new Set<string | number>();
   if (!tools && searchIds.size === 0) return response;
 
-  return filterResponse(response, deps, pathname, { tools, searchIds });
+  return filterResponse(response, deps, { tools, searchIds }, reqLog);
 }
 
 /**
@@ -186,8 +194,8 @@ export async function handleMcpRequest(req: Request, deps: McpGateDeps): Promise
  */
 async function answerEntryTool(
   parsed: { messages: JsonRpcMessage[]; isBatch: boolean },
-  pathname: string,
   deps: McpGateDeps,
+  reqLog: Logger,
 ): Promise<Response | null> {
   if (!parsed.messages.every((m) => toolCallName(m) === ENTRY_TOOL_NAME)) return null;
 
@@ -196,7 +204,10 @@ async function answerEntryTool(
     sets = await deps.index.sets();
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
-    log(deps, pathname, `workflow index unavailable: ${reason}`, ENTRY_TOOL_NAME);
+    log(reqLog, deps, `workflow index unavailable: ${reason}`, {
+      tool: ENTRY_TOOL_NAME,
+      rpc: "tools/call",
+    });
     return jsonRpcResponse(
       parsed.messages.map((m) =>
         toolErrorResult(
@@ -215,7 +226,11 @@ async function answerEntryTool(
         return toolErrorResult(message.id, `${ENTRY_TOOL_NAME} requires a workflowId.`);
       }
       if (!sets.allowed.has(id)) {
-        log(deps, pathname, `workflow out of MCP scope: ${id}`, ENTRY_TOOL_NAME);
+        log(reqLog, deps, `workflow out of MCP scope: ${id}`, {
+          tool: ENTRY_TOOL_NAME,
+          rpc: "tools/call",
+          workflowId: id,
+        });
         return toolErrorResult(
           message.id,
           `Not available over MCP: ${id} (${explainRefusal(deps.policy, sets.facts.get(id))}).`,
@@ -294,15 +309,19 @@ function filtersTools(policy: McpPolicy): boolean {
  */
 async function refuse(
   message: JsonRpcMessage,
-  pathname: string,
   deps: McpGateDeps,
   req: Request,
+  reqLog: Logger,
 ): Promise<JsonRpcMessage | null> {
   const tool = toolCallName(message);
   if (tool === null) return null;
+  const rpc = typeof message.method === "string" ? message.method : undefined;
 
   if (!isToolAllowed(deps.policy, tool)) {
-    log(deps, pathname, `tool "${tool}" is not exposed by this proxy`, tool);
+    log(reqLog, deps, `tool "${tool}" is not exposed by this proxy`, {
+      tool,
+      rpc,
+    });
     // The tool was never listed, so a client calling it is off-protocol. Say so
     // as a protocol error rather than as a tool result the model will retry.
     return protocolError(message.id, INVALID_PARAMS, `Unknown tool: ${tool}`);
@@ -317,7 +336,7 @@ async function refuse(
   // is malformed rather than broad. Refused: waving it through would mean the
   // one call the gate cannot reason about is also the one it lets past.
   if (target === null) {
-    log(deps, pathname, `tool "${tool}" named no workflow`, tool);
+    log(reqLog, deps, `tool "${tool}" named no workflow`, { tool, rpc });
     return toolErrorResult(
       message.id,
       `This proxy only allows ${tool} against a workflow it can identify, and this call named none.`,
@@ -329,7 +348,11 @@ async function refuse(
     sets = await deps.index.sets();
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
-    log(deps, pathname, `workflow index unavailable: ${reason}`, tool);
+    log(reqLog, deps, `workflow index unavailable: ${reason}`, {
+      tool,
+      rpc,
+      workflowId: target,
+    });
     // Fail closed. A gate that opens during an upstream outage is not a gate,
     // and an operator who wants the calls through has `--mcp-enforce warn`.
     return toolErrorResult(
@@ -352,7 +375,11 @@ async function refuse(
       .map((id) => `${id} (${explainRefusal(deps.policy, sets.facts.get(id))})`)
       .join("; ");
 
-    log(deps, pathname, `workflow out of MCP scope: ${detail}`, tool);
+    log(reqLog, deps, `workflow out of MCP scope: ${detail}`, {
+      tool,
+      rpc,
+      workflowId: target,
+    });
     return toolErrorResult(
       message.id,
       `Not available over MCP: ${detail}. Note that every workflow id anywhere in the arguments is ` +
@@ -365,7 +392,7 @@ async function refuse(
     const level = mcpToolAccessLevel(tool);
     if (level) {
       const facts = sets.facts.get(target);
-      const verdict = await evaluateBodylessPipeline(deps.middlewares, {
+      const pipelineCtx: ServerMiddlewareContext = {
         workflow: null,
         request: req,
         mode: "proxy",
@@ -375,13 +402,19 @@ async function refuse(
         fetchStoredWorkflow: deps.fetchStoredWorkflow
           ? (id) => deps.fetchStoredWorkflow!(id, req.headers.get("x-n8n-api-key"))
           : undefined,
-      });
+      };
+      const verdict = await evaluateBodylessPipeline(deps.middlewares, pipelineCtx);
       if (verdict.block) {
         log(
+          reqLog,
           deps,
-          pathname,
           `middleware denied: ${verdict.blockedBy ?? "pipeline"}: ${verdict.denial?.message ?? verdict.violations[0]?.message ?? "blocked"}`,
-          tool,
+          {
+            tool,
+            rpc,
+            workflowId: target,
+            identity: deps.logIdentity ? resolveLogIdentity(req, pipelineCtx) : undefined,
+          },
         );
         return toolErrorResult(
           message.id,
@@ -417,8 +450,8 @@ async function refuse(
 async function filterResponse(
   response: Response,
   deps: McpGateDeps,
-  pathname: string,
   plan: { tools: boolean; searchIds: Set<string | number> },
+  reqLog: Logger,
 ): Promise<Response> {
   // By now `refuse()` has already resolved the index for any workflow-scoped
   // call in this request, so this is a cache read. It can still fail on a
@@ -429,7 +462,9 @@ async function filterResponse(
       allowed = (await deps.index.sets()).allowed;
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
-      log(deps, pathname, `workflow index unavailable, withholding search results: ${reason}`);
+      log(reqLog, deps, `workflow index unavailable, withholding search results: ${reason}`, {
+        event: "policy",
+      });
     }
   }
 
@@ -471,9 +506,17 @@ async function filterResponse(
     });
   });
 
-  if (removedTools > 0) log(deps, pathname, `withheld ${removedTools} tool(s) from tools/list`);
+  if (removedTools > 0) {
+    log(reqLog, deps, `withheld ${removedTools} tool(s) from tools/list`, {
+      event: "policy",
+      rpc: "tools/list",
+    });
+  }
   if (removedWorkflows > 0) {
-    log(deps, pathname, `withheld ${removedWorkflows} workflow(s) from search_workflows`);
+    log(reqLog, deps, `withheld ${removedWorkflows} workflow(s) from search_workflows`, {
+      event: "policy",
+      rpc: "search_workflows",
+    });
   }
 
   const headers = new Headers(response.headers);
@@ -588,21 +631,27 @@ function jsonRpcResponse(messages: JsonRpcMessage[], isBatch: boolean): Response
 async function forward(
   req: Request,
   body: string | undefined,
-  pathname: string,
   deps: McpGateDeps,
+  reqLog: Logger,
 ): Promise<Response> {
   const { response, elapsedMs } = await forwardRequest(req, deps.upstream, body, {
     timeoutMs: deps.timeoutMs,
     clientMiddlewares: deps.clientMiddlewares,
   });
-  deps.logger.log({
+  reqLog.log({
     action: "forward",
-    method: req.method,
-    path: pathname,
     status: response.status,
     upstreamMs: elapsedMs,
   });
   return response;
+}
+
+interface McpLogOpts {
+  tool?: string;
+  rpc?: string;
+  workflowId?: string;
+  event?: LogEvent;
+  identity?: ResolvedLogIdentity;
 }
 
 /**
@@ -611,13 +660,20 @@ async function forward(
  * `status` is 200 even for a refusal: the refusal travels as a JSON-RPC reply,
  * so that is genuinely what the client received, and logging a 403 nobody sent
  * would send an operator hunting for an HTTP error in their gateway logs.
+ *
+ * Refusals are the request's terminal line (`event: "request"`); lines that
+ * merely detail a policy already logged as forwarded (`event: "policy"`) share
+ * the same `requestId` so both can be reassembled per request.
  */
-function log(deps: McpGateDeps, pathname: string, message: string, tool?: string): void {
-  deps.logger.log({
+function log(reqLog: Logger, deps: McpGateDeps, message: string, opts: McpLogOpts = {}): void {
+  reqLog.log({
     action: deps.enforce === "error" ? "block" : "warn",
-    method: "POST",
-    path: pathname,
+    event: opts.event ?? "request",
     status: 200,
-    message: `mcp: ${message}${tool ? ` (tool=${tool})` : ""}`,
+    tool: opts.tool,
+    rpc: opts.rpc,
+    workflowId: opts.workflowId,
+    ...(opts.identity ?? {}),
+    message: `mcp: ${message}`,
   });
 }
