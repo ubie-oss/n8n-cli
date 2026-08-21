@@ -37,3 +37,6 @@ src/generated/
 # Temporary files
 *.tmp
 .cache/
+
+# Local tool worktrees
+.claude/worktrees/

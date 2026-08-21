@@ -9,11 +9,15 @@ import {
 } from "@/middleware/client-wiring.ts";
 import { runPipeline } from "@/middleware/pipeline.ts";
 import { buildMiddlewares, resolveEnabledList } from "@/middleware/registry.ts";
-import type { ClientMiddleware, ServerMiddleware } from "@/middleware/types.ts";
+import type {
+  ClientMiddleware,
+  ServerMiddleware,
+  ServerMiddlewareContext,
+} from "@/middleware/types.ts";
 import { DEFAULT_SERVER_MIDDLEWARE_CHAIN, registerBuiltins } from "@/middleware/wiring.ts";
 import { normalizeUpstream, type ProxyConfig, parseListenAddr } from "./config.ts";
 import { DuplicateChecker } from "./duplicate.ts";
-import { Logger } from "./logging.ts";
+import { Logger, type ResolvedLogIdentity, resolveLogIdentity } from "./logging.ts";
 import { handleMcpRequest, isMcpPath, type McpGateDeps } from "./mcp/gate.ts";
 import { AllowedWorkflowIndex } from "./mcp/workflow-index.ts";
 import {
@@ -29,6 +33,9 @@ import { forwardRequest } from "./upstream.ts";
 
 const SERVER_MIDDLEWARES_ENV_VAR = "N8N_SERVER_MIDDLEWARES";
 const CLIENT_MIDDLEWARES_ENV_VAR = "N8N_CLIENT_MIDDLEWARES";
+
+/** Response header carrying the per-request correlation id to the client. */
+const REQUEST_ID_HEADER = "x-n8n-cli-request-id";
 
 /**
  * Tracks whether middleware `prepare()` has finished so `/readyz` can flip
@@ -54,6 +61,8 @@ interface HandlerDeps {
   readiness: ReadinessState;
   /** Built when the operator configured an MCP policy; absent otherwise. */
   mcp: McpGateDeps | null;
+  /** Whether caller identity may be included in log lines (opt-in). */
+  logIdentity: boolean;
 }
 
 /** Starts the proxy server. Returns a handle so tests can stop it cleanly. */
@@ -65,7 +74,8 @@ export function startProxy(config: ProxyConfig): ProxyHandle {
 
   const { host, port } = parseListenAddr(config.listen);
   const upstream = normalizeUpstream(config.upstream);
-  const logger = new Logger(config.logFormat);
+  const logger = new Logger(config.logFormat, config.logWriter);
+  const logIdentity = config.logIdentity ?? envBool(process.env.N8N_PROXY_LOG_IDENTITY);
 
   // Decide which server middlewares to run. Precedence: explicit config (set
   // by the CLI from --server-middleware) > N8N_SERVER_MIDDLEWARES env var >
@@ -126,7 +136,6 @@ export function startProxy(config: ProxyConfig): ProxyHandle {
           },
           mcpSettings.cacheTtlMs,
         ),
-        logger,
         timeoutMs: config.upstreamTimeoutMs,
         clientMiddlewares,
         middlewares,
@@ -136,6 +145,7 @@ export function startProxy(config: ProxyConfig): ProxyHandle {
             timeoutMs: config.upstreamTimeoutMs,
             clientMiddlewares,
           }),
+        logIdentity,
       }
     : null;
 
@@ -196,6 +206,7 @@ export function startProxy(config: ProxyConfig): ProxyHandle {
     clientMiddlewares,
     readiness,
     mcp,
+    logIdentity,
   };
 
   const server = Bun.serve({
@@ -234,23 +245,48 @@ async function handle(req: Request, deps: HandlerDeps): Promise<Response> {
     return handleProbe(req.method, pathname, deps);
   }
 
+  // Per-request correlation id: pinned on every log line this request emits
+  // and echoed to the client on the response header, so a caller can tie its
+  // own records to the proxy's view of the same call.
+  const requestId = crypto.randomUUID();
+  const reqLog = deps.logger.child({ requestId, method: req.method, path: pathname });
+
   // MCP policy, when one is configured. Checked before the workflow-mutation
   // table because the two surfaces are disjoint: n8n's MCP endpoint speaks
   // JSON-RPC on its own path and never looks like a public-API write.
   if (deps.mcp && isMcpPath(pathname)) {
+    const mcpLog = reqLog.child({ surface: "mcp" });
     try {
-      return await handleMcpRequest(req, deps.mcp);
+      return attachRequestId(await handleMcpRequest(req, deps.mcp, mcpLog), requestId);
     } catch (err) {
-      return reportError(err, req, pathname, deps);
+      return attachRequestId(reportError(err, req, deps, mcpLog), requestId);
     }
   }
 
   const mutation = matchWorkflowMutation(req.method, pathname, deps.config.routes);
   if (mutation) {
-    return handleWorkflowMutation(req, mutation, pathname, deps);
+    return attachRequestId(
+      await handleWorkflowMutation(
+        req,
+        mutation,
+        pathname,
+        deps,
+        reqLog.child({ surface: "rest-write" }),
+      ),
+      requestId,
+    );
   }
 
-  return handleTransparentForward(req, pathname, deps);
+  return attachRequestId(
+    await handleTransparentForward(req, pathname, deps, reqLog.child({ surface: "transparent" })),
+    requestId,
+  );
+}
+
+/** Attaches the correlation header to a response so the caller can match it to the log. */
+function attachRequestId(response: Response, requestId: string): Response {
+  response.headers.set(REQUEST_ID_HEADER, requestId);
+  return response;
 }
 
 function isProbeRequest(method: string, pathname: string): boolean {
@@ -303,31 +339,36 @@ async function handleTransparentForward(
   req: Request,
   pathname: string,
   deps: HandlerDeps,
+  reqLog: Logger,
 ): Promise<Response> {
   const read = matchWorkflowRead(req.method, pathname);
+  const log = read
+    ? reqLog.child({ surface: "rest-read", operation: "read", workflowId: read.id })
+    : reqLog;
+  let pipelineCtx: ServerMiddlewareContext | undefined;
+
   if (read) {
+    pipelineCtx = {
+      workflow: null,
+      request: req,
+      mode: "proxy",
+      action: "read",
+      workflowId: read.id,
+      fetchStoredWorkflow: (id) => fetchStoredWorkflow(id, req.headers.get("x-n8n-api-key"), deps),
+    };
     try {
-      const verdict = await evaluateBodylessPipeline(deps.middlewares, {
-        workflow: null,
-        request: req,
-        mode: "proxy",
-        action: "read",
-        workflowId: read.id,
-        fetchStoredWorkflow: (id) =>
-          fetchStoredWorkflow(id, req.headers.get("x-n8n-api-key"), deps),
-      });
+      const verdict = await evaluateBodylessPipeline(deps.middlewares, pipelineCtx);
       if (verdict.block) {
-        deps.logger.log({
+        log.log({
           action: "block",
-          method: req.method,
-          path: pathname,
           status: verdict.denial?.status ?? 403,
           message: verdict.denial?.message,
+          ...logIdentityFor(req, deps, pipelineCtx),
         });
         return buildDenialResponse(verdict);
       }
     } catch (err) {
-      return reportError(err, req, pathname, deps);
+      return reportError(err, req, deps, log);
     }
   }
 
@@ -336,16 +377,15 @@ async function handleTransparentForward(
       timeoutMs: deps.config.upstreamTimeoutMs,
       clientMiddlewares: deps.clientMiddlewares,
     });
-    deps.logger.log({
+    log.log({
       action: "forward",
-      method: req.method,
-      path: pathname,
       status: response.status,
       upstreamMs: elapsedMs,
+      ...logIdentityFor(req, deps, pipelineCtx),
     });
     return response;
   } catch (err) {
-    return reportError(err, req, pathname, deps);
+    return reportError(err, req, deps, log);
   }
 }
 
@@ -354,9 +394,11 @@ async function handleWorkflowMutation(
   mutation: WorkflowMutation,
   pathname: string,
   deps: HandlerDeps,
+  reqLog: Logger,
 ): Promise<Response> {
   const rawJSON = await req.text();
   const apiKey = req.headers.get("x-n8n-api-key");
+  const log = reqLog.child({ operation: mutation.action, workflowId: mutation.id });
 
   // Only some routes carry a workflow definition. Tag assignment, delete and
   // activate carry something else (or nothing), so parsing their body as a
@@ -370,12 +412,11 @@ async function handleWorkflowMutation(
       workflow = JSON.parse(rawJSON) as Workflow;
     } catch (parseErr) {
       const message = parseErr instanceof Error ? parseErr.message : String(parseErr);
-      deps.logger.log({
+      log.log({
         action: "block",
-        method: req.method,
-        path: pathname,
         status: 400,
         message: `invalid JSON: ${message}`,
+        ...logIdentityFor(req, deps),
       });
       return buildBadJSONResponse(message);
     }
@@ -390,7 +431,7 @@ async function handleWorkflowMutation(
   // upstream, not in the request — so they always go through the pipeline.
   const filterTags = deps.config.filterByTags ?? [];
   if (mutation.bodyIsWorkflow && filterTags.length > 0 && !hasAllTags(workflow?.tags, filterTags)) {
-    return handleSkippedMutation(req, rawJSON, pathname, workflow, filterTags, deps);
+    return handleSkippedMutation(req, rawJSON, workflow, filterTags, deps, log);
   }
 
   // Middleware pipeline (lint + authz + future policies).
@@ -417,18 +458,18 @@ async function handleWorkflowMutation(
   const workflowName = workflow?.name;
 
   if (verdict.block) {
-    deps.logger.log({
+    log.log({
       action: "block",
-      method: req.method,
-      path: pathname,
       status: verdict.denial?.status ?? 422,
       workflowName,
+      projectId: pipelineCtx.projectId,
       violations: verdict.violations.map((v) => ({
         rule: v.rule,
         severity: v.severity,
         message: v.message,
       })),
       message: verdict.blockedBy ? `blocked by middleware ${verdict.blockedBy}` : undefined,
+      ...logIdentityFor(req, deps, pipelineCtx),
     });
     return buildDenialResponse(verdict);
   }
@@ -442,13 +483,12 @@ async function handleWorkflowMutation(
       // Treat lookup failure as "no duplicate" — see DuplicateChecker for rationale.
     }
     if (duplicateMatches.length > 0 && deps.config.enforce === "error") {
-      deps.logger.log({
+      log.log({
         action: "block",
-        method: req.method,
-        path: pathname,
         status: 409,
         workflowName,
         message: `duplicate name: ${duplicateMatches.length} match(es)`,
+        ...logIdentityFor(req, deps, pipelineCtx),
       });
       return buildDuplicateResponse(workflow.name, duplicateMatches);
     }
@@ -485,13 +525,12 @@ async function handleWorkflowMutation(
       );
     }
     const action = verdict.violations.length > 0 || duplicateMatches.length > 0 ? "warn" : "pass";
-    deps.logger.log({
+    log.log({
       action,
-      method: req.method,
-      path: pathname,
       status: response.status,
       upstreamMs: elapsedMs,
       workflowName,
+      projectId: pipelineCtx.projectId,
       violations: verdict.violations.length
         ? verdict.violations.map((v) => ({
             rule: v.rule,
@@ -503,10 +542,11 @@ async function handleWorkflowMutation(
         duplicateMatches.length > 0
           ? `duplicate name: ${duplicateMatches.length} upstream match(es)`
           : undefined,
+      ...logIdentityFor(req, deps, pipelineCtx),
     });
     return response;
   } catch (err) {
-    return reportError(err, req, pathname, deps);
+    return reportError(err, req, deps, log);
   }
 }
 
@@ -565,9 +605,14 @@ async function fetchStoredWorkflow(
   });
 }
 
-function reportError(err: unknown, req: Request, pathname: string, deps: HandlerDeps): Response {
+function reportError(err: unknown, req: Request, deps: HandlerDeps, reqLog: Logger): Response {
   const message = err instanceof Error ? err.message : String(err);
-  deps.logger.log({ action: "error", method: req.method, path: pathname, status: 502, message });
+  reqLog.log({
+    action: "error",
+    status: 502,
+    message,
+    ...logIdentityFor(req, deps),
+  });
   return buildErrorResponse(message);
 }
 
@@ -579,27 +624,46 @@ function reportError(err: unknown, req: Request, pathname: string, deps: Handler
 async function handleSkippedMutation(
   req: Request,
   rawJSON: string,
-  pathname: string,
   workflow: Workflow | null,
   filterTags: string[],
   deps: HandlerDeps,
+  reqLog: Logger,
 ): Promise<Response> {
   try {
     const { response, elapsedMs } = await forwardRequest(req, deps.upstream, rawJSON, {
       timeoutMs: deps.config.upstreamTimeoutMs,
       clientMiddlewares: deps.clientMiddlewares,
     });
-    deps.logger.log({
+    reqLog.log({
       action: "forward",
-      method: req.method,
-      path: pathname,
       status: response.status,
       upstreamMs: elapsedMs,
       workflowName: workflow?.name,
       message: `skipped by tag filter (requires: ${filterTags.join(", ")})`,
+      ...logIdentityFor(req, deps),
     });
     return response;
   } catch (err) {
-    return reportError(err, req, pathname, deps);
+    return reportError(err, req, deps, reqLog);
   }
+}
+
+/**
+ * Resolves caller identity for a log line, honoring the `--log-identity`
+ * opt-in. Returns an empty object when disabled so call sites can spread it
+ * unconditionally.
+ */
+function logIdentityFor(
+  req: Request,
+  deps: HandlerDeps,
+  pipeline?: ServerMiddlewareContext,
+): ResolvedLogIdentity | Record<string, never> {
+  if (!deps.logIdentity) return {};
+  return resolveLogIdentity(req, pipeline) ?? {};
+}
+
+/** Parses an env boolean ("1" / "true" / "yes" are true). */
+function envBool(value: string | undefined): boolean {
+  if (value === undefined) return false;
+  return value === "1" || value === "true" || value === "yes";
 }

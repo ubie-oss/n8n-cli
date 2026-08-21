@@ -185,6 +185,7 @@ function policy(overrides: Partial<McpPolicy> = {}): McpPolicy {
 
 let upstream: ReturnType<typeof startMockUpstream>;
 let proxy: ProxyHandle;
+let proxyLogLines: string[];
 
 function start(
   mcpPolicy: McpPolicy,
@@ -192,8 +193,10 @@ function start(
   extra: {
     middlewares?: string[];
     middlewareCliOptions?: Record<string, unknown>;
+    logIdentity?: boolean;
   } = {},
 ): void {
+  proxyLogLines = [];
   proxy = startProxy({
     listen: "127.0.0.1:0",
     upstream: `http://127.0.0.1:${upstream.port}`,
@@ -201,6 +204,7 @@ function start(
     disableRules: [],
     logFormat: "json",
     allowDuplicates: true,
+    logWriter: (line) => proxyLogLines.push(line),
     mcp: { enforce, policy: mcpPolicy, cacheTtlMs: 60_000 },
     ...extra,
   });
@@ -957,5 +961,71 @@ describe("MCP gate: body-less middleware chain", () => {
     );
     expect((reply.result as { isError?: boolean }).isError).toBeUndefined();
     expect(upstream.captured.some((c) => c.pathname === "/mcp-server/http")).toBe(true);
+  });
+});
+
+/**
+ * A middleware that writes a verified identity (when the request carries the
+ * header) and then blocks, so the middleware-denied MCP path can be exercised
+ * with identity present.
+ */
+function blockingIdentityFactory(): ServerMiddlewareFactory<object> {
+  return {
+    name: "blocking-identity",
+    loadFromEnv: () => ({}),
+    loadFromCLI: () => ({}),
+    build: (): ServerMiddleware => ({
+      name: "blocking-identity",
+      evaluate(ctx) {
+        const email = ctx.request?.headers.get("x-impersonator-email");
+        if (email) {
+          ctx.identity = email;
+          ctx.auth = { effective: { email, layer: "impersonator" } };
+        }
+        return {
+          block: true,
+          violations: [],
+          denial: { status: 403, error: "blocked", message: "blocked for test" },
+        };
+      },
+    }),
+  };
+}
+
+describe("MCP gate: identity logging opt-in", () => {
+  function blockLine(): { identity?: string; identitySource?: string; identityVerified?: boolean } {
+    const entries = proxyLogLines.map((l) => JSON.parse(l) as Record<string, unknown>);
+    const line = entries.find((e) => e.action === "block");
+    return line as { identity?: string; identitySource?: string; identityVerified?: boolean };
+  }
+
+  test("a middleware-denied tool call never logs identity unless --log-identity is on", async () => {
+    registerFactory(blockingIdentityFactory());
+    start(policy({ allowTools: ["get_workflow_details"], workflowTags: ["mcp"] }), "error", {
+      middlewares: ["blocking-identity"],
+    });
+    await call(
+      "tools/call",
+      { name: "get_workflow_details", arguments: { workflowId: "wf-open" } },
+      { "x-impersonator-email": "user@example.com" },
+    );
+    expect(blockLine().identity).toBeUndefined();
+  });
+
+  test("with --log-identity the verified identity is attached to the denial line", async () => {
+    registerFactory(blockingIdentityFactory());
+    start(policy({ allowTools: ["get_workflow_details"], workflowTags: ["mcp"] }), "error", {
+      middlewares: ["blocking-identity"],
+      logIdentity: true,
+    });
+    await call(
+      "tools/call",
+      { name: "get_workflow_details", arguments: { workflowId: "wf-open" } },
+      { "x-impersonator-email": "user@example.com" },
+    );
+    const line = blockLine();
+    expect(line.identity).toBe("user@example.com");
+    expect(line.identitySource).toBe("impersonator-verify");
+    expect(line.identityVerified).toBe(true);
   });
 });

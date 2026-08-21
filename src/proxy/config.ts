@@ -18,6 +18,18 @@ export interface ProxyConfig {
   /** Log format */
   logFormat: "text" | "json";
   /**
+   * Whether to include caller identity (email) in log lines. Default false:
+   * emails are PII and opt-in. When enabled, the proxy resolves the best
+   * identity it can — verified (oauth-verify / impersonator-verify) first,
+   * then the ambient GCP IAP header.
+   */
+  logIdentity?: boolean;
+  /**
+   * Write target for log lines. Defaults to process.stdout; injectable so
+   * tests can capture structured output without touching a global.
+   */
+  logWriter?: (line: string) => void;
+  /**
    * When true, skip the upstream duplicate-name check on workflow creation.
    *
    * Default false (check ON): on every `POST /api/v1/workflows` the proxy

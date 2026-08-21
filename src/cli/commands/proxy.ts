@@ -14,6 +14,7 @@ interface ProxyOptions extends McpCliOptions {
   enforce: string;
   disableRule?: string[];
   logFormat: string;
+  logIdentity?: boolean;
   allowDuplicates?: boolean;
   duplicateTtl?: string;
   upstreamTimeout?: string;
@@ -112,6 +113,12 @@ export function registerProxyCommand(program: Command): void {
     .option("--enforce <level>", "Enforcement level for workflow saves: off, warn, error", "error")
     .option("--disable-rule <rules...>", "Disable specific rules (can be repeated)")
     .option("--log-format <fmt>", "Log format: text, json", "text")
+    .option(
+      "--log-identity",
+      "Include caller identity (email) in log lines. Off by default because emails are PII; " +
+        "when enabled the proxy logs the best identity it can resolve (verified token claims " +
+        "first, then the GCP IAP X-Goog-Authenticated-User-Email header). env: N8N_PROXY_LOG_IDENTITY",
+    )
     .option(
       "--allow-duplicates",
       "Skip the upstream duplicate-name check on POST /api/v1/workflows (the check is on by default; under enforce=error a match returns 409, under enforce=warn a header is attached)",
@@ -432,6 +439,7 @@ export function registerProxyCommand(program: Command): void {
         enforce,
         disableRules: opts.disableRule ?? [],
         logFormat,
+        logIdentity: opts.logIdentity,
         allowDuplicates: !!opts.allowDuplicates,
         duplicateTtlMs,
         upstreamTimeoutMs,
