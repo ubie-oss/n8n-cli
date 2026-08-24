@@ -3,6 +3,7 @@ import { isAlreadyOwnedError, isNotFoundError } from "../api/errors.ts";
 import type { TagService } from "../api/tag-service.ts";
 import type { Workflow, WorkflowInput } from "../api/types.ts";
 import type { WorkflowService } from "../api/workflow-service.ts";
+import { compareWorkflows } from "../diff/engine.ts";
 import { ContentRetriever, ErrFileNotExist } from "../git/content.ts";
 import type { Violation } from "../lint/rules/violation.ts";
 import { formatViolationLine } from "../lint/write-check.ts";
@@ -331,6 +332,10 @@ export class Executor {
     // Compare workflows
     const diff = compare(workflow, remoteWorkflow);
     op.diff = diff;
+    if (diff.hasChanges) {
+      // Remote (old) → local (new): what this apply is about to change.
+      op.detailDiff = compareWorkflows(remoteWorkflow, workflow);
+    }
 
     // Try 3-way conflict detection if enabled
     if (this.isThreeWayEnabled()) {
