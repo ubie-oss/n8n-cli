@@ -196,7 +196,7 @@ export function formatDiffMermaid(report: DiffReport): string {
   for (const c of report.comparisons) {
     if (c.status === "unchanged") continue;
     if (c.status === "modified" && c.detail) {
-      blocks.push(mermaidForWorkflow(c, c.detail));
+      blocks.push(buildWorkflowMermaid(c, c.detail).diagram);
     } else {
       const sign = c.status === "added" ? "+" : "-";
       blocks.push(`%% ${sign} workflow: ${c.name}`);
@@ -227,7 +227,15 @@ function mermaidLabel(name: string): string {
   return name.replaceAll('"', "'");
 }
 
-function mermaidForWorkflow(c: WorkflowComparison, d: WorkflowDiffDetail): string {
+/**
+ * Builds the Mermaid diagram for one workflow together with the sanitized
+ * node-ID → node-name mapping, so interactive renderers (the HTML report) can
+ * wire click handlers on the generated SVG nodes.
+ */
+export function buildWorkflowMermaid(
+  c: WorkflowComparison,
+  d: WorkflowDiffDetail,
+): { diagram: string; nodeIdByName: Record<string, string> } {
   const used = new Map<string, string>();
   const kindByName = new Map<string, NodeDiff["kind"]>();
   for (const nd of d.nodeDiffs) {
@@ -237,14 +245,20 @@ function mermaidForWorkflow(c: WorkflowComparison, d: WorkflowDiffDetail): strin
 
   const lines: string[] = [`flowchart LR`, `  %% ${c.name}`];
 
-  // Nodes referenced by edges but absent from nodeDiffs are context: draw them
-  // plain so the changed region stays recognizable inside the whole flow.
+  // Draw the whole graph, not just the changed region: unchanged nodes and
+  // edges render gray so additions, removals and modifications read against
+  // the full flow.
   const allNames = new Set<string>();
+  for (const n of d.unchangedNodes) allNames.add(n.name);
   for (const nd of d.nodeDiffs) {
     allNames.add(nd.name);
     if (nd.oldName) allNames.add(nd.oldName);
   }
   for (const e of d.edgeDiffs) {
+    allNames.add(e.source);
+    allNames.add(e.target);
+  }
+  for (const e of d.unchangedEdges) {
     allNames.add(e.source);
     allNames.add(e.target);
   }
@@ -266,15 +280,29 @@ function mermaidForWorkflow(c: WorkflowComparison, d: WorkflowDiffDetail): strin
         lines.push(`  ${id}(["${label}"]):::modified`);
         break;
       default:
-        lines.push(`  ${id}(["${label}"])`);
+        lines.push(`  ${id}(["${label}"]):::unchanged`);
     }
   }
 
+  // Unchanged edges first so changed ones render on top in the diff classes.
+  // Mermaid has no per-edge class syntax — `A --> B:::c` styles node B — so
+  // edges are styled positionally with linkStyle statements afterwards.
+  // linkStyle indices count edge declarations in order of appearance.
+  let edgeCount = 0;
+  const unchangedIdx: number[] = [];
+  const addedIdx: number[] = [];
+  const removedIdx: number[] = [];
+  for (const e of d.unchangedEdges) {
+    const src = sanitizeMermaidId(e.source, used);
+    const dst = sanitizeMermaidId(e.target, used);
+    lines.push(`  ${src} -->|${e.connectionType}| ${dst}`);
+    unchangedIdx.push(edgeCount++);
+  }
   for (const e of d.edgeDiffs) {
     const src = sanitizeMermaidId(e.source, used);
     const dst = sanitizeMermaidId(e.target, used);
-    const cls = e.kind === "added" ? ":::edgeAdded" : ":::edgeRemoved";
-    lines.push(`  ${src} -->|${e.connectionType}| ${dst}${cls}`);
+    lines.push(`  ${src} -->|${e.connectionType}| ${dst}`);
+    (e.kind === "added" ? addedIdx : removedIdx).push(edgeCount++);
   }
 
   // Renames that carried content edits are "modified" nodes with an oldName:
@@ -286,12 +314,26 @@ function mermaidForWorkflow(c: WorkflowComparison, d: WorkflowDiffDetail): strin
     lines.push(`  ${oldId} -. renamed .-> ${newId}`);
   }
 
-  lines.push(`  classDef added fill:#b7eb8f,stroke:#2f7d02;`);
-  lines.push(`  classDef removed fill:#ffb3b3,stroke:#a8071a;`);
-  lines.push(`  classDef modified fill:#ffe58f,stroke:#d48806;`);
-  lines.push(`  classDef renamed fill:#91caff,stroke:#0958d9;`);
-  lines.push(`  classDef edgeAdded stroke:#2f7d02,stroke-width:2px;`);
-  lines.push(`  classDef edgeRemoved stroke:#a8071a,stroke-width:2px,stroke-dasharray:4;`);
+  if (unchangedIdx.length > 0) {
+    lines.push(`  linkStyle ${unchangedIdx.join(",")} stroke:#b3b9c2,stroke-width:1.5px`);
+  }
+  if (addedIdx.length > 0) {
+    lines.push(`  linkStyle ${addedIdx.join(",")} stroke:#2f7d02,stroke-width:2.5px`);
+  }
+  if (removedIdx.length > 0) {
+    lines.push(
+      `  linkStyle ${removedIdx.join(",")} stroke:#a8071a,stroke-width:2.5px,stroke-dasharray:6`,
+    );
+  }
 
-  return lines.join("\n");
+  lines.push(`  classDef added fill:#b7eb8f,stroke:#2f7d02,color:#1a1f1c;`);
+  lines.push(`  classDef removed fill:#ffb3b3,stroke:#a8071a,color:#1a1f1c;`);
+  lines.push(`  classDef modified fill:#ffe58f,stroke:#d48806,color:#1a1f1c;`);
+  lines.push(`  classDef renamed fill:#91caff,stroke:#0958d9,color:#1a1f1c;`);
+  lines.push(`  classDef unchanged fill:#e4e7eb,stroke:#9aa1ab,color:#333;`);
+
+  const nodeIdByName: Record<string, string> = {};
+  for (const [name, id] of used) nodeIdByName[id] = name;
+
+  return { diagram: lines.join("\n"), nodeIdByName };
 }

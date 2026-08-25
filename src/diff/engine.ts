@@ -3,8 +3,10 @@ import { normalizeForComparison } from "../apply/differ.ts";
 import type {
   DiffOptions,
   EdgeDiff,
+  EdgeRef,
   LineChange,
   NodeDiff,
+  UnchangedNode,
   ValueChange,
   WorkflowDiffDetail,
 } from "./model.ts";
@@ -60,6 +62,8 @@ export function compareWorkflows(
     pinDataChanges: [],
     nodeDiffs: [],
     edgeDiffs: [],
+    unchangedNodes: [],
+    unchangedEdges: [],
   };
 
   diffMetadata(oldWf, newWf, detail);
@@ -67,10 +71,14 @@ export function compareWorkflows(
   diffPinData(oldWf.pinData, newWf.pinData, detail);
 
   const match = matchNodes(oldWf.nodes ?? [], newWf.nodes ?? [], opts);
-  detail.nodeDiffs = buildNodeDiffs(match, opts);
+  const nodeResult = buildNodeDiffs(match, opts);
+  detail.nodeDiffs = nodeResult.diffs;
+  detail.unchangedNodes = nodeResult.unchangedNodes;
 
   const nameMap = buildNameCanonMap(match, oldWf.nodes ?? [], newWf.nodes ?? []);
-  detail.edgeDiffs = diffEdges(oldWf.connections, newWf.connections, nameMap);
+  const edgeResult = diffEdges(oldWf.connections, newWf.connections, nameMap);
+  detail.edgeDiffs = edgeResult.diffs;
+  detail.unchangedEdges = edgeResult.unchanged;
 
   return detail;
 }
@@ -331,14 +339,22 @@ function significantView(node: Node, opts: DiffOptions): Record<string, unknown>
 // Node diffs
 // ---------------------------------------------------------------------------
 
-function buildNodeDiffs(match: NodeMatch, opts: DiffOptions): NodeDiff[] {
+function buildNodeDiffs(
+  match: NodeMatch,
+  opts: DiffOptions,
+): {
+  diffs: NodeDiff[];
+  unchangedNodes: UnchangedNode[];
+} {
   const diffs: NodeDiff[] = [];
+  const unchangedNodes: UnchangedNode[] = [];
 
   for (const { oldIdx, newIdx } of match.pairs) {
     const oldNode = match.oldNodes[oldIdx]!;
     const newNode = match.newNodes[newIdx]!;
     const nd = diffPairedNode(oldNode, newNode, opts);
     if (nd) diffs.push(nd);
+    else unchangedNodes.push({ name: newNode.name, type: newNode.type });
   }
   for (const ni of match.addedNewIdx) {
     const node = match.newNodes[ni]!;
@@ -349,6 +365,7 @@ function buildNodeDiffs(match: NodeMatch, opts: DiffOptions): NodeDiff[] {
       type: node.type,
       parameterChanges: [],
       otherChanges: [],
+      fullParameters: node.parameters,
     });
   }
   for (const oi of match.removedOldIdx) {
@@ -360,9 +377,10 @@ function buildNodeDiffs(match: NodeMatch, opts: DiffOptions): NodeDiff[] {
       type: node.type,
       parameterChanges: [],
       otherChanges: [],
+      fullParameters: node.parameters,
     });
   }
-  return diffs;
+  return { diffs, unchangedNodes };
 }
 
 /** Returns null when the paired nodes are semantically identical. */
@@ -491,10 +509,14 @@ function diffParams(oldP: unknown, newP: unknown): ValueChange[] {
 // Line diff (LCS-based)
 // ---------------------------------------------------------------------------
 
-export function diffLines(oldText: string, newText: string): LineChange[] | null {
+export function diffLines(
+  oldText: string,
+  newText: string,
+  maxLines: number = MAX_LINE_DIFF_LINES,
+): LineChange[] | null {
   const oldLines = oldText.split("\n");
   const newLines = newText.split("\n");
-  if (oldLines.length > MAX_LINE_DIFF_LINES || newLines.length > MAX_LINE_DIFF_LINES) {
+  if (oldLines.length > maxLines || newLines.length > maxLines) {
     return null;
   }
 
@@ -571,11 +593,12 @@ function buildNameCanonMap(
   }
   for (const oi of match.removedOldIdx) {
     const n = oldNodes[oi]!;
-    oldToCanon.set(n.name, `gone:${n.name}`);
+    // \u0000 prefix cannot collide with a real node name.
+    oldToCanon.set(n.name, `\u0000${n.name}`);
   }
   for (const ni of match.addedNewIdx) {
     const n = newNodes[ni]!;
-    newToCanon.set(n.name, `new:${n.name}`);
+    newToCanon.set(n.name, `\u0000${n.name}`);
   }
 
   return { oldToCanon, newToCanon };
@@ -622,7 +645,7 @@ function diffEdges(
   oldConns: Workflow["connections"],
   newConns: Workflow["connections"],
   maps: { oldToCanon: Map<string, string>; newToCanon: Map<string, string> },
-): EdgeDiff[] {
+): { diffs: EdgeDiff[]; unchanged: EdgeRef[] } {
   const oldEdges = extractEdges(oldConns).map((e) => ({
     ...e,
     source: maps.oldToCanon.get(e.source) ?? e.source,
@@ -640,8 +663,11 @@ function diffEdges(
   for (const e of newEdges) newKeys.set(edgeKey(e), e);
 
   const diffs: EdgeDiff[] = [];
+  const unchanged: EdgeRef[] = [];
   for (const [key, e] of newKeys) {
-    if (!oldKeys.has(key)) {
+    if (oldKeys.has(key)) {
+      unchanged.push(toEdgeRef(e));
+    } else {
       diffs.push(toEdgeDiff("added", e));
     }
   }
@@ -651,7 +677,27 @@ function diffEdges(
     }
   }
   diffs.sort(compareEdgeDiffs);
-  return diffs;
+  unchanged.sort(compareEdgeRefs);
+  return { diffs, unchanged };
+}
+
+function toEdgeRef(e: RawEdge): EdgeRef {
+  return {
+    source: stripMarker(e.source),
+    target: stripMarker(e.target),
+    connectionType: e.connectionType,
+    sourceOutputIndex: e.sourceOutputIndex,
+    targetInputIndex: e.targetInputIndex,
+  };
+}
+
+function compareEdgeRefs(a: EdgeRef, b: EdgeRef): number {
+  return (
+    a.source.localeCompare(b.source) ||
+    a.connectionType.localeCompare(b.connectionType) ||
+    a.sourceOutputIndex - b.sourceOutputIndex ||
+    a.target.localeCompare(b.target)
+  );
 }
 
 function toEdgeDiff(kind: EdgeDiff["kind"], e: RawEdge): EdgeDiff {
@@ -665,11 +711,9 @@ function toEdgeDiff(kind: EdgeDiff["kind"], e: RawEdge): EdgeDiff {
   };
 }
 
-/** Drops the gone:/new: markers used only for key uniqueness during comparison. */
+/** Drops the \u0000 marker used only for key uniqueness during comparison. */
 function stripMarker(name: string): string {
-  if (name.startsWith("gone:")) return name.slice("gone:".length);
-  if (name.startsWith("new:")) return name.slice("new:".length);
-  return name;
+  return name.startsWith("\u0000") ? name.slice(1) : name;
 }
 
 function compareEdgeDiffs(a: EdgeDiff, b: EdgeDiff): number {
@@ -699,4 +743,12 @@ function sortKeysDeep(v: unknown): unknown {
     return out;
   }
   return v;
+}
+
+/**
+ * Pretty-printed, key-sorted JSON. Key sorting keeps a raw JSON diff semantic:
+ * two states that differ only in key order produce no diff noise.
+ */
+export function stableJson(v: unknown, space?: number): string {
+  return JSON.stringify(sortKeysDeep(v), null, space);
 }

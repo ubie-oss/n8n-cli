@@ -21,28 +21,45 @@ export function buildReport(
       const newWf = pair.right.workflow!;
       const detail = compareWorkflows(oldWf, newWf, opts);
       const changed = !isDetailEmpty(detail);
-      comparisons.push({
+      const comparison: WorkflowComparison = {
         status: changed ? "modified" : "unchanged",
         workflowId: newWf.id ?? oldWf.id,
         name: newWf.name || oldWf.name,
         leftSource: pair.left.source,
         rightSource: pair.right.source,
         detail: changed ? detail : undefined,
+      };
+      // Non-enumerable so `--format json` stays compact; the HTML report's
+      // raw JSON diff reads them in-process.
+      Object.defineProperties(comparison, {
+        leftRaw: { value: oldWf, enumerable: false },
+        rightRaw: { value: newWf, enumerable: false },
       });
+      comparisons.push(comparison);
     } else if (pair.right) {
-      comparisons.push({
+      const comparison: WorkflowComparison = {
         status: "added",
         workflowId: pair.right.workflow!.id,
         name: pair.right.workflow!.name,
         rightSource: pair.right.source,
+      };
+      Object.defineProperty(comparison, "rightRaw", {
+        value: pair.right.workflow,
+        enumerable: false,
       });
+      comparisons.push(comparison);
     } else {
-      comparisons.push({
+      const comparison: WorkflowComparison = {
         status: "removed",
         workflowId: pair.left!.workflow!.id,
         name: pair.left!.workflow!.name,
         leftSource: pair.left!.source,
+      };
+      Object.defineProperty(comparison, "leftRaw", {
+        value: pair.left!.workflow,
+        enumerable: false,
       });
+      comparisons.push(comparison);
     }
   }
 

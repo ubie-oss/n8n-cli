@@ -130,3 +130,56 @@ describe("buildReport", () => {
     expect(report.comparisons[0]!.status).toBe("unchanged");
   });
 });
+
+describe("loadWorkflowContent — yaml via temp mirror", () => {
+  test("self-contained YAML loads from in-memory content", () => {
+    const yaml = `
+id: yaml-wf-1
+name: YAML workflow
+active: false
+nodes:
+  - id: n1
+    name: Start
+    type: n8n-nodes-base.manualTrigger
+    typeVersion: 1
+    position: [0, 0]
+    parameters: {}
+connections: {}
+`;
+    const wf = loadWorkflowContent(yaml, "wf.yaml");
+    expect(wf.name).toBe("YAML workflow");
+    expect(wf.nodes).toHaveLength(1);
+  });
+
+  test("malformed YAML surfaces a clear error", () => {
+    expect(() => loadWorkflowContent(":::: not yaml :::", "wf.yaml")).toThrow();
+  });
+});
+
+describe("buildReport — raw workflow attachment", () => {
+  test("raws are attached for in-process renderers but excluded from JSON", () => {
+    const left: Workflow = { id: "1", name: "A", active: false, nodes: [], connections: {} };
+    const right: Workflow = { id: "1", name: "B", active: false, nodes: [], connections: {} };
+    const report = buildReport([{ workflow: left }], [{ workflow: right }]);
+    const c = report.comparisons[0]!;
+
+    // In-process access works.
+    expect(c.leftRaw).toBe(left);
+    expect(c.rightRaw).toBe(right);
+
+    // JSON output stays compact.
+    const json = JSON.parse(JSON.stringify(c));
+    expect(json).not.toHaveProperty("leftRaw");
+    expect(json).not.toHaveProperty("rightRaw");
+  });
+
+  test("one-sided comparisons carry only their own raw", () => {
+    const local: Workflow = { id: "new", name: "New", active: false, nodes: [], connections: {} };
+    const report = buildReport([{ workflow: local }], []);
+    const c = report.comparisons[0]!;
+    expect(c.status).toBe("removed");
+    expect(c.leftRaw).toBe(local);
+    expect(c.rightRaw).toBeUndefined();
+    expect(JSON.parse(JSON.stringify(c))).not.toHaveProperty("leftRaw");
+  });
+});

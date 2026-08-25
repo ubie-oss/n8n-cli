@@ -43,12 +43,24 @@ function baseNodes(): Node[] {
 }
 
 describe("compareWorkflows — unchanged", () => {
-  test("identical workflows produce an empty detail", () => {
+  test("identical workflows produce an empty detail with full context", () => {
     const wf = workflow(baseNodes(), {
       Trigger: { main: [[{ node: "HTTP Request", type: "main", index: 0 }]] },
     });
     const detail = compareWorkflows(wf, structuredClone(wf));
     expect(isDetailEmpty(detail)).toBe(true);
+    // Rendering context: everything is unchanged, and it is all reported.
+    // Order follows the input node order.
+    expect(detail.unchangedNodes.map((n) => n.name)).toEqual(["Trigger", "HTTP Request", "Code"]);
+    expect(detail.unchangedEdges).toEqual([
+      {
+        source: "Trigger",
+        target: "HTTP Request",
+        connectionType: "main",
+        sourceOutputIndex: 0,
+        targetInputIndex: 0,
+      },
+    ]);
   });
 
   test("key order and nil-vs-missing do not matter", () => {
@@ -314,5 +326,163 @@ describe("diffLines", () => {
 
   test("identical text yields no changes", () => {
     expect(diffLines("same\nlines", "same\nlines")).toEqual([]);
+  });
+});
+
+describe("compareWorkflows — full parameters on add/delete", () => {
+  test("added nodes carry their complete parameter snapshot", () => {
+    const oldWf = workflow([]);
+    const newWf = workflow([
+      node({
+        name: "New HTTP",
+        type: HTTP_TYPE,
+        parameters: { url: "https://x", options: { timeout: 30 } },
+      }),
+    ]);
+
+    const detail = compareWorkflows(oldWf, newWf);
+    const added = detail.nodeDiffs.find((d) => d.kind === "added")!;
+    expect(added.fullParameters).toEqual({ url: "https://x", options: { timeout: 30 } });
+    expect(added.parameterChanges).toEqual([]);
+  });
+
+  test("removed nodes carry their complete parameter snapshot", () => {
+    const oldWf = workflow([
+      node({ name: "Old", type: HTTP_TYPE, parameters: { url: "https://old" } }),
+    ]);
+    const detail = compareWorkflows(oldWf, workflow([]));
+    const removed = detail.nodeDiffs.find((d) => d.kind === "removed")!;
+    expect(removed.fullParameters).toEqual({ url: "https://old" });
+  });
+
+  test("modified nodes do not carry a snapshot", () => {
+    const oldWf = workflow([node({ name: "A", type: HTTP_TYPE, parameters: { url: "a" } })]);
+    const newWf = workflow([node({ name: "A", type: HTTP_TYPE, parameters: { url: "b" } })]);
+    const nd = compareWorkflows(oldWf, newWf).nodeDiffs[0]!;
+    expect(nd.fullParameters).toBeUndefined();
+  });
+});
+
+describe("compareWorkflows — self-review hardening", () => {
+  test("scalar node fields (disabled/onError/notes) are compared", () => {
+    const oldWf = workflow([
+      node({ name: "A", type: HTTP_TYPE, disabled: false, onError: "stopWorkflow" }),
+    ]);
+    const newWf = workflow([
+      node({ name: "A", type: HTTP_TYPE, disabled: true, onError: "continueRegularOutput" }),
+    ]);
+
+    const nd = compareWorkflows(oldWf, newWf).nodeDiffs[0]!;
+    const paths = nd.otherChanges.map((c) => c.path);
+    expect(paths).toContain("disabled");
+    expect(paths).toContain("onError");
+  });
+
+  test("edges on non-zero output indexes are distinguished", () => {
+    const conn = {
+      main: [[{ node: "B", type: "main", index: 0 }], [{ node: "C", type: "main", index: 0 }]],
+    };
+    const oldWf = workflow(
+      [
+        node({ name: "A", type: "n8n-nodes-base.if" }),
+        node({ name: "B", type: SET_TYPE }),
+        node({ name: "C", type: SET_TYPE }),
+      ],
+      { A: conn },
+    );
+    const newWf = structuredClone(oldWf);
+    // Swap the branch targets: output 0 now goes to C, output 1 to B.
+    newWf.connections = {
+      A: {
+        main: [[{ node: "C", type: "main", index: 0 }], [{ node: "B", type: "main", index: 0 }]],
+      },
+    };
+
+    const detail = compareWorkflows(oldWf, newWf);
+    const edges = detail.edgeDiffs
+      .map((e) => `${e.kind} out${e.sourceOutputIndex}->${e.target}`)
+      .sort();
+    expect(edges).toEqual(["added out0->C", "added out1->B", "removed out0->B", "removed out1->C"]);
+  });
+
+  test("edges of a removed node are reported as removed", () => {
+    const conn = { A: { main: [[{ node: "Doomed", type: "main", index: 0 }]] } };
+    const oldWf = workflow(
+      [
+        node({ name: "A", type: SET_TYPE }),
+        node({ name: "Doomed", type: HTTP_TYPE, parameters: { url: "u" } }),
+      ],
+      conn,
+    );
+    const newWf = workflow([node({ name: "A", type: SET_TYPE })]);
+
+    const detail = compareWorkflows(oldWf, newWf);
+    const removedEdge = detail.edgeDiffs.find((e) => e.kind === "removed")!;
+    expect(removedEdge.source).toBe("A");
+    expect(removedEdge.target).toBe("Doomed");
+    // And a node named with the internal marker prefix must not confuse it.
+    expect(removedEdge.target).not.toContain("\u0000");
+  });
+
+  test("a node literally named with a marker-like prefix does not break edge diffs", () => {
+    const oldWf = workflow(
+      [
+        node({ name: "A", type: SET_TYPE }),
+        node({ name: "gone: A", type: HTTP_TYPE, parameters: { url: "u" } }),
+      ],
+      { A: { main: [[{ node: "gone: A", type: "main", index: 0 }]] } },
+    );
+    const newWf = workflow([node({ name: "A", type: SET_TYPE })]);
+
+    const detail = compareWorkflows(oldWf, newWf);
+    const removedEdge = detail.edgeDiffs.find((e) => e.kind === "removed")!;
+    expect(removedEdge.target).toBe("gone: A");
+  });
+
+  test("code parameters above the line-diff size cap fall back to value dumps", () => {
+    const bigOld = Array.from({ length: 1200 }, (_, i) => `const v${i} = ${i};`).join("\n");
+    const bigNew = `${bigOld}\nconst extra = 1;`;
+    const oldWf = workflow([node({ name: "C", type: CODE_TYPE, parameters: { jsCode: bigOld } })]);
+    const newWf = workflow([node({ name: "C", type: CODE_TYPE, parameters: { jsCode: bigNew } })]);
+
+    const change = compareWorkflows(oldWf, newWf).nodeDiffs[0]!.parameterChanges[0]!;
+    expect(change.lineChanges).toBeUndefined();
+    expect(change.oldValue).toBe(bigOld);
+    expect(change.newValue).toBe(bigNew);
+  });
+
+  test("a code-keyed parameter that stops being a string falls back to a value dump", () => {
+    const oldWf = workflow([
+      node({ name: "C", type: CODE_TYPE, parameters: { jsCode: "return 1;" } }),
+    ]);
+    // null normalizes to "absent", so the change is old value -> absent.
+    const newWf = workflow([node({ name: "C", type: CODE_TYPE, parameters: { jsCode: null } })]);
+
+    const change = compareWorkflows(oldWf, newWf).nodeDiffs[0]!.parameterChanges[0]!;
+    expect(change.lineChanges).toBeUndefined();
+    expect(change.oldValue).toBe("return 1;");
+    expect(change.newValue).toBeUndefined();
+  });
+
+  test("pass 4 pairs multiple simultaneous same-type renames", () => {
+    const oldWf = workflow([
+      node({ name: "Fetch A", id: "fa", type: HTTP_TYPE, parameters: { url: "https://a" } }),
+      node({ name: "Fetch B", id: "fb", type: HTTP_TYPE, parameters: { url: "https://b" } }),
+    ]);
+    const newWf = workflow([
+      node({ name: "Load Users", id: "fa2", type: HTTP_TYPE, parameters: { url: "https://a/v2" } }),
+      node({
+        name: "Load Orders",
+        id: "fb2",
+        type: HTTP_TYPE,
+        parameters: { url: "https://b/v2" },
+      }),
+    ]);
+
+    const detail = compareWorkflows(oldWf, newWf);
+    const kinds = detail.nodeDiffs.map((d) => d.kind).sort();
+    expect(kinds).toEqual(["modified", "modified"]);
+    const oldNames = detail.nodeDiffs.map((d) => d.oldName).sort();
+    expect(oldNames).toEqual(["Fetch A", "Fetch B"]);
   });
 });

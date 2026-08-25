@@ -6,6 +6,7 @@ import { parseDiffSpec } from "@/apply/threeway/diffspec.ts";
 import { defaultApplyOptions } from "@/apply/types.ts";
 import { resolveConfig, resolveContext } from "@/cli/root.ts";
 import { formatDiffMermaid, formatDiffStat, formatDiffText } from "@/diff/format.ts";
+import { formatDiffHtml } from "@/diff/format-html.ts";
 import type { DiffOptions, DiffReport } from "@/diff/model.ts";
 import { buildReport } from "@/diff/report.ts";
 import { loadWorkflowContent, loadWorkflowFile } from "@/diff/sources.ts";
@@ -48,19 +49,25 @@ export function registerDiffCommand(program: Command): void {
     )
     .option("--ids <ids>", "Comma-separated workflow IDs to include")
     .option("--stat", "Print only per-workflow summary lines")
-    .option("-f, --format <format>", "Output format: text, json, mermaid", "text")
+    .option("-f, --format <format>", "Output format: text, json, mermaid, html", "text")
     .option("--include-position", "Report node position changes instead of ignoring them")
     .action(async (left, right, options: DiffCommandOptions, command) => {
+      // exitCode instead of process.exit(): exit() terminates before piped
+      // stdout has flushed, silently truncating redirected html/json output.
       try {
-        process.exit(await run(left, right, options, command));
+        process.exitCode = await runDiff(left, right, options, command);
       } catch (err) {
         console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
-        process.exit(EXIT_ERROR);
+        process.exitCode = EXIT_ERROR;
       }
     });
 }
 
-async function run(
+/**
+ * Executes the diff and returns the process exit code (0/1/2). Exported for
+ * tests; the commander action is a thin wrapper around this.
+ */
+export async function runDiff(
   left: string | undefined,
   right: string | undefined,
   options: DiffCommandOptions,
@@ -68,8 +75,8 @@ async function run(
 ): Promise<number> {
   const opts: DiffOptions = { includePosition: !!options.includePosition };
   const format = options.format;
-  if (!["text", "json", "mermaid"].includes(format)) {
-    throw new Error(`unsupported --format "${format}" (expected text, json or mermaid)`);
+  if (!["text", "json", "mermaid", "html"].includes(format)) {
+    throw new Error(`unsupported --format "${format}" (expected text, json, mermaid or html)`);
   }
 
   let report: DiffReport;
@@ -218,6 +225,10 @@ function print(report: DiffReport, format: string, statOnly: boolean): void {
       break;
     case "mermaid":
       console.log(formatDiffMermaid(report) || "No differences found.");
+      break;
+    case "html":
+      // Written to stdout so callers choose the destination: `> report.html`.
+      process.stdout.write(formatDiffHtml(report));
       break;
     default:
       console.log(statOnly ? formatDiffStat(report) : formatDiffText(report, statOnly));

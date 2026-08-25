@@ -153,7 +153,7 @@ Three comparison modes:
 | `--git-spec <spec>` | Compare at the base ref of a git range (e.g. `origin/main...HEAD`) against the working tree |
 | `--ids <ids>` | Comma-separated workflow IDs to include |
 | `--stat` | Print only per-workflow summary lines (token-efficient for AI consumption) |
-| `-f, --format <format>` | Output format: `text` (default), `json`, or `mermaid` |
+| `-f, --format <format>` | Output format: `text` (default), `json`, `mermaid`, or `html` |
 | `--include-position` | Report node position changes instead of ignoring them |
 
 #### What counts as a change
@@ -201,7 +201,7 @@ M Nightly customer sync (id: wf-demo-1)  +2 nodes, -1 nodes, ~3 nodes, ~connecti
     - "Transform" →[main:0] "Post to Slack"
 ```
 
-`--format mermaid` renders each changed workflow as a color-coded flowchart (green = added, red = removed, yellow = modified, blue = renamed) suitable for PRs and Markdown. `--format json` emits the full structured report for tooling.
+`--format mermaid` renders each changed workflow as a color-coded flowchart (green = added, red = removed, yellow = modified, blue = renamed) suitable for PRs and Markdown. `--format html > report.html` writes a self-contained change-centric HTML report (summary badges, interactive diagram with per-node diffs, git-style parameter diffs, and a raw line diff of the key-sorted workflow JSON). `--format json` emits the full structured report for tooling.
 
 ### `convert`
 

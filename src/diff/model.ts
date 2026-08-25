@@ -1,3 +1,5 @@
+import type { Workflow } from "../api/types.ts";
+
 /**
  * Structured diff model for workflow comparisons.
  *
@@ -47,10 +49,31 @@ export interface NodeDiff {
   parameterChanges: ValueChange[];
   /** Changes outside `parameters`: typeVersion, credentials, onError, ... */
   otherChanges: ValueChange[];
+  /**
+   * The complete parameter object, present only on added/removed nodes —
+   * the equivalent of git showing a whole new or deleted file. Renderers
+   * expand it into all-added or all-removed diff rows.
+   */
+  fullParameters?: Record<string, unknown>;
 }
 
 export interface EdgeDiff {
   kind: ChangeKind;
+  source: string;
+  target: string;
+  connectionType: string;
+  sourceOutputIndex: number;
+  targetInputIndex: number;
+}
+
+/** A node that did not change; carried so renderers can draw the full graph. */
+export interface UnchangedNode {
+  name: string;
+  type: string;
+}
+
+/** An edge present on both sides; carried so renderers can draw the full graph. */
+export interface EdgeRef {
   source: string;
   target: string;
   connectionType: string;
@@ -71,6 +94,13 @@ export interface WorkflowComparison {
   leftSource?: string;
   rightSource?: string;
   detail?: WorkflowDiffDetail;
+  /**
+   * The raw left/right workflow objects, attached non-enumerably by
+   * buildReport: renderers (the HTML raw JSON diff) use them in-process, but
+   * they are excluded from `--format json` output to keep it token-efficient.
+   */
+  readonly leftRaw?: Workflow;
+  readonly rightRaw?: Workflow;
 }
 
 export interface WorkflowDiffDetail {
@@ -83,6 +113,10 @@ export interface WorkflowDiffDetail {
   pinDataChanges: ValueChange[];
   nodeDiffs: NodeDiff[];
   edgeDiffs: EdgeDiff[];
+  /** Nodes present on both sides with no change (rendering context). */
+  unchangedNodes: UnchangedNode[];
+  /** Edges present on both sides with no change (rendering context). */
+  unchangedEdges: EdgeRef[];
 }
 
 export interface DiffReport {
