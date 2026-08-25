@@ -1,4 +1,6 @@
 import path from "node:path";
+import { isDetailEmpty } from "../diff/engine.ts";
+import { formatDetailLines } from "../diff/format.ts";
 import type {
   ApplyOperation,
   ApplyResult,
@@ -87,7 +89,15 @@ function printUpdateSection(ops: ApplyOperation[]): void {
       console.log(`  ~ ${filename} (id: ${op.workflowID})${threeWayTag}`);
     }
     printThreeWayInfo(op);
-    if (op.diff) {
+    // `detailDiff` is only meaningful when it has content: the coarse
+    // differ counts node position moves as changes, but the detail engine
+    // ignores them by default, so a position-only edit produces an empty
+    // detail. Fall back to the field list rather than printing nothing.
+    if (op.detailDiff && !isDetailEmpty(op.detailDiff)) {
+      for (const line of formatDetailLines(op.detailDiff)) {
+        console.log(`  ${line}`);
+      }
+    } else if (op.diff) {
       for (const field of op.diff.fields) {
         printFieldDiff(field);
       }

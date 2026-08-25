@@ -5,6 +5,7 @@ A command-line interface for managing [n8n](https://n8n.io/) workflows as code. 
 ## Features
 
 - **Apply** - Deploy local workflow definitions (JSON/YAML/TypeScript) to an n8n server with dry-run support and conflict detection
+- **Diff** - Show what changed between two workflow files, a git ref and the working tree, or local definitions and the n8n server — as text, JSON, or Mermaid
 - **Convert** - Convert workflow files between JSON, YAML and TypeScript formats locally
 - **Import** - Pull workflows from an n8n server to local files, with optional YAML/TypeScript conversion and code externalization
 - **Lint** - Validate workflow definitions against configurable rules
@@ -129,6 +130,78 @@ For enforcement that does not depend on the client (any working copy can pass `-
 | `0` | Success |
 | `1` | Error detected |
 | `2` | Conflict detected (dry-run) or warning detected (non-force mode) |
+
+### `diff`
+
+Show what changed between workflow definitions. Read-only: it never writes to files or the server.
+
+```bash
+n8n-cli diff [left] [right] [options]
+```
+
+Three comparison modes:
+
+| Mode | Invocation | Left (old) / Right (new) |
+|------|------------|--------------------------|
+| Two files | `n8n-cli diff old.json new.json` | Any `.json` / `.yaml` / `.ts` workflow file pair |
+| Git ref vs working tree | `n8n-cli diff --git-spec origin/main...HEAD -d ./definitions` | Files at the base ref vs the working tree |
+| Local dir vs server | `n8n-cli diff -d ./definitions` | Definitions directory vs workflows fetched from the n8n API |
+
+| Option | Description |
+|--------|-------------|
+| `-d, --dir <path>` | Definitions directory used by git/server comparisons (default: `./definitions`) |
+| `--git-spec <spec>` | Compare at the base ref of a git range (e.g. `origin/main...HEAD`) against the working tree |
+| `--ids <ids>` | Comma-separated workflow IDs to include |
+| `--stat` | Print only per-workflow summary lines (token-efficient for AI consumption) |
+| `-f, --format <format>` | Output format: `text` (default), `json`, `mermaid`, or `html` |
+| `--include-position` | Report node position changes instead of ignoring them |
+
+#### What counts as a change
+
+The diff is change-centric and noise-free by design:
+
+- Node positions, `staticData` drift, key order, and nil-vs-empty differences are ignored (`--include-position` opts positions back in)
+- Nodes are matched by stable ID first, then by name; renames are detected even when IDs changed (as happens with `.ts` definitions, whose IDs derive from node names)
+- Parameter changes report concrete paths (`parameters.url`) with before/after values
+- Multi-line code parameters (Code nodes, SQL queries) get line-level diffs instead of full value dumps
+- Connection changes are reported per edge — including `ai_*` connection types — so rewiring is visible without reading JSON
+- Credentials are compared as references (name/ID) only; secret values never appear in output
+
+#### Exit Codes
+
+Designed for CI gates and AI self-verification loops (edit → `diff` → `apply --dry-run` → apply → re-`diff`):
+
+| Code | Description |
+|------|-------------|
+| `0` | No differences found |
+| `1` | Differences found |
+| `2` | The diff could not be computed (bad input, API error, ...) |
+
+Example session:
+
+```console
+$ n8n-cli diff before.json after.json
+M Nightly customer sync (id: wf-demo-1)  +2 nodes, -1 nodes, ~3 nodes, ~connections (5)
+
+=== Nightly customer sync (id: wf-demo-1) ===
+  Metadata:
+    active: true → false
+  Nodes:
+    ~ "Fetch Customers" → "Fetch Users":
+      parameters.url: "https://api.example.com/customers" → "https://api.example.com/v2/users"
+    ~ "Transform":
+      parameters.jsCode:
+        - return rows.filter(r => r.active);
+        + const active = rows.filter(r => r.status === 'active');
+        + return active;
+    + "Upsert BigQuery" (n8n-nodes-base.dataTable)
+    - "Post to Slack" (n8n-nodes-base.slack)
+  Connections:
+    + "Fetch Users" →[main:0] "Upsert BigQuery"
+    - "Transform" →[main:0] "Post to Slack"
+```
+
+`--format mermaid` renders each changed workflow as a color-coded flowchart (green = added, red = removed, yellow = modified, blue = renamed) suitable for PRs and Markdown. `--format html > report.html` writes a self-contained change-centric HTML report (summary badges, interactive diagram with per-node diffs, git-style parameter diffs, and a raw line diff of the key-sorted workflow JSON). `--format json` emits the full structured report for tooling.
 
 ### `convert`
 

@@ -1,4 +1,5 @@
 import type { Workflow } from "../api/types.ts";
+import type { WorkflowDiffDetail } from "../diff/model.ts";
 import type { Violation } from "../lint/rules/violation.ts";
 
 /** OperationType represents the type of operation to perform on a workflow. */
@@ -118,6 +119,13 @@ export interface ApplyOperation {
   localUpdated?: string;
   remoteUpdated?: string;
   diff?: WorkflowDiff;
+  /**
+   * Node- and edge-level detail for update operations, computed when the
+   * coarse `diff` reports changes. Direction is remote (old) → local (new):
+   * what this apply would change on the server. Purely presentational —
+   * conflict detection never reads it.
+   */
+  detailDiff?: WorkflowDiffDetail;
   error?: Error;
   forced: boolean;
   tagsAdded: string[];
