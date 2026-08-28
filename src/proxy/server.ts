@@ -86,6 +86,7 @@ export function startProxy(config: ProxyConfig): ProxyHandle {
     cliValue: config.middlewares?.join(","),
     env: process.env,
     envVar: SERVER_MIDDLEWARES_ENV_VAR,
+    fileValue: config.middlewareFileList,
     fallback: DEFAULT_SERVER_MIDDLEWARE_CHAIN,
   });
 
@@ -98,12 +99,14 @@ export function startProxy(config: ProxyConfig): ProxyHandle {
     cliValue: config.clientMiddlewares?.join(","),
     env: process.env,
     envVar: CLIENT_MIDDLEWARES_ENV_VAR,
+    fileValue: config.clientMiddlewareFileList,
     fallback: DEFAULT_CLIENT_MIDDLEWARE_CHAIN,
   });
   const clientMiddlewares = buildClientMiddlewares({
     enabled: enabledClient,
     env: process.env,
     cliOpts: config.clientMiddlewareCliOptions ?? {},
+    fileOptions: config.clientMiddlewareFileOptions,
   });
 
   const legacyCliOpts: Record<string, unknown> = {
@@ -119,6 +122,7 @@ export function startProxy(config: ProxyConfig): ProxyHandle {
     enabled,
     env: process.env,
     cliOpts: legacyCliOpts,
+    fileOptions: config.middlewareFileOptions,
   });
 
   const mcpSettings = config.mcp ?? null;

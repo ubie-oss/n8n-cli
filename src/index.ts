@@ -1,4 +1,5 @@
 import { registerApplyCommand } from "./cli/commands/apply.ts";
+import { registerConfigCommand } from "./cli/commands/config.ts";
 import { registerConvertCommand } from "./cli/commands/convert.ts";
 import { registerCredentialCommand } from "./cli/commands/credential.ts";
 import { registerDataTableCommand } from "./cli/commands/data-table.ts";
@@ -41,6 +42,7 @@ registerTestCommand(program);
 registerTraceCommand(program);
 registerWebhookCommand(program);
 registerProxyCommand(program);
+registerConfigCommand(program);
 
 try {
   await program.parseAsync(process.argv);

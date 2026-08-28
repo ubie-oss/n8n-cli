@@ -1,5 +1,7 @@
 import type { Command } from "commander";
+import { loadMergedRc } from "@/cli/root.ts";
 import { parseTagFilter } from "@/common/tags.ts";
+import type { LoadedRc } from "@/config/rc.ts";
 import { parseMiddlewareList } from "@/middleware/registry.ts";
 import { parseEnforceLevel } from "@/proxy/config.ts";
 import { type McpCliOptions, parseMcpSettings } from "@/proxy/mcp/config.ts";
@@ -8,12 +10,12 @@ import { parseRoutes } from "@/proxy/rest/router.ts";
 import { startProxy } from "@/proxy/server.ts";
 
 interface ProxyOptions extends McpCliOptions {
-  listen: string;
+  listen?: string;
   upstream?: string;
   lintConfig?: string;
-  enforce: string;
+  enforce?: string;
   disableRule?: string[];
-  logFormat: string;
+  logFormat?: string;
   logIdentity?: boolean;
   allowDuplicates?: boolean;
   duplicateTtl?: string;
@@ -107,12 +109,21 @@ export function registerProxyCommand(program: Command): void {
     .description(
       "Run a transparent HTTP proxy that intercepts n8n public-API workflow saves and runs middleware (lint, authz, ...)",
     )
-    .option("--listen <addr>", "Address to bind (host:port or :port)", ":8080")
-    .option("--upstream <url>", "Upstream n8n base URL (env: N8N_API_URL)")
+    .option("--listen <addr>", "Address to bind (host:port or :port; config: proxy.listen)")
+    .option(
+      "--upstream <url>",
+      "Upstream n8n base URL (env: N8N_API_URL; config: proxy.upstream or api.url)",
+    )
     .option("-c, --lint-config <path>", "Path to .n8nlintrc.json (auto-discovered if omitted)")
-    .option("--enforce <level>", "Enforcement level for workflow saves: off, warn, error", "error")
-    .option("--disable-rule <rules...>", "Disable specific rules (can be repeated)")
-    .option("--log-format <fmt>", "Log format: text, json", "text")
+    .option(
+      "--enforce <level>",
+      "Enforcement level for workflow saves: off, warn, error (config: proxy.enforce)",
+    )
+    .option(
+      "--disable-rule <rules...>",
+      "Disable specific rules (can be repeated; config: proxy.disableRules)",
+    )
+    .option("--log-format <fmt>", "Log format: text, json (config: proxy.logFormat)")
     .option(
       "--log-identity",
       "Include caller identity (email) in log lines. Off by default because emails are PII; " +
@@ -121,21 +132,23 @@ export function registerProxyCommand(program: Command): void {
     )
     .option(
       "--allow-duplicates",
-      "Skip the upstream duplicate-name check on POST /api/v1/workflows (the check is on by default; under enforce=error a match returns 409, under enforce=warn a header is attached)",
+      "Skip the upstream duplicate-name check on POST /api/v1/workflows (the check is on by default; under enforce=error a match returns 409, under enforce=warn a header is attached). config: proxy.allowDuplicates",
     )
-    .option("--duplicate-ttl <ms>", "TTL (ms) for the cached upstream workflow-name index", "60000")
+    .option(
+      "--duplicate-ttl <ms>",
+      "TTL (ms) for the cached upstream workflow-name index (config: proxy.duplicateTtlMs)",
+    )
     .option(
       "--upstream-timeout <ms>",
-      "Per-request upstream timeout in milliseconds (0 disables)",
-      "30000",
+      "Per-request upstream timeout in milliseconds (0 disables; config: proxy.upstreamTimeoutMs)",
     )
     .option(
       "--server-middleware <list>",
-      "Comma-separated server-middleware chain (default: lint; env: N8N_SERVER_MIDDLEWARES). Example: lint,authz",
+      "Comma-separated server-middleware chain (default: lint; env: N8N_SERVER_MIDDLEWARES; config: proxy.serverMiddlewares or middlewares.server). Example: lint,authz",
     )
     .option(
       "--client-middleware <list>",
-      "Comma-separated client-middleware chain run on outgoing upstream requests (default: empty; env: N8N_CLIENT_MIDDLEWARES). Example: iap-auth,api-key-inject",
+      "Comma-separated client-middleware chain run on outgoing upstream requests (default: empty; env: N8N_CLIENT_MIDDLEWARES; config: proxy.clientMiddlewares or middlewares.client). Example: iap-auth,api-key-inject",
     )
     // iap-auth options — only meaningful when "iap-auth" is in the client-middleware chain.
     .option(
@@ -207,12 +220,12 @@ export function registerProxyCommand(program: Command): void {
     )
     .option(
       "--tags <tags>",
-      "Only run middleware against workflow saves whose tags contain ALL of the listed names (AND condition; env: PROXY_FILTER_BY_TAGS). Non-matching saves are forwarded transparently.",
+      "Only run middleware against workflow saves whose tags contain ALL of the listed names (AND condition; env: PROXY_FILTER_BY_TAGS; config: proxy.tags). Non-matching saves are forwarded transparently.",
     )
     .option(
       "--routes <table>",
       "Endpoints to treat as policy-relevant, one per line or comma-separated: " +
-        '"METHOD /path/:id -> action [body=workflow]" (env: N8N_PROXY_ROUTES). ' +
+        '"METHOD /path/:id -> action [body=workflow]" (env: N8N_PROXY_ROUTES; config: proxy.routes). ' +
         "Defaults to workflow create/update/tags/delete/activate.",
     )
     // MCP gate — policy applied to n8n's instance-level MCP endpoint. Off
@@ -405,23 +418,49 @@ export function registerProxyCommand(program: Command): void {
       "Behavior on token-fetch failure: throw (default) or skip",
     )
     .action((opts: ProxyOptions) => {
-      const upstream = opts.upstream ?? process.env.N8N_API_URL;
+      // The all-in-one config file supplies proxy defaults below env/CLI
+      // precedence: defaults < config file < env < CLI flags. --config is a
+      // program-level option, so it lives on program.opts(), not this
+      // command's opts bag.
+      let rc: LoadedRc;
+      try {
+        rc = loadMergedRc((program.opts() as { config?: string }).config);
+      } catch (err) {
+        console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
+        process.exit(1);
+      }
+      const rcProxy = rc.config.proxy ?? {};
+
+      const listen = opts.listen ?? rcProxy.listen ?? ":8080";
+      const upstream =
+        opts.upstream ?? process.env.N8N_API_URL ?? rcProxy.upstream ?? rc.config.api?.url;
       if (!upstream) {
         console.error(
-          "Error: --upstream is required (or set N8N_API_URL). Example: --upstream https://n8n.example.com",
+          "Error: --upstream is required (or set N8N_API_URL, proxy.upstream / api.url in " +
+            ".n8nctlrc.json). Example: --upstream https://n8n.example.com",
         );
         process.exit(1);
       }
 
-      const logFormat = opts.logFormat === "json" ? "json" : "text";
-      const enforce = parseEnforceLevel(opts.enforce);
-      const duplicateTtlMs = parsePositiveInt(opts.duplicateTtl, "--duplicate-ttl");
-      const upstreamTimeoutMs = parsePositiveInt(opts.upstreamTimeout, "--upstream-timeout");
+      const logFormat = opts.logFormat ?? rcProxy.logFormat ?? "text";
+      const logFormatResolved = logFormat === "json" ? "json" : "text";
+      const enforce = parseEnforceLevel(opts.enforce ?? rcProxy.enforce ?? "error");
+      const duplicateTtlMs =
+        parsePositiveInt(opts.duplicateTtl, "--duplicate-ttl") ?? rcProxy.duplicateTtlMs;
+      const upstreamTimeoutMs =
+        parsePositiveInt(opts.upstreamTimeout, "--upstream-timeout") ?? rcProxy.upstreamTimeoutMs;
 
       const middlewares = parseMiddlewareList(opts.serverMiddleware);
       const clientMiddlewares = parseMiddlewareList(opts.clientMiddleware);
-      const filterByTags = parseTagFilter(opts.tags ?? process.env.PROXY_FILTER_BY_TAGS);
-      const routes = parseRoutes(opts.routes ?? process.env.N8N_PROXY_ROUTES);
+      // Proxy-scoped chains win over the global middlewares section.
+      const serverFileList = rcProxy.serverMiddlewares ?? rc.config.middlewares?.server;
+      const clientFileList = rcProxy.clientMiddlewares ?? rc.config.middlewares?.client;
+      const middlewareFileOptions = rc.config.middlewares?.options;
+
+      const tagSource = opts.tags ?? process.env.PROXY_FILTER_BY_TAGS ?? rcProxy.tags?.join(",");
+      const filterByTags = parseTagFilter(tagSource);
+      const routeSource = opts.routes ?? process.env.N8N_PROXY_ROUTES ?? rcProxy.routes?.join("\n");
+      const routes = parseRoutes(routeSource);
 
       let mcp: ReturnType<typeof parseMcpSettings>;
       try {
@@ -433,20 +472,24 @@ export function registerProxyCommand(program: Command): void {
 
       const handle = startProxy({
         routes,
-        listen: opts.listen,
+        listen,
         upstream,
         lintConfigPath: opts.lintConfig,
         enforce,
-        disableRules: opts.disableRule ?? [],
-        logFormat,
-        logIdentity: opts.logIdentity,
-        allowDuplicates: !!opts.allowDuplicates,
+        disableRules: opts.disableRule ?? rcProxy.disableRules ?? [],
+        logFormat: logFormatResolved,
+        logIdentity: opts.logIdentity ?? rcProxy.logIdentity,
+        allowDuplicates: opts.allowDuplicates ?? rcProxy.allowDuplicates,
         duplicateTtlMs,
         upstreamTimeoutMs,
         middlewares,
         middlewareCliOptions: extractMiddlewareCliOpts(opts),
+        middlewareFileOptions,
+        middlewareFileList: serverFileList,
         clientMiddlewares: clientMiddlewares.length > 0 ? clientMiddlewares : undefined,
         clientMiddlewareCliOptions: extractClientMiddlewareCliOpts(opts),
+        clientMiddlewareFileOptions: middlewareFileOptions,
+        clientMiddlewareFileList: clientFileList,
         filterByTags: filterByTags.length > 0 ? filterByTags : undefined,
         mcp: mcp ?? undefined,
       });
@@ -458,14 +501,16 @@ export function registerProxyCommand(program: Command): void {
       // "(env/default)" to avoid lying about an empty chain.
       const mwDisplay = middlewares.length
         ? middlewares.join(",")
-        : (process.env.N8N_SERVER_MIDDLEWARES ?? "lint (default)");
+        : (process.env.N8N_SERVER_MIDDLEWARES ??
+          (serverFileList?.length ? serverFileList.join(",") : "lint (default)"));
       const clientMwDisplay = clientMiddlewares.length
         ? clientMiddlewares.join(",")
-        : (process.env.N8N_CLIENT_MIDDLEWARES ?? "(none)");
+        : (process.env.N8N_CLIENT_MIDDLEWARES ??
+          (clientFileList?.length ? clientFileList.join(",") : "(none)"));
       const tagsDisplay = filterByTags.length > 0 ? `, tags=${filterByTags.join(",")}` : "";
       const mcpDisplay = mcp ? `, mcp=${mcp.enforce} on ${MCP_PATH_PREFIX}` : "";
       console.error(
-        `n8n-cli proxy listening on ${opts.listen} → ${upstream} (enforce=${enforce}, server-middlewares=${mwDisplay}, client-middlewares=${clientMwDisplay}${tagsDisplay}${mcpDisplay})`,
+        `n8n-cli proxy listening on ${listen} → ${upstream} (enforce=${enforce}, server-middlewares=${mwDisplay}, client-middlewares=${clientMwDisplay}${tagsDisplay}${mcpDisplay})`,
       );
 
       const shutdown = async (signal: string) => {

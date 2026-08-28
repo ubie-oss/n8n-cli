@@ -3,6 +3,7 @@ import { isAlreadyOwnedError, isNotFoundError } from "../api/errors.ts";
 import type { TagService } from "../api/tag-service.ts";
 import type { Workflow, WorkflowInput } from "../api/types.ts";
 import type { WorkflowService } from "../api/workflow-service.ts";
+import { loadRc } from "../config/rc.ts";
 import { compareWorkflows } from "../diff/engine.ts";
 import { ContentRetriever, ErrFileNotExist } from "../git/content.ts";
 import type { Violation } from "../lint/rules/violation.ts";
@@ -75,10 +76,14 @@ export class Executor {
     // `src/cli/commands/apply.ts` is responsible for catching the typed error
     // and printing a friendly message.
     registerBuiltins();
+    // The all-in-one config file supplies the chain and per-middleware
+    // options below env/CLI precedence (flags and env vars still win).
+    const rc = loadRc();
     const enabled = resolveEnabledList({
       cliValue: opts.middlewares.join(","),
       env: process.env,
       envVar: "N8N_SERVER_MIDDLEWARES",
+      fileValue: rc.config.middlewares?.server,
       fallback: DEFAULT_SERVER_MIDDLEWARE_CHAIN,
     });
     const filtered = opts.noLint ? enabled.filter((n) => n !== "lint") : enabled;
@@ -95,6 +100,7 @@ export class Executor {
       enabled: filtered,
       env: process.env,
       cliOpts: legacyCliOpts,
+      fileOptions: rc.config.middlewares?.options,
     });
 
     // Eagerly run prepare() on every middleware whose prepare() is

@@ -1140,18 +1140,18 @@ n8n-cli proxy [options]
 
 | Option | Description |
 |--------|-------------|
-| `--listen <addr>` | Address to bind, e.g. `:8080` or `127.0.0.1:8080` (default: `:8080`) |
-| `--upstream <url>` | Upstream n8n base URL (env: `N8N_API_URL`) |
+| `--listen <addr>` | Address to bind, e.g. `:8080` or `127.0.0.1:8080` (default: `:8080`; config: `proxy.listen`) |
+| `--upstream <url>` | Upstream n8n base URL (env: `N8N_API_URL`; config: `proxy.upstream` or `api.url`) |
 | `-c, --lint-config <path>` | Path to `.n8nlintrc.json` (auto-discovered if omitted) |
-| `--enforce <level>` | `off`, `warn`, or `error` (default: `error`) |
-| `--disable-rule <rules...>` | Disable specific rules (can be repeated) |
-| `--log-format <fmt>` | Log format: `text` or `json` (default: `text`) |
-| `--log-identity` | Include caller identity (email) in log lines. Off by default because emails are PII; see [Logging](#proxy-logging). env: `N8N_PROXY_LOG_IDENTITY` |
-| `--allow-duplicates` | Skip the upstream duplicate-name check (the check is on by default) |
-| `--duplicate-ttl <ms>` | TTL for the cached upstream workflow-name index (default: 60000) |
-| `--upstream-timeout <ms>` | Per-request upstream timeout in milliseconds (default: 30000, 0 disables) |
-| `--server-middleware <list>` | Comma-separated server-middleware chain (default: `lint`; env: `N8N_SERVER_MIDDLEWARES`). Example: `lint,authz` |
-| `--tags <tags>` | Only run middleware against workflow saves whose tags contain ALL of the listed names (AND condition; env: `PROXY_FILTER_BY_TAGS`). Non-matching saves are forwarded transparently |
+| `--enforce <level>` | `off`, `warn`, or `error` (default: `error`; config: `proxy.enforce`) |
+| `--disable-rule <rules...>` | Disable specific rules (can be repeated; config: `proxy.disableRules`) |
+| `--log-format <fmt>` | Log format: `text` or `json` (default: `text`; config: `proxy.logFormat`) |
+| `--log-identity` | Include caller identity (email) in log lines. Off by default because emails are PII; see [Logging](#proxy-logging). env: `N8N_PROXY_LOG_IDENTITY`; config: `proxy.logIdentity` |
+| `--allow-duplicates` | Skip the upstream duplicate-name check (the check is on by default; config: `proxy.allowDuplicates`) |
+| `--duplicate-ttl <ms>` | TTL for the cached upstream workflow-name index (default: 60000; config: `proxy.duplicateTtlMs`) |
+| `--upstream-timeout <ms>` | Per-request upstream timeout in milliseconds (default: 30000, 0 disables; config: `proxy.upstreamTimeoutMs`) |
+| `--server-middleware <list>` | Comma-separated server-middleware chain (default: `lint`; env: `N8N_SERVER_MIDDLEWARES`; config: `proxy.serverMiddlewares` or `middlewares.server`). Example: `lint,authz` |
+| `--tags <tags>` | Only run middleware against workflow saves whose tags contain ALL of the listed names (AND condition; env: `PROXY_FILTER_BY_TAGS`; config: `proxy.tags`). Non-matching saves are forwarded transparently |
 | `--stale-write-enforce <level>` | Stale-write guard: `off` (default), `warn`, or `error`. Requires `stale-write` in the middleware chain |
 | `--stale-write-on-missing-base <mode>` | Callers that declare no base revision: `allow` (default) or `deny` |
 | `--stale-write-on-error <mode>` | When the stored workflow cannot be read: `deny` (default) or `allow` |
@@ -1427,6 +1427,86 @@ n8n-cli version
 | `--api-key <key>` | n8n API key (env: `N8N_API_KEY`) |
 | `--timeout <duration>` | Request timeout, e.g. `30s`, `5m` (env: `N8N_API_TIMEOUT`) |
 | `-o, --output <format>` | Output format: `json`, `table` (default: `json`) |
+| `--config <path>` | Path to the all-in-one config file (env: `N8NCTL_CONFIG`; replaces project-level discovery — see [Configuration file](#configuration-file-n8nctlrcjson)) |
+
+## Configuration file (`.n8nctlrc.json`)
+
+Beyond environment variables, n8n-cli reads one all-in-one configuration file
+that covers API connection, lint, middleware, and proxy settings. The filename
+is chosen to survive the planned `n8nctl` rename.
+
+**Placements** (both are read and merged):
+
+| Placement | Path | Purpose |
+|-----------|------|---------|
+| User-level | `$XDG_CONFIG_HOME/n8nctl/config.json` (default `~/.config/n8nctl/config.json`) | Personal settings — the right home for API keys |
+| Project-level | `.n8nctlrc.json` discovered by walking up from the working directory | Team settings committed to the repository |
+
+**Precedence** (lowest → highest):
+
+```
+built-in defaults < user file < project file < environment variables < CLI flags
+```
+
+Environment variables keep winning over files, so an existing direnv- or
+CI-driven setup behaves exactly as before. An explicit file (`--config` /
+`N8NCTL_CONFIG`) replaces the project layer and wins over the user file.
+
+String values support `${ENV_VAR}` interpolation — secrets stay in the
+environment while everything else is versioned. Referencing an undefined
+variable is an error, not a silent empty string.
+
+```json
+{
+  "$schema": "https://raw.githubusercontent.com/ubie-oss/n8n-cli/main/schemas/n8nctlrc.schema.json",
+  "api": {
+    "url": "https://n8n.example.com",
+    "apiKey": "${N8N_API_KEY}",
+    "timeout": "30s"
+  },
+  "lint": {
+    "rules": { "orphaned-node": "warning" }
+  },
+  "middlewares": {
+    "client": ["iap-auth", "api-key-inject"],
+    "options": {
+      "iap-auth": {
+        "audience": "${N8N_API_URL}",
+        "tokenSourceKind": "adc-impersonate",
+        "impersonateServiceAccount": "gate-caller@example.iam.gserviceaccount.com"
+      }
+    }
+  },
+  "proxy": {
+    "enforce": "error",
+    "logFormat": "json"
+  }
+}
+```
+
+Add the `$schema` line for editor completion and validation.
+
+Notes:
+
+- `middlewares.options.<name>` keys mirror the camelCase CLI flag names of each
+  middleware (documented under [proxy](#proxy)). Secret-carrying options keep
+  their restrictions: `api-key-inject` accepts only an env-var reference, never
+  a raw key.
+- A literal `api.apiKey` in a **project-level** file triggers a warning —
+  secrets committed to git leak through history. Use `${ENV_VAR}` or move the
+  key to the user-level file.
+- **Migration:** the legacy `.n8nlintrc.json` keeps working unchanged. When a
+  directory contains both, `.n8nctlrc.json` wins; the legacy file's whole
+  content is treated as its `lint` section. To migrate, move the content under
+  a `lint` key.
+
+Inspect the merged result without touching the API:
+
+```bash
+n8n-cli config check   # validate files: JSON syntax, shape, ${VAR} resolution — CI-safe
+n8n-cli config show    # effective merged config with sources; secrets masked
+n8n-cli config show --reveal-secrets
+```
 
 ## TypeScript workflow definitions
 
@@ -1602,8 +1682,13 @@ check.
 
 ### Environment Variables
 
+See [Configuration file (`.n8nctlrc.json`)](#configuration-file-n8nctlrcjson) —
+an all-in-one alternative to the environment variables below, with precedence
+`defaults < user file < project file < environment variables < CLI flags`.
+
 | Variable | Description |
 |----------|-------------|
+| `N8NCTL_CONFIG` | Path to the all-in-one config file (same as `--config`) |
 | `N8N_API_URL` | n8n instance API URL (required) |
 | `N8N_API_KEY` | n8n API key (required, unless an egress chain supplies credentials — see below) |
 | `N8N_API_TIMEOUT` | Request timeout in milliseconds |
