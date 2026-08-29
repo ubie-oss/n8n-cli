@@ -35,18 +35,24 @@ export interface BuildMiddlewaresInput {
   env?: NodeJS.ProcessEnv;
   /** Flat commander-style options bag from the CLI action. */
   cliOpts?: Record<string, unknown>;
+  /**
+   * Per-middleware option sections from `.n8nctlrc.json`
+   * (`middlewares.options`), keyed by middleware name. Merged at the lowest
+   * precedence: file < env < CLI flags. Keys mirror the CLI option names.
+   */
+  fileOptions?: Record<string, Record<string, unknown>>;
 }
 
 /**
  * Resolves and builds the enabled middlewares.
  *
- * Order: built-in default values < env < CLI flags. The factory's
- * `loadFromEnv` and `loadFromCLI` each return *partial* options; this
- * function merges them with CLI winning on overlap, then hands the merged
- * object to `build`, which enforces required fields via zod.
- *
- * Unknown middleware names throw with a friendly list so users can't
- * silently disable the pipeline by typoing a name in env.
+ * Order: built-in default values < config file < env < CLI flags. The
+ * factory's `loadFromCLI` doubles as the file-section parser (the sections
+ * use the same camelCase keys the commander options bag carries), so a
+ * factory needs no extra method to support the config file. Each loader
+ * returns *partial* options; this function merges them with CLI winning on
+ * overlap, then hands the merged object to `build`, which enforces required
+ * fields via zod.
  */
 export function buildMiddlewares(input: BuildMiddlewaresInput): ServerMiddleware[] {
   const env = input.env ?? process.env;
@@ -61,6 +67,8 @@ export function buildMiddlewares(input: BuildMiddlewaresInput): ServerMiddleware
           "Did you typo --server-middleware or N8N_SERVER_MIDDLEWARES?",
       );
     }
+    const fileSection = input.fileOptions?.[name];
+    const fromFile = fileSection ? factory.loadFromCLI(fileSection) : {};
     const fromEnv = factory.loadFromEnv(env);
     const fromCli = factory.loadFromCLI(cliOpts);
     // Deep-merge per top-level key so partial CLI overrides don't wipe
@@ -70,7 +78,7 @@ export function buildMiddlewares(input: BuildMiddlewaresInput): ServerMiddleware
     // must survive). One level of nesting is enough for current options;
     // arrays are replaced wholesale (intended: a CLI list overrides env).
     const merged = mergeOptions(
-      fromEnv as Record<string, unknown>,
+      mergeOptions(fromFile as Record<string, unknown>, fromEnv as Record<string, unknown>),
       fromCli as Record<string, unknown>,
     );
     built.push(factory.build(merged));
@@ -78,6 +86,11 @@ export function buildMiddlewares(input: BuildMiddlewaresInput): ServerMiddleware
   return built;
 }
 
+/**
+ * Merges two partial option objects with `override` winning. Kept next to
+ * buildMiddlewares; the two-arg shape composes for the file < env < CLI
+ * chain.
+ */
 function mergeOptions(
   base: Record<string, unknown>,
   override: Record<string, unknown>,
@@ -112,17 +125,21 @@ export function parseMiddlewareList(value: string | undefined): string[] {
 }
 
 /**
- * Resolves the active middleware list from CLI/env with a fallback default.
+ * Resolves the active middleware list from CLI/env/config file with a
+ * fallback default.
  *
  * Precedence:
  *   1. `cliValue` (e.g. commander's --server-middleware) when non-empty
  *   2. `env[envVar]` when non-empty
- *   3. `fallback` (typically ["lint"] for backwards compatibility)
+ *   3. `fileValue` (middlewares.server / middlewares.client in
+ *      `.n8nctlrc.json`) when non-empty
+ *   4. `fallback` (typically ["lint"] for backwards compatibility)
  */
 export function resolveEnabledList(args: {
   cliValue?: string;
   env?: NodeJS.ProcessEnv;
   envVar?: string;
+  fileValue?: string[];
   fallback: string[];
 }): string[] {
   const fromCli = parseMiddlewareList(args.cliValue);
@@ -130,5 +147,6 @@ export function resolveEnabledList(args: {
   const envVal = args.envVar ? args.env?.[args.envVar] : undefined;
   const fromEnv = parseMiddlewareList(envVal);
   if (fromEnv.length > 0) return fromEnv;
+  if (args.fileValue && args.fileValue.length > 0) return args.fileValue;
   return args.fallback;
 }

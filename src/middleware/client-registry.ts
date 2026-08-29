@@ -34,14 +34,20 @@ export interface BuildClientMiddlewaresInput {
   env?: NodeJS.ProcessEnv;
   /** Flat commander-style options bag from the CLI action. */
   cliOpts?: Record<string, unknown>;
+  /**
+   * Per-middleware option sections from `.n8nctlrc.json`
+   * (`middlewares.options`), keyed by middleware name. Lowest precedence:
+   * file < env < CLI flags.
+   */
+  fileOptions?: Record<string, Record<string, unknown>>;
 }
 
 /**
  * Resolves and builds the enabled client middlewares.
  *
- * Same precedence model as `buildMiddlewares`: env < CLI flags, with deep
- * merge per top-level key so partial CLI overrides don't wipe env-supplied
- * fields inside nested option buckets.
+ * Same precedence model as `buildMiddlewares`: config file < env < CLI
+ * flags, with deep merge per top-level key so partial CLI overrides don't
+ * wipe file/env-supplied fields inside nested option buckets.
  */
 export function buildClientMiddlewares(input: BuildClientMiddlewaresInput): ClientMiddleware[] {
   const env = input.env ?? process.env;
@@ -56,10 +62,12 @@ export function buildClientMiddlewares(input: BuildClientMiddlewaresInput): Clie
           "Did you typo --client-middleware or N8N_CLIENT_MIDDLEWARES?",
       );
     }
+    const fileSection = input.fileOptions?.[name];
+    const fromFile = fileSection ? factory.loadFromCLI(fileSection) : {};
     const fromEnv = factory.loadFromEnv(env);
     const fromCli = factory.loadFromCLI(cliOpts);
     const merged = mergeOptions(
-      fromEnv as Record<string, unknown>,
+      mergeOptions(fromFile as Record<string, unknown>, fromEnv as Record<string, unknown>),
       fromCli as Record<string, unknown>,
     );
     built.push(factory.build(merged));

@@ -12,6 +12,7 @@ import {
   loadFromEnv,
   validate,
 } from "../config/config.ts";
+import { applyRcApiSection, type LoadedRc, loadRc, warnLiteralSecretsInRc } from "../config/rc.ts";
 import { buildClientMiddlewares } from "../middleware/client-registry.ts";
 import {
   DEFAULT_CLIENT_MIDDLEWARE_CHAIN,
@@ -39,28 +40,30 @@ export interface GlobalContext {
 }
 
 /**
- * Builds the egress middleware chain for the API client from
- * `N8N_CLIENT_MIDDLEWARES`. Empty by default, which keeps the direct-to-n8n
- * path byte-identical to before — nothing is registered, nothing runs.
- *
- * Deliberately knows no middleware by name: each factory reads its own
- * configuration off the environment, so authentication stays an opt-in
- * extension rather than something the core request path carries.
+ * Builds the egress middleware chain for the API client. The chain list and
+ * per-middleware options come from (lowest first) `.n8nctlrc.json` files,
+ * then environment variables; CLI flags for the global commands don't carry
+ * middleware options, so no CLI layer exists here.
  */
-function buildEgressChain(): ClientMiddleware[] {
+function buildEgressChain(rc: LoadedRc): ClientMiddleware[] {
   const enabled = resolveEnabledList({
     env: process.env,
     envVar: "N8N_CLIENT_MIDDLEWARES",
+    fileValue: rc.config.middlewares?.client,
     fallback: DEFAULT_CLIENT_MIDDLEWARE_CHAIN,
   });
   if (enabled.length === 0) return [];
 
   registerClientBuiltins();
-  return buildClientMiddlewares({ enabled, env: process.env });
+  return buildClientMiddlewares({
+    enabled,
+    env: process.env,
+    fileOptions: rc.config.middlewares?.options,
+  });
 }
 
-function createContext(config: Config): GlobalContext {
-  const clientMiddlewares = buildEgressChain();
+function createContext(config: Config, rc: LoadedRc): GlobalContext {
+  const clientMiddlewares = buildEgressChain(rc);
   const client = new Client(config.apiURL, config.apiKey, config.timeoutMs, clientMiddlewares);
   return {
     config,
@@ -84,7 +87,12 @@ export function createProgram(): Command {
     .option("--api-url <url>", "n8n API URL (env: N8N_API_URL)")
     .option("--api-key <key>", "n8n API key (env: N8N_API_KEY)")
     .option("--timeout <duration>", "Request timeout (default: 30s, env: N8N_API_TIMEOUT)")
-    .option("-o, --output <format>", "Output format: json, table", "json");
+    .option("-o, --output <format>", "Output format: json, table", "json")
+    .option(
+      "--config <path>",
+      "Path to the all-in-one config file (.n8nctlrc.json); replaces project-level " +
+        "discovery. User-level defaults to ~/.config/n8nctl/config.json (env: N8NCTL_CONFIG)",
+    );
 
   // version command (does not require API config)
   program
@@ -98,12 +106,28 @@ export function createProgram(): Command {
 }
 
 /**
- * Resolve config from global options + env vars.
+ * Loads the merged configuration files for this invocation. Shared by
+ * resolveConfig / middleware wiring / lint discovery so every consumer sees
+ * the same user < project merge.
+ */
+export function loadMergedRc(configPath?: string): LoadedRc {
+  const rc = loadRc({ configPath });
+  warnLiteralSecretsInRc(rc);
+  return rc;
+}
+
+/**
+ * Resolve config from global options + config files + env vars.
+ * Precedence: built-in defaults < config files (user < project) < env < CLI flags.
  * Call this inside commands that need API access.
  */
 export function resolveConfig(program: Command): Config {
   const opts = program.opts();
   const config = defaultConfig();
+
+  const rc = loadMergedRc(opts.config);
+  applyRcApiSection(config, rc.config.api);
+
   loadFromEnv(config);
 
   // CLI flags override env vars
@@ -138,7 +162,8 @@ export function resolveContext(program: Command): GlobalContext {
     }
     throw e;
   }
-  return createContext(config);
+  const rc = loadMergedRc(program.opts().config);
+  return createContext(config, rc);
 }
 
 /**

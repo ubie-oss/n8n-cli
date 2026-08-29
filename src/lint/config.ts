@@ -1,18 +1,23 @@
 import fs from "node:fs";
 import path from "node:path";
+import { loadRc, PROJECT_RC_FILENAME } from "@/config/rc.ts";
 
 const CONFIG_FILENAME = ".n8nlintrc.json";
 
 /**
- * Searches for a config file by walking up from startDir to the filesystem root.
- * Returns the first `.n8nlintrc.json` found, or undefined if none exists.
+ * Searches for a config file by walking up from startDir to the filesystem
+ * root. Returns the first config found — `.n8nctlrc.json` (all-in-one, whose
+ * `lint` section is used) is preferred over the legacy `.n8nlintrc.json`
+ * within the same directory. Returns undefined if none exists.
  */
 export function findConfigFile(startDir: string): string | undefined {
   let dir = path.resolve(startDir);
   // eslint-disable-next-line no-constant-condition
   while (true) {
-    const candidate = path.join(dir, CONFIG_FILENAME);
-    if (fs.existsSync(candidate)) return candidate;
+    for (const name of [PROJECT_RC_FILENAME, CONFIG_FILENAME]) {
+      const candidate = path.join(dir, name);
+      if (fs.existsSync(candidate)) return candidate;
+    }
     const parent = path.dirname(dir);
     if (parent === dir) break;
     dir = parent;
@@ -105,27 +110,36 @@ function parseRulesConfig(rawRules: Record<string, unknown> | undefined): Map<st
   return rulesConfig;
 }
 
-/** Load reads and parses a lint config file. Auto-discovers from CWD if no path given. */
-export function loadLintConfig(configPath?: string): LintConfig {
-  const defaultConfig: LintConfig = {
-    rulesConfig: new Map(),
-    projectRulesConfig: new Map(),
-  };
-
-  if (!configPath) {
-    configPath = findConfigFile(process.cwd());
-    if (!configPath) return defaultConfig;
-  }
-
+/** Loads and parses a lint config file (legacy or all-in-one shape). */
+function loadLintConfigFromFile(configPath: string): LintConfig {
   let data: string;
   try {
     data = fs.readFileSync(configPath, "utf-8");
   } catch {
     // File doesn't exist or can't be read - return defaults
-    return defaultConfig;
+    return { rulesConfig: new Map(), projectRulesConfig: new Map() };
   }
 
-  const raw = JSON.parse(data) as RawLintConfig;
+  const raw = JSON.parse(data) as Record<string, unknown>;
+  // An all-in-one .n8nctlrc.json carries lint settings in its `lint`
+  // section; a legacy .n8nlintrc.json (or an ad-hoc --lint-config file) IS
+  // the lint section.
+  const lintSection = (
+    path.basename(configPath) === PROJECT_RC_FILENAME
+      ? isPlainObject(raw.lint)
+        ? raw.lint
+        : {}
+      : raw
+  ) as RawLintConfig;
+  return lintConfigFromRaw(lintSection);
+}
+
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
+/** Builds a LintConfig from a raw lint section (rules + projects). */
+function lintConfigFromRaw(raw: RawLintConfig): LintConfig {
   const rulesConfig = parseRulesConfig(raw.rules);
   const projectRulesConfig = new Map<string, Map<string, RuleConfig>>();
 
@@ -139,6 +153,30 @@ export function loadLintConfig(configPath?: string): LintConfig {
   }
 
   return { rulesConfig, projectRulesConfig };
+}
+
+/**
+ * Load reads and parses a lint config file.
+ *
+ * With an explicit path the file is read as-is (a `.n8nctlrc.json` path
+ * reads its `lint` section). Auto-discovery goes through the all-in-one
+ * config loader so a user-level ~/.config/n8nctl/config.json and a
+ * project-level `.n8nctlrc.json` / legacy `.n8nlintrc.json` merge with
+ * project winning — the same precedence as every other setting.
+ */
+export function loadLintConfig(configPath?: string): LintConfig {
+  const defaultConfig: LintConfig = {
+    rulesConfig: new Map(),
+    projectRulesConfig: new Map(),
+  };
+
+  if (!configPath) {
+    const rc = loadRc();
+    if (!rc.config.lint) return defaultConfig;
+    return lintConfigFromRaw(rc.config.lint as RawLintConfig);
+  }
+
+  return loadLintConfigFromFile(configPath);
 }
 
 /** Checks if a rule is enabled in the config. Default: enabled. */

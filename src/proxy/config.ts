@@ -58,6 +58,18 @@ export interface ProxyConfig {
    */
   middlewareCliOptions?: Record<string, unknown>;
   /**
+   * Per-middleware option sections from `.n8nctlrc.json`
+   * (`middlewares.options`), keyed by middleware name. Lowest precedence:
+   * file < env < CLI flags.
+   */
+  middlewareFileOptions?: Record<string, Record<string, unknown>>;
+  /**
+   * Server middleware list from the config file (proxy.serverMiddlewares
+   * falling back to middlewares.server). Sits between the env var and the
+   * built-in default in resolveEnabledList's precedence.
+   */
+  middlewareFileList?: string[];
+  /**
    * Tag-based scope filter (AND condition). When set, the proxy only runs
    * middleware (lint / authz / ...) and duplicate detection against workflow
    * saves whose `tags` contain every name listed here; non-matching saves
@@ -86,6 +98,17 @@ export interface ProxyConfig {
    * pick out its own keys.
    */
   clientMiddlewareCliOptions?: Record<string, unknown>;
+  /**
+   * Per-middleware option sections from `.n8nctlrc.json`
+   * (`middlewares.options`), keyed by middleware name. Lowest precedence.
+   */
+  clientMiddlewareFileOptions?: Record<string, Record<string, unknown>>;
+  /**
+   * Client middleware list from the config file (proxy.clientMiddlewares
+   * falling back to middlewares.client). Sits between the env var and the
+   * built-in default in resolveEnabledList's precedence.
+   */
+  clientMiddlewareFileList?: string[];
   /**
    * Policy applied to n8n's instance-level MCP endpoint. Absent means the path
    * is forwarded like any other, which is what a deployment that never

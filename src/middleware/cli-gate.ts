@@ -1,4 +1,5 @@
 import type { Workflow, WorkflowInput } from "@/api/types.ts";
+import { loadRc } from "@/config/rc.ts";
 import { formatViolationLine } from "@/lint/write-check.ts";
 import { disposePipeline, preparePipeline, runPipeline } from "./pipeline.ts";
 import { buildMiddlewares, resolveEnabledList } from "./registry.ts";
@@ -41,10 +42,14 @@ export interface ServerMiddlewareGateOptions {
 export async function runServerMiddlewareGate(options: ServerMiddlewareGateOptions): Promise<void> {
   registerBuiltins();
   const env = options.env ?? process.env;
+  // The all-in-one config file supplies the chain and per-middleware options
+  // below env/CLI precedence (CLI flags and env vars still win).
+  const rc = loadRc({ env });
   const enabled = resolveEnabledList({
     cliValue: options.middlewares?.join(","),
     env,
     envVar: "N8N_SERVER_MIDDLEWARES",
+    fileValue: rc.config.middlewares?.server,
     fallback: DEFAULT_SERVER_MIDDLEWARE_CHAIN,
   });
   const filtered = options.noLint ? enabled.filter((n) => n !== "lint") : enabled;
@@ -58,7 +63,12 @@ export async function runServerMiddlewareGate(options: ServerMiddlewareGateOptio
 
   let chain: ServerMiddleware[];
   try {
-    chain = buildMiddlewares({ enabled: filtered, env, cliOpts: legacyCliOpts });
+    chain = buildMiddlewares({
+      enabled: filtered,
+      env,
+      cliOpts: legacyCliOpts,
+      fileOptions: rc.config.middlewares?.options,
+    });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error(`Error: ${message}`);

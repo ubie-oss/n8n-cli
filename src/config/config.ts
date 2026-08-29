@@ -69,7 +69,8 @@ export function validate(config: Config, env: NodeJS.ProcessEnv = process.env): 
     throw new ConfigError(
       "api-url",
       "API URL is required",
-      "Set N8N_API_URL environment variable or use --api-url flag",
+      "Set N8N_API_URL environment variable, use --api-url flag, or set api.url in " +
+        ".n8nctlrc.json (or ~/.config/n8nctl/config.json)",
     );
   }
   const hasEgressChain = (env.N8N_CLIENT_MIDDLEWARES ?? "").trim().length > 0;
@@ -77,8 +78,9 @@ export function validate(config: Config, env: NodeJS.ProcessEnv = process.env): 
     throw new ConfigError(
       "api-key",
       "API key is required",
-      "Set N8N_API_KEY environment variable or use --api-key flag " +
-        "(not needed when N8N_CLIENT_MIDDLEWARES supplies credentials)",
+      "Set N8N_API_KEY environment variable, use --api-key flag, or set api.apiKey " +
+        '(e.g. "${MY_KEY}") in .n8nctlrc.json — not needed when N8N_CLIENT_MIDDLEWARES ' +
+        "supplies credentials",
     );
   }
 }

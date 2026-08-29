@@ -1,0 +1,191 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/ubie-oss/n8n-cli/main/schemas/n8nctlrc.schema.json",
+  "title": "n8n-cli all-in-one configuration (.n8nctlrc.json)",
+  "description": "All-in-one configuration for n8n-cli. Place as .n8nctlrc.json in the project directory (discovered by walking up) or as config.json under $XDG_CONFIG_HOME/n8nctl/ (default ~/.config/n8nctl/config.json). Project settings win over user settings; environment variables and CLI flags win over both. String values support ${ENV_VAR} interpolation; referencing an undefined variable is an error.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "Pointer to this schema for editor support."
+    },
+    "api": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "url": {
+          "type": "string",
+          "description": "n8n API URL (env: N8N_API_URL, flag: --api-url)."
+        },
+        "apiKey": {
+          "type": "string",
+          "description": "n8n API key. Prefer \"${ENV_VAR}\" interpolation over a literal value; a literal key in a project-level file triggers a warning."
+        },
+        "timeout": {
+          "type": "string",
+          "description": "Request timeout, e.g. \"30s\", \"5m\" or plain milliseconds (env: N8N_API_TIMEOUT, flag: --timeout)."
+        },
+        "output": {
+          "type": "string",
+          "enum": ["json", "table"],
+          "description": "Default output format (flag: --output)."
+        }
+      }
+    },
+    "lint": {
+      "type": "object",
+      "description": "Lint configuration. Same shape as the legacy .n8nlintrc.json, nested under this section.",
+      "additionalProperties": false,
+      "properties": {
+        "rules": {
+          "type": "object",
+          "description": "Rule configs keyed by rule name. Values: true/false, \"error\"/\"warning\"/\"off\", or [\"error\"|\"warning\", { options }].",
+          "additionalProperties": true
+        },
+        "projects": {
+          "type": "object",
+          "description": "Per-project rule overrides keyed by n8n project ID.",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "rules": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            }
+          }
+        }
+      }
+    },
+    "middlewares": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "client": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Client middleware chain, e.g. [\"iap-auth\", \"api-key-inject\"] (env: N8N_CLIENT_MIDDLEWARES, proxy flag: --client-middleware)."
+        },
+        "server": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Server middleware chain, e.g. [\"lint\", \"authz\"] (env: N8N_SERVER_MIDDLEWARES, proxy flag: --server-middleware)."
+        },
+        "options": {
+          "type": "object",
+          "description": "Per-middleware options keyed by middleware name. Keys mirror the camelCase CLI flag names of each middleware. Secret values must come from env-var references.",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        }
+      }
+    },
+    "proxy": {
+      "type": "object",
+      "description": "Defaults for the `proxy` command. CLI flags and environment variables override these.",
+      "additionalProperties": false,
+      "properties": {
+        "listen": {
+          "type": "string",
+          "description": "Address to bind, e.g. \":8080\" or \"127.0.0.1:8080\" (flag: --listen)."
+        },
+        "upstream": {
+          "type": "string",
+          "description": "Upstream n8n base URL. Falls back to api.url when omitted (env: N8N_API_URL, flag: --upstream)."
+        },
+        "enforce": {
+          "type": "string",
+          "enum": ["off", "warn", "error"],
+          "description": "Enforcement level for workflow saves (flag: --enforce)."
+        },
+        "logFormat": {
+          "type": "string",
+          "enum": ["text", "json"],
+          "description": "Log format (flag: --log-format)."
+        },
+        "logIdentity": {
+          "type": "boolean",
+          "description": "Include caller identity (email) in log lines (flag: --log-identity)."
+        },
+        "allowDuplicates": {
+          "type": "boolean",
+          "description": "Skip the upstream duplicate-name check on workflow creation (flag: --allow-duplicates)."
+        },
+        "disableRules": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Rule names to disable (flag: --disable-rule)."
+        },
+        "serverMiddlewares": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Proxy-scoped server middleware chain. Takes precedence over middlewares.server for the proxy command."
+        },
+        "clientMiddlewares": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Proxy-scoped client middleware chain. Takes precedence over middlewares.client for the proxy command."
+        },
+        "tags": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Tag-based scope filter (AND condition) (flag: --tags)."
+        },
+        "routes": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Route table lines, same format as --routes."
+        },
+        "duplicateTtlMs": {
+          "type": "number",
+          "minimum": 0,
+          "description": "TTL (ms) for the cached upstream workflow-name index (flag: --duplicate-ttl)."
+        },
+        "upstreamTimeoutMs": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Per-request upstream timeout in ms; 0 disables (flag: --upstream-timeout)."
+        },
+        "mcp": {
+          "type": "object",
+          "description": "MCP gate policy applied to n8n's instance-level MCP endpoint (flag family: --mcp-*). The gate stays off unless enforce is set — a policy without enforce makes the proxy refuse to start, mirroring the orphan-policy check on the flags.",
+          "additionalProperties": false,
+          "properties": {
+            "enforce": {
+              "type": "string",
+              "enum": ["off", "warn", "error"],
+              "description": "Gate enforcement level (flag: --mcp-enforce)."
+            },
+            "allowTools": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "Glob patterns for the only tools clients may see (flag: --mcp-allow-tools)."
+            },
+            "denyTools": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "Glob patterns for tools to withhold, applied after allowTools (flag: --mcp-deny-tools)."
+            },
+            "workflowTags": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "Workflow tags required for workflow-scoped tool calls, AND condition (flag: --mcp-workflow-tags)."
+            },
+            "entryPathPattern": {
+              "type": "string",
+              "description": "Entry-trigger path glob a workflow must match (flag: --mcp-entry-path-pattern)."
+            },
+            "cacheTtlMs": {
+              "type": "number",
+              "minimum": 0,
+              "description": "Cached workflow allowlist lifetime in ms (flag: --mcp-cache-ttl-ms)."
+            }
+          }
+        }
+      }
+    }
+  }
+}
