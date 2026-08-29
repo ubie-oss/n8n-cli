@@ -1,8 +1,10 @@
 import path from "node:path";
-import { isAlreadyOwnedError, isNotFoundError } from "../api/errors.ts";
+import { isAlreadyOwnedError, isNotFoundError, isValidationError } from "../api/errors.ts";
+import type { FolderService } from "../api/folder-service.ts";
 import type { TagService } from "../api/tag-service.ts";
 import type { Workflow, WorkflowInput } from "../api/types.ts";
 import type { WorkflowService } from "../api/workflow-service.ts";
+import { workflowProjectId } from "../common/project-id.ts";
 import { loadRc } from "../config/rc.ts";
 import { compareWorkflows } from "../diff/engine.ts";
 import { ContentRetriever, ErrFileNotExist } from "../git/content.ts";
@@ -14,6 +16,15 @@ import type { ServerMiddleware } from "../middleware/types.ts";
 import { DEFAULT_SERVER_MIDDLEWARE_CHAIN, registerBuiltins } from "../middleware/wiring.ts";
 import { compare } from "./differ.ts";
 import { DuplicateChecker } from "./duplicate.ts";
+import {
+  FolderAssignmentResolver,
+  type FolderDeclaration,
+  FoldersConfigError,
+  loadFoldersConfig,
+  parseFolderDeclaration,
+  type ResolvedFolderAssignment,
+  syncFolderTree,
+} from "./folders.ts";
 import { updateLocalWorkflowFile } from "./local-file.ts";
 import { Scanner } from "./scanner.ts";
 import { TagMerger } from "./tags.ts";
@@ -39,6 +50,8 @@ export type ProgressCallback = (
 /** Executor handles the apply operation logic. */
 export class Executor {
   private tagMerger?: TagMerger;
+  private folderService?: FolderService;
+  private folderResolver?: FolderAssignmentResolver;
   private duplicateChecker?: DuplicateChecker;
   private scanner = new Scanner();
   private onProgress?: ProgressCallback;
@@ -47,6 +60,8 @@ export class Executor {
   private diffSpec?: DiffSpec;
   private middlewares: ServerMiddleware[] = [];
   private preparedNames = new Set<string>();
+  /** Remote state of the workflow currently being processed (folder step input). */
+  private currentRemote: Workflow | null = null;
 
   constructor(
     private readonly workflowService: WorkflowService,
@@ -130,6 +145,19 @@ export class Executor {
 
   setTagService(tagService: TagService): void {
     this.tagMerger = new TagMerger(tagService);
+  }
+
+  /**
+   * SetFolderService enables folder support. Without it, folder declarations
+   * are ignored entirely (the pre-folder behaviour, and what happens when the
+   * CLI has no folder-capable connection).
+   */
+  setFolderService(folderService: FolderService): void {
+    this.folderService = folderService;
+    this.folderResolver = new FolderAssignmentResolver(folderService, {
+      dryRun: this.opts.dryRun,
+      createMissing: this.opts.createMissingFolders,
+    });
   }
 
   setProgressCallback(cb: ProgressCallback): void {
@@ -216,6 +244,39 @@ export class Executor {
     const files = await this.scanner.scanWithOptions(this.opts);
     if (files.length === 0) return result;
 
+    // Phase 0 — folder tree sync. `folders.yaml` in the definitions directory
+    // declares folders as code; it is reconciled (create-only) before any
+    // workflow write so workflow folder declarations can rely on their target
+    // folders existing. Malformed config fails the apply — it is an authoring
+    // error, not an upstream condition. Sync is skipped entirely under
+    // --no-folders or when no folder service was provided.
+    if (this.opts.foldersEnabled && this.folderService) {
+      const config = loadFoldersConfig(this.opts.directory);
+      if (config) {
+        try {
+          const syncReport = await syncFolderTree(this.folderService, config.config, {
+            defaultProjectId: this.opts.projectID || undefined,
+            dryRun: this.opts.dryRun,
+          });
+          result.foldersCreated = syncReport.created;
+          result.foldersExisting = syncReport.existing.length;
+          for (const skipped of syncReport.skipped) {
+            console.warn(`Warning: folder sync skipped — ${skipped.reason}`);
+          }
+        } catch (err) {
+          // A malformed file is an authoring error and fails the apply; an
+          // upstream failure (folders unlicensed, transient 5xx) degrades —
+          // per-workflow declarations will surface the same problem with a
+          // pointer at the specific workflow.
+          if (err instanceof FoldersConfigError || this.opts.strictFolders) {
+            throw err;
+          }
+          const message = err instanceof Error ? err.message : String(err);
+          console.warn(`Warning: folder sync skipped — ${message}`);
+        }
+      }
+    }
+
     // Process each workflow file
     const total = files.length;
     for (let i = 0; i < files.length; i++) {
@@ -235,6 +296,29 @@ export class Executor {
 
   /** Processes a single workflow file and returns the operation. */
   private async processWorkflowFile(
+    wf: WorkflowFile,
+    result: ApplyResult,
+  ): Promise<ApplyOperation> {
+    const op = await this.processWorkflowFileCore(wf, result);
+    // Folder assignment for already-existing workflows. Create-time folder
+    // handling lives in `executeCreate` (it can ride the create payload), but
+    // update and skip paths assert the declared belonging here — including
+    // skips, because the assignment is write-only upstream and "content
+    // unchanged" says nothing about whether the folder still matches.
+    if (op.operation === "update" || op.operation === "skip") {
+      try {
+        await this.applyFolderAssignment(wf, op);
+      } catch (err) {
+        // --strict-folders turns folder failures into this workflow's error;
+        // everything else has already been recorded as a warning inside.
+        op.operation = "error";
+        op.error = err instanceof Error ? err : new Error(String(err));
+      }
+    }
+    return op;
+  }
+
+  private async processWorkflowFileCore(
     wf: WorkflowFile,
     result: ApplyResult,
   ): Promise<ApplyOperation> {
@@ -326,6 +410,10 @@ export class Executor {
     }
 
     op.remoteUpdated = remoteWorkflow.updatedAt;
+    // Remembered for the folder step in the wrapper above: folder resolution
+    // needs the workflow's owning project, which comes from the remote `shared`
+    // payload (the local file may not carry one).
+    this.currentRemote = remoteWorkflow;
 
     // A `.ts` workflow cannot express node IDs — the SDK has no field for them,
     // so the loader derives them from the node names. Adopt the IDs the remote
@@ -494,10 +582,72 @@ export class Executor {
       staticData: workflow.staticData,
     };
 
-    const created = await this.workflowService.createWorkflow(
-      input,
-      this.opts.projectID || undefined,
-    );
+    // Folder assignment on create. When the target project is known up front,
+    // the folder rides the create payload itself (`parentFolderId` is accepted
+    // by n8n's create endpoint); when it is not, the created workflow's own
+    // `shared` payload names the project and the move happens afterwards.
+    const declaration = this.parseFolderDeclarationSafe(workflow, op);
+    const foldersActive = this.opts.foldersEnabled && !!this.folderService;
+    let resolvedFolder =
+      foldersActive && declaration.declared && this.opts.projectID
+        ? await this.resolveFolderSafe(this.opts.projectID, declaration, op)
+        : null;
+    if (resolvedFolder) {
+      input.parentFolderId = resolvedFolder.parentFolderId;
+    }
+
+    let created: Workflow;
+    try {
+      created = await this.workflowService.createWorkflow(input, this.opts.projectID || undefined);
+    } catch (err) {
+      if (!resolvedFolder || !isValidationError(err)) throw err;
+      // A server too old to know folders rejects the unknown property. Create
+      // without it, then move — if the move also fails, folder support ends
+      // here but the workflow itself must not.
+      const { parentFolderId: _dropped, ...rest } = input;
+      created = await this.workflowService.createWorkflow(rest, this.opts.projectID || undefined);
+      try {
+        created = await this.workflowService.moveWorkflowToFolder(
+          created.id!,
+          resolvedFolder.parentFolderId,
+        );
+      } catch (moveErr) {
+        this.recordFolderWarning(op, moveErr);
+      }
+    }
+
+    // Project was not declared up front: resolve the folder against the
+    // project the workflow actually landed in and move it there.
+    if (!resolvedFolder && foldersActive && declaration.declared && !this.opts.projectID) {
+      const landedProject = workflowProjectId(created);
+      if (landedProject) {
+        resolvedFolder = await this.resolveFolderSafe(landedProject, declaration, op);
+        if (resolvedFolder) {
+          try {
+            created = await this.workflowService.moveWorkflowToFolder(
+              created.id!,
+              resolvedFolder.parentFolderId,
+            );
+          } catch (moveErr) {
+            this.recordFolderWarning(op, moveErr);
+          }
+        }
+      } else {
+        this.recordFolderWarning(
+          op,
+          new Error("folder declaration ignored: owning project is unknown"),
+        );
+      }
+    }
+
+    if (resolvedFolder) {
+      await this.markFolderApplied(
+        op,
+        this.opts.projectID || workflowProjectId(created),
+        resolvedFolder,
+      );
+    }
+
     await this.applyTagsAndProject(created, workflow, op);
     await updateLocalWorkflowFile(wf.path, await this.settledWorkflow(created, op));
   }
@@ -552,7 +702,10 @@ export class Executor {
    */
   private async settledWorkflow(updated: Workflow, op: ApplyOperation): Promise<Workflow> {
     const mutatedAfterWrite =
-      op.tagsAdded.length > 0 || op.projectMoved || op.activated !== undefined;
+      op.tagsAdded.length > 0 ||
+      op.projectMoved ||
+      op.activated !== undefined ||
+      op.folderApplied === true;
     if (!mutatedAfterWrite || !updated.id) return updated;
 
     try {
@@ -617,6 +770,109 @@ export class Executor {
 
     // Handle activation/deactivation
     await this.applyActivation(localWorkflow, op);
+  }
+
+  /**
+   * Applies the folder declaration of an existing (update/skip) workflow.
+   *
+   * The assignment is write-only upstream, so there is nothing to diff
+   * against: a declared folder is asserted on every apply, and the move call
+   * is idempotent. Dry-run resolves and reports without moving.
+   */
+  private async applyFolderAssignment(wf: WorkflowFile, op: ApplyOperation): Promise<void> {
+    const workflow = wf.workflow;
+    if (!workflow || !this.opts.foldersEnabled || !this.folderService || !this.folderResolver) {
+      return;
+    }
+    // Parse inside the degrading path: a malformed declaration is a warning
+    // (or a strict error), never a crash.
+    const declaration = this.parseFolderDeclarationSafe(workflow, op);
+    if (!declaration.declared) return;
+
+    const projectId = this.opts.projectID || workflowProjectId(this.currentRemote);
+    if (!projectId) {
+      this.recordFolderWarning(
+        op,
+        new Error("folder declaration ignored: owning project is unknown (pass -p/--project)"),
+      );
+      return;
+    }
+
+    const resolved = await this.resolveFolderSafe(projectId, declaration, op);
+    if (!resolved) return;
+
+    if (this.opts.dryRun) {
+      await this.markFolderApplied(op, projectId, resolved);
+      return;
+    }
+
+    try {
+      await this.workflowService.moveWorkflowToFolder(op.workflowID, resolved.parentFolderId);
+    } catch (err) {
+      this.recordFolderWarning(op, err);
+      return;
+    }
+    await this.markFolderApplied(op, projectId, resolved);
+  }
+
+  /**
+   * Resolves a folder declaration to a concrete assignment, degrading
+   * failures to a warning unless --strict-folders was passed.
+   */
+  private async resolveFolderSafe(
+    projectId: string,
+    declaration: FolderDeclaration,
+    op: ApplyOperation,
+  ): Promise<ResolvedFolderAssignment | null> {
+    try {
+      return await this.folderResolver!.resolve(projectId, declaration);
+    } catch (err) {
+      this.recordFolderWarning(op, err);
+      return null;
+    }
+  }
+
+  private recordFolderWarning(op: ApplyOperation, err: unknown): void {
+    const message = err instanceof Error ? err.message : String(err);
+    if (this.opts.strictFolders) {
+      throw err instanceof Error ? err : new Error(message);
+    }
+    op.folderWarning = op.folderWarning ? `${op.folderWarning}; ${message}` : message;
+  }
+
+  /**
+   * Parses the folder declaration of a definition for the create path,
+   * degrading a malformed declaration to a warning unless --strict-folders.
+   */
+  private parseFolderDeclarationSafe(workflow: Workflow, op: ApplyOperation): FolderDeclaration {
+    try {
+      return parseFolderDeclaration(workflow);
+    } catch (err) {
+      this.recordFolderWarning(op, err);
+      return { declared: false, path: null };
+    }
+  }
+
+  private async markFolderApplied(
+    op: ApplyOperation,
+    projectId: string,
+    resolved: ResolvedFolderAssignment,
+  ): Promise<void> {
+    op.folderApplied = true;
+    if (resolved.parentFolderId === null) {
+      op.folderPath = null;
+    } else {
+      // Path resolution is cosmetic (reporting); a folder list that fails —
+      // licensing, transient — must not fail an apply whose move succeeded.
+      try {
+        op.folderPath = await this.folderResolver!.pathFor(projectId, resolved.parentFolderId);
+      } catch {
+        op.folderPath = resolved.parentFolderId;
+      }
+    }
+    if (resolved.created.length > 0) {
+      op.folderCreated = resolved.created;
+    }
   }
 
   /** Applies activation or deactivation based on local workflow definition. */

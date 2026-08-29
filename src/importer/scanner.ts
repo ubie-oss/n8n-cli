@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import yaml from "js-yaml";
 import type { Workflow } from "@/api/types.ts";
+import { isFoldersConfigFile } from "@/apply/folders.ts";
 import { detectWorkflowFormat } from "@/common/extensions.ts";
 import { extractWorkflowIDFromFilename } from "@/naming/naming.ts";
 import { loadTsWorkflow } from "@/ts/loader.ts";
@@ -46,6 +47,9 @@ export function scanDirectory(dir: string, tsEnabled = false): WorkflowIDMap {
 
 /** True when a path is a workflow file this scan should read. */
 function isWorkflowCandidate(filePath: string): boolean {
+  // `folders.yaml` is folder-as-code config, not a workflow definition —
+  // counting it as an orphan would let `--cleanup-orphans` delete it.
+  if (isFoldersConfigFile(filePath)) return false;
   return detectWorkflowFormat(filePath) != null;
 }
 

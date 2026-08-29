@@ -329,7 +329,7 @@ describe("JSON schema (schemas/n8nctlrc.schema.json)", () => {
     const schema = JSON.parse(fs.readFileSync(schemaPath, "utf-8")) as {
       properties: Record<string, unknown>;
     };
-    for (const section of ["api", "lint", "middlewares", "proxy", "$schema"]) {
+    for (const section of ["api", "lint", "middlewares", "proxy", "mcp", "$schema"]) {
       expect(schema.properties[section]).toBeDefined();
     }
     const proxyProps = (schema.properties.proxy as { properties: Record<string, unknown> })

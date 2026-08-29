@@ -4,6 +4,7 @@ import type { Workflow } from "@/api/types.ts";
 import type { ListOptions, WorkflowService } from "@/api/workflow-service.ts";
 import { detectWorkflowFormat, type WorkflowFormat } from "@/common/extensions.ts";
 import { hasAllTags } from "@/common/tags.ts";
+import type { FolderInfo, McpFolderSource } from "./folder-source.ts";
 import { cleanupOrphanFiles, cleanupOrphanSubfiles, matchOrphansByName } from "./orphan.ts";
 import { reportDuplicates } from "./reporter.ts";
 import { parseWorkflowFile, scanDirectoryWithOrphans } from "./scanner.ts";
@@ -45,6 +46,7 @@ function pathForFormat(
 /** ImportExecutor orchestrates the import process. */
 export class ImportExecutor {
   private progressCallback: ProgressCallback | null = null;
+  private folderSource?: McpFolderSource;
 
   constructor(
     private readonly workflowService: WorkflowService,
@@ -53,6 +55,16 @@ export class ImportExecutor {
 
   setProgressCallback(callback: ProgressCallback): void {
     this.progressCallback = callback;
+  }
+
+  /**
+   * SetFolderSource enables folder assignment on imported files. The source
+   * talks to n8n's MCP server (directly, or through a proxy that injects the
+   * MCP token); without one, the public API's write-only `parentFolderId`
+   * makes the information unavailable and import behaves exactly as before.
+   */
+  setFolderSource(source: McpFolderSource): void {
+    this.folderSource = source;
   }
 
   /** Runs the full import process. */
@@ -103,6 +115,7 @@ export class ImportExecutor {
     const opts: ListOptions = { limit: 100 };
     let processed = 0;
     let estimatedTotal = 0;
+    const eligible: Workflow[] = [];
 
     for (;;) {
       const resp = await this.workflowService.listWorkflows(opts);
@@ -128,23 +141,7 @@ export class ImportExecutor {
           continue;
         }
 
-        processed++;
-        result.totalRemote++;
-
-        // Track name for orphan matching
-        if (workflow.name) {
-          const existing = remoteNameMap.get(workflow.name) ?? [];
-          existing.push(workflow);
-          remoteNameMap.set(workflow.name, existing);
-        }
-
-        // Report progress
-        if (this.progressCallback) {
-          this.progressCallback(processed, estimatedTotal, workflow.name, "create");
-        }
-
-        // Process individual workflow
-        this.processWorkflow(workflow, idMap, result);
+        eligible.push(workflow);
       }
 
       if (!resp.nextCursor) break;
@@ -154,10 +151,53 @@ export class ImportExecutor {
         estimatedTotal = processed + 100;
       }
     }
+
+    // Folder info needs the whole eligible set at once: the bulk MCP search
+    // is per instance, and folder ID → path resolution is per project. Built
+    // once before the per-workflow loop; failure degrades to no folder info.
+    let folderInfo: FolderInfo | undefined;
+    if (this.folderSource) {
+      try {
+        folderInfo = await this.folderSource.buildFolderInfo(eligible);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        if (this.opts.mcpStrict) {
+          throw new Error(`failed to read folder assignments over MCP: ${message}`);
+        }
+        console.warn(
+          `Warning: folder information unavailable (MCP: ${message}) — importing without folder assignments`,
+        );
+      }
+    }
+
+    for (const workflow of eligible) {
+      processed++;
+      result.totalRemote++;
+
+      // Track name for orphan matching
+      if (workflow.name) {
+        const existing = remoteNameMap.get(workflow.name) ?? [];
+        existing.push(workflow);
+        remoteNameMap.set(workflow.name, existing);
+      }
+
+      // Report progress
+      if (this.progressCallback) {
+        this.progressCallback(processed, estimatedTotal, workflow.name, "create");
+      }
+
+      // Process individual workflow
+      this.processWorkflow(workflow, idMap, result, folderInfo);
+    }
   }
 
   /** Handles a single workflow import. */
-  private processWorkflow(remote: Workflow, idMap: WorkflowIDMap, result: ImportResultClass): void {
+  private processWorkflow(
+    remote: Workflow,
+    idMap: WorkflowIDMap,
+    result: ImportResultClass,
+    folderInfo?: FolderInfo,
+  ): void {
     // Skip archived unless included
     if (!this.opts.includeArchived && remote.isArchived === true) {
       result.addOperation({
@@ -180,6 +220,22 @@ export class ImportExecutor {
         reason: "workflow has empty ID",
       });
       return;
+    }
+
+    // Attach the folder assignment when the MCP source resolved one. The
+    // public API never reports it, so this only ever fires with a folder
+    // source present. A workflow absent from the map is left untouched —
+    // "unknown", not "project root" — and the local file keeps whatever
+    // declaration it already had.
+    if (folderInfo) {
+      const parentFolderId = folderInfo.folderByWorkflow.get(remote.id);
+      if (parentFolderId !== undefined) {
+        remote.parentFolderId = parentFolderId;
+        remote.folder =
+          parentFolderId === null
+            ? null
+            : (folderInfo.pathById.get(parentFolderId) ?? parentFolderId);
+      }
     }
 
     // Check duplicate — warn but continue (use first file from idMap)

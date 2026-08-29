@@ -28,7 +28,10 @@
         },
         "output": {
           "type": "string",
-          "enum": ["json", "table"],
+          "enum": [
+            "json",
+            "table"
+          ],
           "description": "Default output format (flag: --output)."
         }
       }
@@ -65,12 +68,16 @@
       "properties": {
         "client": {
           "type": "array",
-          "items": { "type": "string" },
+          "items": {
+            "type": "string"
+          },
           "description": "Client middleware chain, e.g. [\"iap-auth\", \"api-key-inject\"] (env: N8N_CLIENT_MIDDLEWARES, proxy flag: --client-middleware)."
         },
         "server": {
           "type": "array",
-          "items": { "type": "string" },
+          "items": {
+            "type": "string"
+          },
           "description": "Server middleware chain, e.g. [\"lint\", \"authz\"] (env: N8N_SERVER_MIDDLEWARES, proxy flag: --server-middleware)."
         },
         "options": {
@@ -98,12 +105,19 @@
         },
         "enforce": {
           "type": "string",
-          "enum": ["off", "warn", "error"],
+          "enum": [
+            "off",
+            "warn",
+            "error"
+          ],
           "description": "Enforcement level for workflow saves (flag: --enforce)."
         },
         "logFormat": {
           "type": "string",
-          "enum": ["text", "json"],
+          "enum": [
+            "text",
+            "json"
+          ],
           "description": "Log format (flag: --log-format)."
         },
         "logIdentity": {
@@ -116,27 +130,37 @@
         },
         "disableRules": {
           "type": "array",
-          "items": { "type": "string" },
+          "items": {
+            "type": "string"
+          },
           "description": "Rule names to disable (flag: --disable-rule)."
         },
         "serverMiddlewares": {
           "type": "array",
-          "items": { "type": "string" },
+          "items": {
+            "type": "string"
+          },
           "description": "Proxy-scoped server middleware chain. Takes precedence over middlewares.server for the proxy command."
         },
         "clientMiddlewares": {
           "type": "array",
-          "items": { "type": "string" },
+          "items": {
+            "type": "string"
+          },
           "description": "Proxy-scoped client middleware chain. Takes precedence over middlewares.client for the proxy command."
         },
         "tags": {
           "type": "array",
-          "items": { "type": "string" },
+          "items": {
+            "type": "string"
+          },
           "description": "Tag-based scope filter (AND condition) (flag: --tags)."
         },
         "routes": {
           "type": "array",
-          "items": { "type": "string" },
+          "items": {
+            "type": "string"
+          },
           "description": "Route table lines, same format as --routes."
         },
         "duplicateTtlMs": {
@@ -156,22 +180,32 @@
           "properties": {
             "enforce": {
               "type": "string",
-              "enum": ["off", "warn", "error"],
+              "enum": [
+                "off",
+                "warn",
+                "error"
+              ],
               "description": "Gate enforcement level (flag: --mcp-enforce)."
             },
             "allowTools": {
               "type": "array",
-              "items": { "type": "string" },
+              "items": {
+                "type": "string"
+              },
               "description": "Glob patterns for the only tools clients may see (flag: --mcp-allow-tools)."
             },
             "denyTools": {
               "type": "array",
-              "items": { "type": "string" },
+              "items": {
+                "type": "string"
+              },
               "description": "Glob patterns for tools to withhold, applied after allowTools (flag: --mcp-deny-tools)."
             },
             "workflowTags": {
               "type": "array",
-              "items": { "type": "string" },
+              "items": {
+                "type": "string"
+              },
               "description": "Workflow tags required for workflow-scoped tool calls, AND condition (flag: --mcp-workflow-tags)."
             },
             "entryPathPattern": {
@@ -184,6 +218,30 @@
               "description": "Cached workflow allowlist lifetime in ms (flag: --mcp-cache-ttl-ms)."
             }
           }
+        }
+      }
+    },
+    "mcp": {
+      "type": "object",
+      "description": "Client-side MCP settings, used by `import` to read workflow folder assignments (the public REST API cannot report them). Distinct from `proxy.mcp`, which configures the proxy's MCP gate.",
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": [
+            "off",
+            "direct",
+            "proxy"
+          ],
+          "description": "off (default): never call MCP. direct: the CLI holds the MCP access token itself. proxy: the CLI holds no token - an n8n-cli proxy in front of n8n injects one for /mcp-server/*."
+        },
+        "token": {
+          "type": "string",
+          "description": "MCP access token. Supports ${ENV_VAR} interpolation (flag: --mcp-token, env: N8N_MCP_TOKEN)."
+        },
+        "strict": {
+          "type": "boolean",
+          "description": "Fail the command when MCP calls fail, instead of degrading to a warning (flag: --mcp-strict)."
         }
       }
     }

@@ -27,6 +27,9 @@ export function report(result: ApplyResult): void {
   // does not block, so without this section the user sees no diagnostic.
   printLintWarningsSection(result.operations);
 
+  // Folder-tree sync (folders.yaml) summary.
+  printFolderSyncSection(result);
+
   // Group operations by type
   const creates = filterByOp(result.operations, "create");
   const updates = filterByOp(result.operations, "update");
@@ -58,6 +61,18 @@ function printLintWarningsSection(ops: ApplyOperation[]): void {
   console.log(`\n=== LINT WARNINGS (${warnings.length}) ===`);
   for (const w of warnings) {
     console.log(`  ⚠ ${path.basename(w.file)}: warning[${w.rule}]: ${w.message}`);
+  }
+}
+
+function printFolderSyncSection(result: ApplyResult): void {
+  if (result.foldersCreated.length === 0 && result.foldersExisting === 0) return;
+  const scope = result.dryRun ? "would create" : "created";
+  console.log(`\n=== FOLDERS (folders.yaml) ===`);
+  for (const created of result.foldersCreated) {
+    console.log(`  + ${created.path} ${scope} (project ${created.projectId})`);
+  }
+  if (result.foldersExisting > 0) {
+    console.log(`  = ${result.foldersExisting} folder path(s) already exist`);
   }
 }
 
@@ -131,6 +146,19 @@ function printTagsAndProjectInfo(op: ApplyOperation): void {
     }
   }
 
+  // Folder assignment info
+  if (op.folderApplied) {
+    const target = op.folderPath ? op.folderPath : "project root";
+    const created =
+      op.folderCreated && op.folderCreated.length > 0
+        ? ` (created: ${op.folderCreated.join(", ")})`
+        : "";
+    console.log(`    -> folder: ${target}${created}`);
+  }
+  if (op.folderWarning) {
+    console.log(`    ⚠ Folder: ${op.folderWarning}`);
+  }
+
   // Activation info
   if (op.activated === true) {
     console.log("    ✓ Activated");
@@ -172,6 +200,12 @@ function printSkipSection(ops: ApplyOperation[]): void {
     const threeWayTag = op.threeWayUsed ? " [3-way]" : "";
     console.log(`  = ${path.basename(op.file)} (no changes)${threeWayTag}`);
     printThreeWayInfo(op);
+    // A skipped workflow can still have its folder asserted (or warned) —
+    // folder assignment is write-only upstream, so "no changes" only covers
+    // the content the API can read back.
+    if (op.folderApplied || op.folderWarning) {
+      printTagsAndProjectInfo(op);
+    }
   }
 }
 

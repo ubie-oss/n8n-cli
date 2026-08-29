@@ -903,6 +903,13 @@ describe("MCP gate: what it leaves alone", () => {
       method: "POST",
       body: "not json",
     });
+    // The upstream records the body after reading it; under parallel-suite
+    // load the arrival can lag the client's response by a tick, so poll
+    // briefly instead of assuming it is already there.
+    const deadline = Date.now() + 2_000;
+    while (Date.now() < deadline && !upstream.captured.some((c) => c.body === "not json")) {
+      await Bun.sleep(10);
+    }
     expect(upstream.captured.some((c) => c.body === "not json")).toBe(true);
   });
 

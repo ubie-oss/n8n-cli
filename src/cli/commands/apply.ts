@@ -1,6 +1,7 @@
 import path from "node:path";
 import type { Command } from "commander";
 import { Executor } from "../../apply/executor.ts";
+import { FoldersConfigError } from "../../apply/folders.ts";
 import { report } from "../../apply/reporter.ts";
 import { defaultApplyOptions } from "../../apply/types.ts";
 import {
@@ -42,6 +43,18 @@ export function registerApplyCommand(program: Command): void {
     .option(
       "--no-lint",
       "Skip the pre-write lint check (the check is on by default; --force does NOT bypass it because lint failures are policy, not merge conflicts)",
+    )
+    .option(
+      "--no-folders",
+      "Disable folder management: skip folders.yaml sync and ignore folder declarations in workflow files",
+    )
+    .option(
+      "--no-create-missing-folders",
+      "Fail (or warn) instead of creating folder paths referenced by definitions that do not exist upstream",
+    )
+    .option(
+      "--strict-folders",
+      "Treat folder problems (missing license, unresolvable path, failed move) as apply errors instead of warnings",
     )
     .option(
       "--lint-config <path>",
@@ -93,6 +106,9 @@ export function registerApplyCommand(program: Command): void {
       if (typeof options.lintConfig === "string") {
         opts.lintConfigPath = options.lintConfig;
       }
+      if (options.noFolders) opts.foldersEnabled = false;
+      if (options.noCreateMissingFolders) opts.createMissingFolders = false;
+      if (options.strictFolders) opts.strictFolders = true;
       if (typeof options.lintDisableRule === "string") {
         opts.lintDisableRules = (options.lintDisableRule as string)
           .split(",")
@@ -221,6 +237,9 @@ export function registerApplyCommand(program: Command): void {
         throw err;
       }
       executor.setTagService(ctx.tagService);
+      if (opts.foldersEnabled) {
+        executor.setFolderService(ctx.folderService);
+      }
 
       // Display Git diff mode message if enabled
       if (opts.fromGitChanges) {
@@ -235,7 +254,18 @@ export function registerApplyCommand(program: Command): void {
       }
 
       // Run apply
-      const result = await executor.execute();
+      let result: Awaited<ReturnType<Executor["execute"]>>;
+      try {
+        result = await executor.execute();
+      } catch (err) {
+        if (err instanceof FoldersConfigError) {
+          console.error(
+            `Error: invalid folder definition${err.file ? ` (${err.file})` : ""}: ${err.message}`,
+          );
+          process.exit(1);
+        }
+        throw err;
+      }
 
       // Display "no changes" message for Git diff mode
       if (opts.fromGitChanges && result.operations.length === 0) {

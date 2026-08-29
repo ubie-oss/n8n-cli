@@ -352,6 +352,16 @@ export function buildYamlObject(
     active: workflow.active,
   };
 
+  // Folder declaration. Written whenever the source knows its folder: a path
+  // string for a folder, and an explicit `folder: null` for the project root —
+  // the key must not be dropped at the root, because "absent" means "leave the
+  // folder untouched" on apply and the assignment would silently stop being
+  // managed. (Folder assignments are write-only upstream, so this key is the
+  // only record of the workflow's folder a YAML file has.)
+  if (workflow.folder !== undefined) {
+    result.folder = workflow.folder;
+  }
+
   // Server-assigned timestamp of the state this file was written from. It is
   // never sent back on a write — it exists so `apply` can tell "my definition
   // is based on the current upstream state" from "someone edited this workflow

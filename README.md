@@ -110,6 +110,9 @@ n8n-cli apply [options]
 | `--no-lint` | Skip the pre-write lint check (the check is on by default; an error-level violation marks the workflow as failed and prevents the API call. `--force` does NOT bypass lint failures — they represent policy, not merge conflicts) |
 | `--lint-config <path>` | Path to `.n8nlintrc.json` used by the pre-write lint check (auto-discovered if omitted) |
 | `--lint-disable-rule <rules>` | Comma-separated rule names to disable during the pre-write lint check |
+| `--no-folders` | Disable folder management: skip `folders.yaml` sync and ignore folder declarations in workflow files (folder support is on by default, see [Workflow folders as code](#workflow-folders-as-code)) |
+| `--no-create-missing-folders` | Refuse (error/warning) instead of creating folder paths referenced by definitions that do not exist upstream |
+| `--strict-folders` | Treat folder problems (missing license, unresolvable path, failed move) as apply errors instead of warnings |
 
 #### Conflict detection
 
@@ -269,6 +272,23 @@ n8n-cli import [options]
 | `--cleanup-orphans` | Delete local files without matching remote workflow |
 | `--cleanup-subfiles` | Delete orphan external files |
 | `--tags <tags>` | Filter by tags (comma-separated, AND condition) |
+| `--mcp` | Attach folder assignments to imported files by calling n8n's MCP server (also enabled by `--mcp-token` / `N8N_MCP_TOKEN` / `N8N_MCP=1`) |
+| `--mcp-token <token>` | MCP access token for the folder lookup (env: `N8N_MCP_TOKEN`). Without a token, MCP calls rely on an n8n-cli proxy injecting the token for `/mcp-server/*` |
+| `--mcp-strict` | Fail the import when the MCP folder lookup fails, instead of warning and continuing without folder information |
+
+### `folder`
+
+Manage n8n workflow folders. Folder support is an n8n enterprise feature —
+these commands need a plan with folders licensed and an API key with
+`folder:*` scopes.
+
+```bash
+n8n-cli folder list -p <projectId> [--parent <folderId> | --root]
+n8n-cli folder get <folderId> -p <projectId>
+n8n-cli folder create <name> -p <projectId> [--parent <folderId>]
+n8n-cli folder move <folderId> -p <projectId> [--parent <folderId> | --root] [--rename <name>]
+n8n-cli folder delete <folderId> -p <projectId> [--transfer-to <folderId>] [-f]
+```
 
 ### `lint`
 
@@ -1485,6 +1505,10 @@ variable is an error, not a silent empty string.
       "allowTools": ["search_workflows", "get_workflow_details"],
       "workflowTags": ["mcp"]
     }
+  },
+  "mcp": {
+    "mode": "proxy",
+    "strict": false
   }
 }
 ```
@@ -1497,6 +1521,12 @@ Notes:
   middleware (documented under [proxy](#proxy)). Secret-carrying options keep
   their restrictions: `api-key-inject` accepts only an env-var reference, never
   a raw key.
+- The `mcp` section configures the CLI as an MCP *client* (distinct from
+  `proxy.mcp`, the proxy's MCP *gate*): `mode` is `off` (default), `direct`
+  (the CLI holds an MCP access token in `token`), or `proxy` (the CLI holds no
+  token — an n8n-cli proxy in front of n8n injects one for `/mcp-server/*`).
+  `strict` fails commands when MCP calls fail. Used by
+  [import folder lookups](#workflow-folders-as-code).
 - A literal `api.apiKey` in a **project-level** file triggers a warning —
   secrets committed to git leak through history. Use `${ENV_VAR}` or move the
   key to the user-level file.
@@ -1645,6 +1675,127 @@ true of YAML), so editing and re-applying a workflow that changed upstream in th
 meantime reports a conflict and needs `--force`.
 
 
+## Workflow folders as code
+
+n8n organizes workflows into folders inside projects. n8n-cli manages them the
+same way it manages workflows themselves: as code, with `apply` pushing the
+declared state up and `import` pulling assignments down.
+
+One upstream constraint shapes the whole feature: a workflow's folder
+assignment (`parentFolderId`) is **write-only** in n8n's public API. `create`
+and `PATCH /workflows/:id` accept it, but no `GET` response ever includes it.
+Two consequences:
+
+- **apply asserts, it never diffs.** A workflow file that declares a folder
+  has its assignment re-asserted on every apply (idempotent), including when
+  the content itself is unchanged and the operation reports `SKIP`.
+- **import needs MCP to read assignments.** n8n's instance-level MCP server
+  *does* report `parentFolderId` in its `search_workflows` /
+  `get_workflow_details` tools, so `import` uses it when available.
+
+Folder management requires an n8n plan with the folders feature licensed
+(folders API: `feat:folders`, scopes `folder:*`; MCP: an MCP access token).
+Where either is unavailable, folder handling degrades to a warning — the
+workflow write itself is never blocked unless `--strict-folders` is passed.
+
+### Declaring a folder on a workflow
+
+YAML definitions declare the folder as a **path** (`/`-separated), because
+folder IDs are server-assigned and paths are what a human writes:
+
+```yaml
+id: R2cTI0LDzCJSnvNG
+name: Daily report
+folder: Reporting/Daily   # null (or "root") manages the project root
+nodes: ...
+```
+
+Semantics:
+
+- `folder` key **absent** — the folder is *not managed*: apply leaves the
+  upstream assignment untouched (matching the API's own "omit = unchanged"
+  behaviour).
+- `folder: <path>` — apply moves the workflow into that folder, creating
+  missing segments parent-first (`--no-create-missing-folders` refuses
+  instead).
+- `folder: null` (or `"root"`) — apply moves the workflow to the **project
+  root**, deliberately.
+- JSON definitions may carry the raw `parentFolderId` instead; it is honoured
+  as-is (no folder lookup needed).
+
+### Folder trees: `folders.yaml`
+
+A definitions directory can declare whole folder trees in a `folders.yaml`
+(or `.yml` / `.json`) file at its root:
+
+```yaml
+projects:
+  - projectId: pAbc123        # optional when -p/--project provides the default
+    folders:
+      - name: Reporting
+        folders:
+          - name: Daily
+          - name: Weekly
+      - name: TeamA
+```
+
+On every apply (unless `--no-folders`), the tree is synced **before** workflow
+processing: missing folders are created parent-first, existing ones are left
+alone. Reconciliation is deliberately **add-only** — folders cannot carry
+client-chosen IDs, so renames and moves cannot be expressed reliably as code.
+Dry-run reports the folders it *would* create.
+
+### import: reading assignments over MCP
+
+`import` attaches a `folder:` line (YAML) or `parentFolderId` (JSON) to
+imported files when it can learn the assignment. opt in with `--mcp`, or let a
+token imply it:
+
+```bash
+# CLI holds the MCP access token (Settings → n8n MCP in the n8n UI)
+N8N_MCP_TOKEN=... n8n-cli import --yaml
+
+# No token on the CLI: an n8n-cli proxy in front of n8n injects one for
+# /mcp-server/* (see "Talking to an authenticating gateway")
+n8n-cli import --yaml --mcp
+```
+
+A workflow the MCP server cannot resolve (for example, one without the
+`Available in MCP` toggle on old servers) is left without folder keys —
+*unknown*, not *project root*. MCP failures degrade to a warning unless
+`--mcp-strict`.
+
+The `mcp` section of [`.n8nctlrc.json`](#configuration-file-n8nctlrcjson)
+carries the same settings (`mode`, `token`, `strict`).
+
+### Proxy-mediated MCP tokens
+
+When the CLI talks to n8n through an n8n-cli [`proxy`](#proxy), the proxy can
+hold the MCP access token and inject it for the MCP path — the CLI needs no
+secret at all:
+
+```bash
+# proxy side
+N8N_CLIENT_MIDDLEWARES="bearer-token-inject" \
+N8N_BEARER_TOKEN_INJECT_RULES='[{"pathPrefix":"/mcp-server/","tokenEnvVar":"N8N_MCP_TOKEN"}]' \
+n8n-cli proxy --upstream https://n8n.internal.example.com ...
+
+# CLI side
+N8N_API_URL=https://proxy.internal.example.com n8n-cli import --mcp --yaml
+```
+
+`/mcp-server/*` is transparently forwarded (POST JSON-RPC and SSE streams)
+and never passes the proxy's server-middlewares, so the proxy port itself
+must sit behind an authenticating ingress — anyone who can reach the proxy
+can reach n8n's MCP server with the injected token.
+
+### Commands
+
+See [`folder`](#folder) for the imperative commands (`folder list/get/create/
+move/delete`), useful for one-off operations; everything else is meant to run
+through `apply`/`import`.
+
+
 ## Workflow description and MCP exposure
 
 A workflow carries a top-level `description` — free text, distinct from the
@@ -1709,6 +1860,8 @@ an all-in-one alternative to the environment variables below, with precedence
 | `N8N_STALE_WRITE_ON_MISSING_BASE` | Callers that declare no base revision: `allow` (default) or `deny` |
 | `N8N_STALE_WRITE_ON_ERROR` | When the stored workflow cannot be read: `deny` (default) or `allow` |
 | `N8N_STALE_WRITE_ACTIONS` | Comma-separated route actions the guard applies to (default: `update`) |
+| `N8N_MCP_TOKEN` | MCP access token for import folder lookups (implies `--mcp`; see [Workflow folders as code](#workflow-folders-as-code)) |
+| `N8N_MCP` | Set to `1` to enable MCP folder lookups without a token (proxy injects it) |
 
 ### Talking to an authenticating gateway
 

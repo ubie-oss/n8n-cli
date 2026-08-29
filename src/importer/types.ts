@@ -21,6 +21,12 @@ export interface ImportOptions {
   cleanupSubfiles: boolean;
   ids: string[];
   filterByTags: string[];
+  /**
+   * When true, an MCP folder-source failure aborts the import instead of
+   * degrading to a warning. Folder attachments themselves are enabled by
+   * providing a folder source (see `ImportExecutor.setFolderSource`).
+   */
+  mcpStrict: boolean;
 }
 
 /** Returns default import options. */
@@ -36,6 +42,7 @@ export function defaultImportOptions(): ImportOptions {
     cleanupSubfiles: false,
     ids: [],
     filterByTags: [],
+    mcpStrict: false,
   };
 }
 

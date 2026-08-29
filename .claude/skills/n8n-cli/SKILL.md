@@ -670,6 +670,45 @@ When a node shows `?` for estimated items, it means cardinality could not be sta
 |--------|-------------|
 | `--type <nodeType>` | Specific node type schema (e.g., `n8n-nodes-base.slack`) |
 | `-o, --output-dir <dir>` | Dump all nodes as individual files to directory |
+
+### 14. Folders (Folder Management)
+
+Folder support requires an n8n plan with folders licensed (`folder:*` scopes).
+The workflow→folder assignment (`parentFolderId`) is **write-only** over the
+public API — GET never returns it — so import needs an MCP connection
+(`--mcp` / `N8N_MCP_TOKEN`, or a proxy that injects the token for
+`/mcp-server/*`) to attach `folder:` to imported files.
+
+```bash
+# Imperative commands
+./n8n-cli folder list -p <projectId> [--root | --parent <folderId>]
+./n8n-cli folder create <name> -p <projectId> [--parent <folderId>]
+./n8n-cli folder move <folderId> -p <projectId> [--parent <folderId> | --root] [--rename <name>]
+./n8n-cli folder delete <folderId> -p <projectId> --transfer-to <folderId> -f
+```
+
+**As-code (preferred):**
+
+- YAML workflow files declare `folder: Reporting/Daily` (path). `folder: null`
+  manages the project root; an absent key means "do not touch".
+- JSON files may carry the raw `parentFolderId`.
+- `definitions/folders.yaml` declares folder trees; `apply` syncs it
+  (create-only) before workflow processing.
+
+```yaml
+# definitions/folders.yaml
+projects:
+  - projectId: pAbc123
+    folders:
+      - name: Reporting
+        folders:
+          - name: Daily
+```
+
+**Flags:** `apply --no-folders` (disable), `--no-create-missing-folders`
+(refuse unknown paths), `--strict-folders` (fail on folder problems).
+`import --mcp [--mcp-token <t>] [--mcp-strict]` for reading assignments.
+
 ## Typical Workflow Operations
 
 ### Editing Workflows

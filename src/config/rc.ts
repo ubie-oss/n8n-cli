@@ -121,11 +121,31 @@ export interface RcProxySection {
 }
 
 /** The all-in-one configuration file shape. Every section is optional. */
+/**
+ * Client-side MCP settings (`mcp` section) — distinct from `proxy.mcp`, which
+ * configures the proxy's MCP *gate*. This section configures the CLI as an
+ * MCP *client*, used by `import` to read workflow→folder assignments.
+ */
+export interface RcMcpClientSection {
+  /**
+   * off (default): never call MCP. direct: CLI holds the MCP access token
+   * itself. proxy: the CLI holds no token — the n8n proxy in front of n8n
+   * injects one for `/mcp-server/*`. (direct and proxy behave identically
+   * from the CLI's side: attach the token when one is configured.)
+   */
+  mode?: "off" | "direct" | "proxy";
+  /** MCP access token. Supports `${ENV_VAR}` interpolation. */
+  token?: string;
+  /** Fail the command when MCP calls fail, instead of degrading to a warning. */
+  strict?: boolean;
+}
+
 export interface N8nCtlRc {
   api?: RcApiSection;
   lint?: RcLintSection;
   middlewares?: RcMiddlewaresSection;
   proxy?: RcProxySection;
+  mcp?: RcMcpClientSection;
 }
 
 /** Where each layer of the merged configuration came from. */
@@ -245,6 +265,7 @@ function asRc(raw: Record<string, unknown>, source: string): N8nCtlRc {
   assertSectionObject(raw, "lint", source);
   assertSectionObject(raw, "middlewares", source);
   assertSectionObject(raw, "proxy", source);
+  assertSectionObject(raw, "mcp", source);
 
   const rc: N8nCtlRc = raw as N8nCtlRc;
   if (rc.middlewares) {
@@ -314,6 +335,19 @@ function asRc(raw: Record<string, unknown>, source: string): N8nCtlRc {
           source,
         );
       }
+    }
+  }
+  if (rc.mcp) {
+    const mcp = rc.mcp as Record<string, unknown>;
+    const mode = mcp.mode;
+    if (mode !== undefined && mode !== "off" && mode !== "direct" && mode !== "proxy") {
+      throw new RcError(`Invalid mcp.mode${at(source)}: expected off, direct, or proxy`, source);
+    }
+    if (mcp.token !== undefined && typeof mcp.token !== "string") {
+      throw new RcError(`Invalid mcp.token${at(source)}: expected a string`, source);
+    }
+    if (mcp.strict !== undefined && typeof mcp.strict !== "boolean") {
+      throw new RcError(`Invalid mcp.strict${at(source)}: expected a boolean`, source);
     }
   }
   return rc;

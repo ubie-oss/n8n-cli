@@ -69,6 +69,24 @@ export interface ApplyOptions {
    * pick out its own keys (e.g. authzGroupsUrl).
    */
   middlewareCliOptions: Record<string, unknown>;
+  /**
+   * When true (default), folder declarations are honoured: `folders.yaml` in
+   * the definitions directory is synced first, and each workflow's `folder:`
+   * / `parentFolderId` declaration is applied after the workflow write.
+   * Disable with --no-folders.
+   */
+  foldersEnabled: boolean;
+  /**
+   * When true (default), a folder path in a definition that does not exist
+   * upstream is created. With --no-create-missing-folders an unresolvable
+   * path is an error (or a warning, unless --strict-folders).
+   */
+  createMissingFolders: boolean;
+  /**
+   * When true, folder problems (license missing, unresolvable path, failed
+   * move) fail the workflow's apply instead of degrading to a warning.
+   */
+  strictFolders: boolean;
 }
 
 /** Returns ApplyOptions with default values. */
@@ -94,6 +112,9 @@ export function defaultApplyOptions(): ApplyOptions {
     filterByTags: [],
     middlewares: [],
     middlewareCliOptions: {},
+    foldersEnabled: true,
+    createMissingFolders: true,
+    strictFolders: false,
   };
 }
 
@@ -138,6 +159,14 @@ export interface ApplyOperation {
   baseToRemoteFields: string[];
   activated?: boolean; // true: activated, false: deactivated, undefined: no change
   activationError?: Error; // activation/deactivation error
+  /** True when the workflow's folder assignment was applied (or planned, in dry-run). */
+  folderApplied?: boolean;
+  /** Resolved target folder path (null = project root); for reporting. */
+  folderPath?: string | null;
+  /** Folder segments this apply created to make the path resolvable. */
+  folderCreated?: string[];
+  /** Non-fatal folder failure (license missing, unresolvable path, move error). */
+  folderWarning?: string;
   /**
    * Violations surfaced by the pre-write lint check, when one ran. Present on
    * both blocked (operation === "error") and passing operations so callers
@@ -198,6 +227,10 @@ export interface ApplyResult {
   conflictCount: number;
   errorCount: number;
   warningCount: number;
+  /** Folder paths created by the folders.yaml sync (Phase 0), in order. */
+  foldersCreated: Array<{ projectId: string; path: string }>;
+  /** How many folder paths the sync found already in place. */
+  foldersExisting: number;
 }
 
 /** Creates an empty ApplyResult. */
@@ -212,6 +245,8 @@ export function emptyResult(dryRun: boolean): ApplyResult {
     conflictCount: 0,
     errorCount: 0,
     warningCount: 0,
+    foldersCreated: [],
+    foldersExisting: 0,
   };
 }
 

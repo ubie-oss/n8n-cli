@@ -24,6 +24,22 @@ export interface Workflow {
   shared?: SharedProject[];
   createdAt?: string;
   updatedAt?: string;
+  /**
+   * Raw API field for the folder a workflow sits in. n8n declares it
+   * `writeOnly`: create/update accept it, but GET responses never include it,
+   * so this is only ever populated from a local file (or an MCP-sourced import)
+   * and can never be read back through the REST API. `null` means the project
+   * root, deliberately.
+   */
+  parentFolderId?: string | null;
+  /**
+   * Local-only folder declaration as a folder *path* (`"Reporting/Daily"`).
+   * YAML files declare folders this way because folder IDs cannot be chosen at
+   * creation time; `null` (or the string `"root"`) means the project root is
+   * being managed deliberately, and an absent key means "leave the folder
+   * untouched". apply resolves the path to an ID via the folders API.
+   */
+  folder?: string | null;
 }
 
 /** Node represents a node in a workflow */
@@ -132,6 +148,13 @@ export interface WorkflowInput {
   connections: Record<string, NodeConn>;
   settings?: WorkflowSettings;
   staticData?: unknown;
+  /**
+   * Folder to place the workflow in, sent only when the local definition
+   * manages one (see `Workflow.parentFolderId`). n8n accepts it on create;
+   * servers too old to know folders reject the unknown property, which the
+   * apply executor treats as a signal to fall back to a create without it.
+   */
+  parentFolderId?: string | null;
 }
 
 /** ListTagsResponse represents the response from listing tags */
@@ -289,4 +312,35 @@ export interface UpsertRowInput {
   data: Record<string, unknown>;
   returnData?: boolean;
   dryRun?: boolean;
+}
+
+/** Folder represents an n8n workflow folder (enterprise feature). */
+export interface Folder {
+  id: string;
+  name: string;
+  /** ID of the parent folder, or null/absent when the folder sits at the project root. */
+  parentFolderId?: string | null;
+  /** Some folder list responses inline the parent instead of its bare ID. */
+  parentFolder?: { id: string; name?: string } | null;
+  projectId?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+/** ListFoldersResponse represents the response from listing folders. */
+export interface ListFoldersResponse {
+  count: number;
+  data: Folder[];
+}
+
+/** FolderInput represents input for creating a folder. */
+export interface FolderInput {
+  name: string;
+  parentFolderId?: string;
+}
+
+/** FolderUpdateInput represents input for updating (renaming/moving) a folder. */
+export interface FolderUpdateInput {
+  name?: string;
+  parentFolderId?: string | null;
 }

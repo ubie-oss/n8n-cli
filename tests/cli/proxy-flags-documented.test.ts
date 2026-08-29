@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import path from "node:path";
 import { Command } from "commander";
+import { registerImportCommand } from "@/cli/commands/import.ts";
 import { registerProxyCommand } from "@/cli/commands/proxy.ts";
 
 /**
@@ -29,6 +30,20 @@ function declaredFlags(): Set<string> {
   return new Set(proxy.options.map((o) => o.long ?? "").filter((long) => long.startsWith(PREFIX)));
 }
 
+/**
+ * Flags the README may legitimately document with the `--mcp-*` prefix even
+ * though they are not proxy flags: `import` grew its own `--mcp-token` /
+ * `--mcp-strict` family for MCP-backed folder lookups. A documented flag is
+ * stale only when it exists on *neither* command.
+ */
+function importFlags(): Set<string> {
+  const program = new Command();
+  registerImportCommand(program);
+  const imp = program.commands.find((c) => c.name() === "import");
+  if (!imp) throw new Error("the import command is not registered");
+  return new Set(imp.options.map((o) => o.long ?? "").filter((long) => long.startsWith(PREFIX)));
+}
+
 function documentedFlags(): Set<string> {
   const readme = fs.readFileSync(path.join(process.cwd(), "README.md"), "utf-8");
   // Flags appear as `--mcp-foo` or `--mcp-foo <arg>`; take the name only.
@@ -42,8 +57,8 @@ function documentedFlags(): Set<string> {
 }
 
 describe("proxy --mcp-* flags and the README", () => {
-  test("every documented flag exists", () => {
-    const declared = declaredFlags();
+  test("every documented flag exists (on proxy or import)", () => {
+    const declared = new Set([...declaredFlags(), ...importFlags()]);
     const stale = [...documentedFlags()].filter((f) => !declared.has(f));
     expect(stale).toEqual([]);
   });
