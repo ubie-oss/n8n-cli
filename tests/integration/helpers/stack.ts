@@ -1,5 +1,6 @@
 import { resolve } from "node:path";
 import type { EnforceLevel } from "@/proxy/config.ts";
+import type { McpGateSettings } from "@/proxy/mcp/config.ts";
 import { type ProxyHandle, startProxy } from "@/proxy/server.ts";
 import { type N8nMock, type N8nMockOptions, startN8nMock } from "./n8n-mock.ts";
 
@@ -15,7 +16,11 @@ export interface Stack {
   mock: N8nMock;
   proxy: ProxyHandle;
   proxyUrl: string;
-  runCli: (args: string[], env?: Record<string, string>) => Promise<CliResult>;
+  runCli: (
+    args: string[],
+    env?: Record<string, string>,
+    opts?: { apiUrl?: string },
+  ) => Promise<CliResult>;
   stop: () => Promise<void>;
 }
 
@@ -32,6 +37,8 @@ export interface StackOptions extends N8nMockOptions {
    * API key. Restored when the stack stops.
    */
   proxyEnv?: Record<string, string>;
+  /** MCP gate policy. Absent = transparent `/mcp-server/` forward. */
+  mcp?: McpGateSettings;
 }
 
 /**
@@ -64,6 +71,7 @@ export async function startStack(opts: StackOptions = {}): Promise<Stack> {
       ...(opts.clientMiddlewareCliOptions
         ? { clientMiddlewareCliOptions: opts.clientMiddlewareCliOptions }
         : {}),
+      ...(opts.mcp ? { mcp: opts.mcp } : {}),
     });
     await waitReady(proxy.port);
   } catch (err) {
@@ -79,7 +87,7 @@ export async function startStack(opts: StackOptions = {}): Promise<Stack> {
     mock,
     proxy,
     proxyUrl,
-    runCli: (args, env) => runCli(proxyUrl, args, env),
+    runCli: (args, env, opts) => runCli(opts?.apiUrl ?? proxyUrl, args, env),
     stop: async () => {
       await proxy.stop();
       await mock.stop();

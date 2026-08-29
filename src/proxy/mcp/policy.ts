@@ -105,6 +105,25 @@ export function isToolAllowed(policy: McpPolicy, name: string): boolean {
 }
 
 /**
+ * MCP tools `import --mcp` uses to read workflow→folder assignments.
+ *
+ * The agent gate withholds these on purpose (`get_workflow_details` is
+ * huge; `search_workflows` is narrowed to tagged workflows). A human
+ * CLI talking through the same proxy still needs the unfiltered listing
+ * — REST cannot report `parentFolderId`. Callers that have a verified
+ * impersonator identity are operators, not agents.
+ */
+const MCP_FOLDER_READ_TOOLS = new Set([
+  "search_workflows",
+  "get_workflow_details",
+  "search_folders",
+]);
+
+export function isMcpFolderReadTool(name: string): boolean {
+  return MCP_FOLDER_READ_TOOLS.has(name);
+}
+
+/**
  * The workflow id a `tools/call` targets.
  *
  * Returns `undefined` when the tool is not known to target a workflow (nothing

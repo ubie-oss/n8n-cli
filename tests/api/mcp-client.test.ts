@@ -5,6 +5,7 @@ import {
   McpClient,
   McpError,
 } from "../../src/api/mcp-client.ts";
+import type { ClientMiddleware } from "../../src/middleware/types.ts";
 
 /**
  * The MCP client is the only bridge to workflow folder assignments — the
@@ -22,7 +23,7 @@ type Handler = (input: {
 
 function clientWithHandler(
   handler: Handler,
-  token?: string,
+  opts: { token?: string; clientMiddlewares?: ClientMiddleware[] } = {},
 ): {
   client: McpClient;
   requests: Array<{ headers: Record<string, string>; body: Record<string, unknown> }>;
@@ -40,7 +41,8 @@ function clientWithHandler(
 
   const client = new McpClient({
     endpointUrl: "https://n8n.example.com/mcp-server/http",
-    ...(token ? { token } : {}),
+    ...(opts.token ? { token: opts.token } : {}),
+    ...(opts.clientMiddlewares ? { clientMiddlewares: opts.clientMiddlewares } : {}),
     fetchImpl,
   });
   return { client, requests };
@@ -132,7 +134,7 @@ describe("McpClient transport", () => {
   test("direct mode sends the Bearer token; proxy mode sends no Authorization at all", async () => {
     const direct = clientWithHandler(
       ({ body }) => rpcResult(body.id, { structuredContent: { data: [], count: 0 } }),
-      "mcp-secret",
+      { token: "mcp-secret" },
     );
     await direct.client.searchWorkflows();
     expect(direct.requests[0]?.headers.authorization).toBe("Bearer mcp-secret");
@@ -212,5 +214,67 @@ describe("McpClient transport", () => {
     );
     const result = await client.searchWorkflows();
     expect(result.data[0]?.id).toBe("wf-sse");
+  });
+
+  test("egress middlewares run before fetch on initialize, notify, and tool calls", async () => {
+    const saw: string[] = [];
+    const iap: ClientMiddleware = {
+      name: "iap-auth",
+      apply(headers, ctx) {
+        headers.set("Proxy-Authorization", "Bearer iap-id-token");
+        saw.push(`${ctx.method} ${ctx.pathname}`);
+      },
+    };
+    const { client, requests } = clientWithHandler(
+      ({ body }) => rpcResult(body.id, { structuredContent: { data: [], count: 0 } }),
+      { clientMiddlewares: [iap] },
+    );
+
+    await client.searchWorkflows();
+
+    // initialize → notifications/initialized → tools/call
+    expect(saw).toEqual([
+      "POST /mcp-server/http",
+      "POST /mcp-server/http",
+      "POST /mcp-server/http",
+    ]);
+    expect(requests).toHaveLength(3);
+    for (const req of requests) {
+      expect(req.headers["proxy-authorization"]).toBe("Bearer iap-id-token");
+      // Proxy mode: the CLI still sends no MCP Authorization. The gateway
+      // token rides a different header so the proxy can inject the app token.
+      expect(req.headers.authorization).toBeUndefined();
+    }
+  });
+
+  test("direct mode keeps the MCP Bearer token while middlewares add other headers", async () => {
+    const iap: ClientMiddleware = {
+      name: "iap-auth",
+      apply(headers) {
+        headers.set("Proxy-Authorization", "Bearer iap-id-token");
+      },
+    };
+    const { client, requests } = clientWithHandler(
+      ({ body }) => rpcResult(body.id, { structuredContent: { data: [], count: 0 } }),
+      { token: "mcp-secret", clientMiddlewares: [iap] },
+    );
+    await client.searchWorkflows();
+    expect(requests[0]?.headers.authorization).toBe("Bearer mcp-secret");
+    expect(requests[0]?.headers["proxy-authorization"]).toBe("Bearer iap-id-token");
+  });
+
+  test("a middleware that throws aborts the call instead of sending it unauthenticated", async () => {
+    const boom: ClientMiddleware = {
+      name: "boom",
+      apply() {
+        throw new Error("no credentials");
+      },
+    };
+    const { client, requests } = clientWithHandler(
+      ({ body }) => rpcResult(body.id, { structuredContent: { data: [], count: 0 } }),
+      { clientMiddlewares: [boom] },
+    );
+    await expect(client.searchWorkflows()).rejects.toThrow("no credentials");
+    expect(requests).toHaveLength(0);
   });
 });

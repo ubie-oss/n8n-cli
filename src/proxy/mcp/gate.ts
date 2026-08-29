@@ -14,12 +14,19 @@
  *   4. `search_workflows` results are filtered against that same policy, so the
  *      set an agent can see is the set it can run.
  *
+ * A verified impersonator (the CLI's `impersonator-token`) is an operator, not
+ * an agent. Folder-read tools (`search_workflows`, `get_workflow_details`,
+ * `search_folders`) skip the allowlist and the search filter for that caller,
+ * because `import --mcp` has to attach assignments REST cannot report.
+ * `execute_workflow` and other mutating tools stay gated.
+ *
  * Everything else on the MCP path — `initialize`, `notifications/*`, the
  * server-to-client `GET` stream, session teardown — is forwarded untouched.
  */
 
 import type { Workflow } from "@/api/types.ts";
 import { mcpToolAccessLevel } from "@/middleware/builtin/project-role/mcp-tools.ts";
+import { runPipeline } from "@/middleware/pipeline.ts";
 import type { ServerMiddleware, ServerMiddlewareContext } from "@/middleware/types.ts";
 import type { EnforceLevel } from "../config.ts";
 import {
@@ -49,6 +56,7 @@ import {
 } from "./jsonrpc.ts";
 import {
   hasWorkflowScope,
+  isMcpFolderReadTool,
   isToolAllowed,
   type McpPolicy,
   scanForWorkflowIds,
@@ -129,9 +137,11 @@ export async function handleMcpRequest(
     if (answered) return answered;
   }
 
+  const operatorFolderLookup = await callerIsImpersonatedOperator(req, deps);
+
   const refusals: JsonRpcMessage[] = [];
   for (const message of parsed.messages) {
-    const refusal = await refuse(message, deps, req, reqLog);
+    const refusal = await refuse(message, deps, req, reqLog, operatorFolderLookup);
     if (refusal) refusals.push(refusal);
   }
 
@@ -141,8 +151,12 @@ export async function handleMcpRequest(
   // the result. Without this the agent still sees the name and description of
   // every workflow the token's owner can read, which is the one part of the
   // listing surface n8n gives no way to close.
+  //
+  // An impersonated CLI (`import --mcp`) is not an agent: it needs the
+  // unfiltered listing to attach folder assignments, which REST cannot
+  // report. Do not shrink the search for that caller.
   const narrowedJSON =
-    refusals.length === 0 && deps.enforce === "error"
+    refusals.length === 0 && deps.enforce === "error" && !operatorFolderLookup
       ? narrowSearchArguments(parsed, deps.policy)
       : null;
 
@@ -175,9 +189,10 @@ export async function handleMcpRequest(
 
   const listsTools = parsed.messages.some((m) => m.method === "tools/list");
   const tools = listsTools && (filtersTools(deps.policy) || publishesEntryTool(deps.policy));
-  const searchIds = hasWorkflowScope(deps.policy)
-    ? searchCallIds(parsed.messages)
-    : new Set<string | number>();
+  const searchIds =
+    hasWorkflowScope(deps.policy) && !operatorFolderLookup
+      ? searchCallIds(parsed.messages)
+      : new Set<string | number>();
   if (!tools && searchIds.size === 0) return response;
 
   return filterResponse(response, deps, { tools, searchIds }, reqLog);
@@ -304,6 +319,41 @@ function filtersTools(policy: McpPolicy): boolean {
 }
 
 /**
+ * Authorization middlewares that must not run on the operator-identity probe.
+ * They authorize a *workflow*, and this probe has none.
+ */
+const MCP_OPERATOR_PROBE_SKIP = new Set(["project-role", "authz"]);
+
+/**
+ * True when a verified human is on the other end of this MCP call.
+ *
+ * `import --mcp` sends `impersonator-token` on every request. Agents talking
+ * to the same `/mcp-server/` do not. The agent policy must not strip folder
+ * assignments from the operator path: REST cannot report `parentFolderId`.
+ *
+ * Only identity-populating middlewares run. `project-role` and `authz` need a
+ * workflow this probe does not have — they would deny the lookup itself
+ * (or hit Zeus on every `initialize`). A header without a verifier does
+ * not count: `auth.effective.layer === "impersonator"` is written only by
+ * `impersonator-verify` after a trusted bearer has cleared `oauth-verify`.
+ */
+async function callerIsImpersonatedOperator(req: Request, deps: McpGateDeps): Promise<boolean> {
+  const chain = (deps.middlewares ?? []).filter(
+    (m) => !m.readsWorkflowBody && !MCP_OPERATOR_PROBE_SKIP.has(m.name),
+  );
+  if (chain.length === 0) return false;
+  const ctx: ServerMiddlewareContext = {
+    workflow: null,
+    request: req,
+    mode: "proxy",
+    action: "read",
+  };
+  const verdict = await runPipeline(chain, ctx);
+  if (verdict.block) return false;
+  return ctx.auth?.effective?.layer === "impersonator";
+}
+
+/**
  * Decides whether a single JSON-RPC message is refused, returning the reply to
  * send in its place, or null to let it through.
  */
@@ -312,10 +362,18 @@ async function refuse(
   deps: McpGateDeps,
   req: Request,
   reqLog: Logger,
+  operatorFolderLookup: boolean,
 ): Promise<JsonRpcMessage | null> {
   const tool = toolCallName(message);
   if (tool === null) return null;
   const rpc = typeof message.method === "string" ? message.method : undefined;
+
+  // Operators (verified impersonator) reading folder assignments: skip the
+  // agent allowlist and workflow-tag scope. execute_workflow and friends
+  // still go through the rest of this function.
+  if (operatorFolderLookup && isMcpFolderReadTool(tool)) {
+    return null;
+  }
 
   if (!isToolAllowed(deps.policy, tool)) {
     log(reqLog, deps, `tool "${tool}" is not exposed by this proxy`, {

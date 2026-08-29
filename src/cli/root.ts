@@ -34,9 +34,10 @@ export interface GlobalContext {
   folderService: FolderService;
   /**
    * The egress chain the API client uses, exposed so commands that reach
-   * outside `/api/v1` — webhook calls — send the same credentials. Without it
-   * those would be the only unauthenticated requests the CLI makes, and a
-   * gateway would reject them while every other command worked.
+   * outside `/api/v1` — webhook calls and MCP folder lookups — send the same
+   * credentials. Without it those would be the only unauthenticated requests
+   * the CLI makes, and a gateway would reject them while every other command
+   * worked.
    */
   clientMiddlewares: ClientMiddleware[];
 }

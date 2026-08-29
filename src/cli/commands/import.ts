@@ -112,6 +112,10 @@ export function registerImportCommand(parent: Command): void {
           endpointUrl: deriveMcpEndpointUrl(ctx.config.apiURL),
           ...(mcpSettings.token ? { token: mcpSettings.token } : {}),
           timeoutMs: ctx.config.timeoutMs,
+          // Same egress chain as REST / webhook: IAP in front of the proxy
+          // must see MCP calls too, or folder lookups 403 while import itself
+          // succeeds and the assignment silently disappears.
+          clientMiddlewares: ctx.clientMiddlewares,
         });
         executor.setFolderSource(new McpFolderSource(mcpClient, ctx.folderService));
         if (mcpSettings.mode === "proxy") {

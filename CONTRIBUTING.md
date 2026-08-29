@@ -92,7 +92,7 @@ bun test tests/lint/rules/some-rule.test.ts
 bun test tests/integration/cli-through-proxy.test.ts
 ```
 
-`tests/integration/` stands up the full hop `CLI → proxy → mock n8n` in-process (ephemeral ports, no Docker). CI runs it twice on purpose: inside the Test job (`bun test`) and as a dedicated Integration job (`bun test tests/integration/`) that `build` waits on, so a contract break between the CLI HTTP client and the proxy is a required check of its own.
+`tests/integration/` stands up the full hop `CLI → proxy → mock n8n` in-process (ephemeral ports, no Docker), including an IAP stand-in in front of the proxy for `import --mcp` folder reads. CI runs it twice on purpose: inside the Test job (`bun test`) and as a dedicated Integration job (`bun test tests/integration/`) that `build` waits on, so a contract break between the CLI HTTP client (REST, webhook, MCP) and the proxy is a required check of its own.
 
 ## Type Checking
 
