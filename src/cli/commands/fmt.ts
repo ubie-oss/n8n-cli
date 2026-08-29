@@ -2,6 +2,7 @@ import fs, { readdirSync, statSync } from "node:fs";
 import path from "node:path";
 import type { Command } from "commander";
 import type { Workflow } from "@/api/types.ts";
+import { isFoldersConfigFile } from "@/apply/folders.ts";
 import { WORKFLOW_EXTENSIONS } from "@/common/extensions.ts";
 import { hasAllTags, parseTagFilter } from "@/common/tags.ts";
 import { loadYamlWorkflow } from "@/yaml/loader.ts";
@@ -95,6 +96,8 @@ function scanWorkflowFiles(dir: string): string[] {
         if (entry === "_subfiles") continue;
         results.push(...scanWorkflowFiles(fullPath));
       } else {
+        // `folders.yaml` is folder-as-code config, not a workflow to format.
+        if (isFoldersConfigFile(entry)) continue;
         const ext = path.extname(entry).toLowerCase();
         if (WORKFLOW_EXTENSIONS.has(ext)) {
           results.push(fullPath);

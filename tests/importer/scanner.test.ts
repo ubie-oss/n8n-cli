@@ -2,7 +2,9 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { cleanupOrphanFiles } from "@/importer/orphan.ts";
 import { parseWorkflowFile, scanDirectory, scanDirectoryWithOrphans } from "@/importer/scanner.ts";
+import { ImportResult } from "@/importer/types.ts";
 
 describe("scanDirectory", () => {
   let tmpDir: string;
@@ -136,6 +138,33 @@ describe("scanDirectoryWithOrphans", () => {
     const [, found] = idMap.get("42");
     expect(found).toBe(true);
     expect(orphanMap.count()).toBe(0);
+  });
+
+  test("folders.yaml is never a workflow or an orphan", () => {
+    // It sits inside the definitions directory by design. Counting it as an
+    // orphan would let `import --cleanup-orphans` delete the folder-as-code
+    // config it is supposed to read.
+    fs.writeFileSync(
+      path.join(tmpDir, "folders.yaml"),
+      "projects:\n  - projectId: p1\n    folders:\n      - name: Reporting\n",
+    );
+    fs.writeFileSync(path.join(tmpDir, "folders.yml"), "projects: []\n");
+    fs.writeFileSync(path.join(tmpDir, "folders.json"), "{}");
+    fs.writeFileSync(
+      path.join(tmpDir, "wf__wf1.yaml"),
+      "id: wf1\nname: WF\nnodes: []\nconnections: {}\n",
+    );
+
+    const [idMap, orphanMap] = scanDirectoryWithOrphans(tmpDir);
+    expect(idMap.count()).toBe(1);
+    expect(orphanMap.count()).toBe(0);
+
+    // And a cleanup pass deletes nothing of the folder config.
+    const result = new ImportResult();
+    cleanupOrphanFiles(orphanMap, false, result);
+    expect(fs.existsSync(path.join(tmpDir, "folders.yaml"))).toBe(true);
+    expect(fs.existsSync(path.join(tmpDir, "folders.yml"))).toBe(true);
+    expect(fs.existsSync(path.join(tmpDir, "folders.json"))).toBe(true);
   });
 });
 

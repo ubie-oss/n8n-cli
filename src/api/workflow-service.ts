@@ -138,6 +138,21 @@ export class WorkflowService {
   }
 
   /**
+   * MoveWorkflowToFolder moves a workflow into a folder (or to the project
+   * root with `null`) via the workflow PATCH endpoint's `parentFolderId`.
+   *
+   * This is the only way to observe or change a workflow's folder through the
+   * REST API besides create-time assignment: the field is `writeOnly`, so the
+   * move is fire-and-confirm-by-status — the response cannot echo the new
+   * folder back.
+   */
+  async moveWorkflowToFolder(id: string, parentFolderId: string | null): Promise<Workflow> {
+    const path = `/workflows/${encodeURIComponent(id)}`;
+    const data = await this.client.patch(path, { parentFolderId });
+    return JSON.parse(data) as Workflow;
+  }
+
+  /**
    * GetWorkflowCurrentProjectID returns the current project ID of a workflow.
    * Returns empty string if the workflow has no shared project info.
    */

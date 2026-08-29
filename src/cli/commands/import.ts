@@ -1,14 +1,17 @@
 import type { Command } from "commander";
+import { deriveMcpEndpointUrl, McpClient } from "../../api/mcp-client.ts";
 import {
   getEffectiveExternalizeThreshold,
   getEffectiveTsEnabled,
   getEffectiveYamlEnabled,
   loadCLIConfig,
 } from "../../config/claude-md.ts";
+import { resolveMcpClientSettings } from "../../config/mcp.ts";
 import { ImportExecutor } from "../../importer/executor.ts";
+import { McpFolderSource } from "../../importer/folder-source.ts";
 import { reportDryRun, reportProgress, reportSummary } from "../../importer/reporter.ts";
 import { defaultImportOptions, type ImportOptions } from "../../importer/types.ts";
-import { resolveContext } from "../root.ts";
+import { loadMergedRc, resolveContext } from "../root.ts";
 
 export function registerImportCommand(parent: Command): void {
   parent
@@ -29,9 +32,32 @@ export function registerImportCommand(parent: Command): void {
     .option("--cleanup-orphans", "Delete local files without matching remote workflow", false)
     .option("--cleanup-subfiles", "Delete orphan external files in _subfiles directories", false)
     .option("--tags <tags>", "Filter by tags (comma-separated, AND condition)")
+    .option(
+      "--mcp",
+      "Attach folder assignments to imported files by calling n8n's MCP server (enabled automatically by --mcp-token or N8N_MCP_TOKEN)",
+    )
+    .option(
+      "--mcp-token <token>",
+      "MCP access token for the folder lookup (env: N8N_MCP_TOKEN). Without a token, MCP calls rely on an n8n-cli proxy injecting the token for /mcp-server/*",
+    )
+    .option(
+      "--mcp-strict",
+      "Fail the import when the MCP folder lookup fails, instead of warning and continuing without folder information",
+    )
     .action(async (options, command) => {
       const ctx = resolveContext(command.parent!);
       const cliConfig = loadCLIConfig();
+
+      // MCP client settings: flags win over N8N_MCP_TOKEN / N8N_MCP, which win
+      // over the `mcp` section of .n8nctlrc.json. Folder lookups only happen
+      // when this resolves to enabled.
+      const rc = loadMergedRc(command.parent!.opts().config);
+      const mcpSettings = resolveMcpClientSettings({
+        flagEnabled: options.mcp === true,
+        ...(typeof options.mcpToken === "string" ? { flagToken: options.mcpToken } : {}),
+        flagStrict: options.mcpStrict === true,
+        rc: rc.config.mcp,
+      });
 
       // The flags carry no default, so `undefined` means "not passed" and the
       // CLAUDE.md setting decides.
@@ -73,10 +99,25 @@ export function registerImportCommand(parent: Command): void {
               .map((s: string) => s.trim())
               .filter((s: string) => s.length > 0)
           : [],
+        mcpStrict: mcpSettings.strict,
       };
 
       const executor = new ImportExecutor(ctx.workflowService, importOpts);
       executor.setProgressCallback(reportProgress);
+
+      // Folder assignments ride on an MCP connection (direct token or proxy
+      // injection). Failure degrades to a warning unless --mcp-strict.
+      if (mcpSettings.enabled) {
+        const mcpClient = new McpClient({
+          endpointUrl: deriveMcpEndpointUrl(ctx.config.apiURL),
+          ...(mcpSettings.token ? { token: mcpSettings.token } : {}),
+          timeoutMs: ctx.config.timeoutMs,
+        });
+        executor.setFolderSource(new McpFolderSource(mcpClient, ctx.folderService));
+        if (mcpSettings.mode === "proxy") {
+          console.log("Folder lookup via MCP (proxy mode — token injected by the proxy)");
+        }
+      }
 
       try {
         const result = await executor.execute();

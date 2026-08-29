@@ -3,6 +3,7 @@ import { Client } from "../api/client.ts";
 import { CredentialService } from "../api/credential-service.ts";
 import { DataTableService } from "../api/data-table-service.ts";
 import { ExecutionService } from "../api/execution-service.ts";
+import { FolderService } from "../api/folder-service.ts";
 import { TagService } from "../api/tag-service.ts";
 import { WorkflowService } from "../api/workflow-service.ts";
 import {
@@ -30,6 +31,7 @@ export interface GlobalContext {
   executionService: ExecutionService;
   credentialService: CredentialService;
   dataTableService: DataTableService;
+  folderService: FolderService;
   /**
    * The egress chain the API client uses, exposed so commands that reach
    * outside `/api/v1` — webhook calls — send the same credentials. Without it
@@ -74,6 +76,7 @@ function createContext(config: Config, rc: LoadedRc): GlobalContext {
     executionService: new ExecutionService(client),
     credentialService: new CredentialService(client),
     dataTableService: new DataTableService(client),
+    folderService: new FolderService(client),
   };
 }
 

@@ -1,6 +1,7 @@
 import { readdirSync, statSync } from "node:fs";
 import path from "node:path";
 import type { Command } from "commander";
+import { isFoldersConfigFile } from "@/apply/folders.ts";
 import { WORKFLOW_EXTENSIONS, WORKFLOW_EXTENSIONS_WITH_TS } from "@/common/extensions.ts";
 import { hasAllTags, parseTagFilter } from "@/common/tags.ts";
 import { getEffectiveExternalizeThreshold, loadCLIConfig } from "@/config/claude-md.ts";
@@ -168,6 +169,8 @@ function scanWorkflowFiles(dir: string, includeTs = false): string[] {
         if (entry.startsWith("_")) continue;
         results.push(...scanWorkflowFiles(fullPath, includeTs));
       } else {
+        // `folders.yaml` is folder-as-code config, not a workflow to convert.
+        if (isFoldersConfigFile(entry)) continue;
         const ext = path.extname(entry).toLowerCase();
         const allowed = includeTs ? WORKFLOW_EXTENSIONS_WITH_TS : WORKFLOW_EXTENSIONS;
         if (allowed.has(ext) && !entry.toLowerCase().endsWith(".d.ts")) {

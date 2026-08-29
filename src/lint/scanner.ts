@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { Workflow } from "@/api/types.ts";
+import { isFoldersConfigFile } from "@/apply/folders.ts";
 import { WORKFLOW_EXTENSIONS } from "@/common/extensions.ts";
 import { hasAllTags } from "@/common/tags.ts";
 import { loadYamlWorkflow } from "@/yaml/loader.ts";
@@ -21,6 +22,8 @@ function walkDir(dir: string, files: string[]): void {
       if (entry.name === "_subfiles") continue;
       walkDir(fullPath, files);
     } else if (entry.isFile()) {
+      // `folders.yaml` is folder-as-code config, not a workflow to lint.
+      if (isFoldersConfigFile(entry.name)) continue;
       const ext = path.extname(entry.name).toLowerCase();
       if (WORKFLOW_EXTENSIONS.has(ext)) {
         files.push(fullPath);

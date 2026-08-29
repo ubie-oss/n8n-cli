@@ -7,6 +7,7 @@ import { Detector } from "../git/detector.ts";
 import { extractWorkflowIDFromDirname, extractWorkflowIDFromFilename } from "../naming/naming.ts";
 import { loadTsWorkflow } from "../ts/loader.ts";
 import { loadYamlWorkflow } from "../yaml/loader.ts";
+import { isFoldersConfigFile } from "./folders.ts";
 import type { ApplyOptions, WorkflowFile } from "./types.ts";
 
 /** Scanner handles scanning and parsing workflow files from a directory. */
@@ -83,6 +84,8 @@ export class Scanner {
         if (ext === ".json") {
           files.push(this.parseJSONFile(fullPath));
         } else if (ext === ".yaml" || ext === ".yml") {
+          // `folders.yaml` is folder-as-code config, not a workflow definition.
+          if (isFoldersConfigFile(entry.name)) continue;
           if (yamlEnabled) {
             files.push(this.parseYAMLFile(fullPath));
           }

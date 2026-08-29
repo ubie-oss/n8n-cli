@@ -109,6 +109,13 @@ export function isConflictError(err: unknown): boolean {
 }
 
 /**
+ * IsValidationError checks if the error is a request-validation error (400).
+ */
+export function isValidationError(err: unknown): boolean {
+  return err instanceof APIError && err.code === ErrorCode.VALIDATION_ERROR;
+}
+
+/**
  * IsAlreadyOwnedError checks if the error indicates a workflow is already in the target project.
  * This error can be returned as either 409 Conflict or 400 Bad Request depending on n8n version.
  */
