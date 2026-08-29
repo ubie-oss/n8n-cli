@@ -1337,12 +1337,12 @@ Everything else on the path — `initialize`, notifications, the server-to-clien
 
 | Flag | Env | Description |
 |------|-----|-------------|
-| `--mcp-enforce <level>` | `N8N_MCP_ENFORCE` | `off`, `warn`, `error`. **Required to enable the gate** — without it `/mcp-server/` is forwarded unfiltered, so upgrading changes nothing |
-| `--mcp-allow-tools <list>` | `N8N_MCP_ALLOW_TOOLS` | Comma-separated `*`-globs; only these **verbs** are visible and callable. Empty means all |
-| `--mcp-deny-tools <list>` | `N8N_MCP_DENY_TOOLS` | Globs to withhold, applied after the allowlist |
-| `--mcp-workflow-tags <tags>` | `N8N_MCP_WORKFLOW_TAGS` | A reachable workflow must carry **all** of these tags. Also narrows `search_workflows` |
-| `--mcp-entry-path-pattern <glob>` | `N8N_MCP_ENTRY_PATH_PATTERN` | A reachable workflow's **entry trigger** must declare a path matching this glob (see below) |
-| `--mcp-cache-ttl-ms <ms>` | `N8N_MCP_CACHE_TTL_MS` | Workflow-facts cache lifetime (default `60000`) |
+| `--mcp-enforce <level>` | `N8N_MCP_ENFORCE` | `off`, `warn`, `error`. **Required to enable the gate** — without it `/mcp-server/` is forwarded unfiltered, so upgrading changes nothing. config: `proxy.mcp.enforce` |
+| `--mcp-allow-tools <list>` | `N8N_MCP_ALLOW_TOOLS` | Comma-separated `*`-globs; only these **verbs** are visible and callable. Empty means all. config: `proxy.mcp.allowTools` |
+| `--mcp-deny-tools <list>` | `N8N_MCP_DENY_TOOLS` | Globs to withhold, applied after the allowlist. config: `proxy.mcp.denyTools` |
+| `--mcp-workflow-tags <tags>` | `N8N_MCP_WORKFLOW_TAGS` | A reachable workflow must carry **all** of these tags. Also narrows `search_workflows`. config: `proxy.mcp.workflowTags` |
+| `--mcp-entry-path-pattern <glob>` | `N8N_MCP_ENTRY_PATH_PATTERN` | A reachable workflow's **entry trigger** must declare a path matching this glob (see below). config: `proxy.mcp.entryPathPattern` |
+| `--mcp-cache-ttl-ms <ms>` | `N8N_MCP_CACHE_TTL_MS` | Workflow-facts cache lifetime (default `60000`). config: `proxy.mcp.cacheTtlMs` |
 
 ### The entry trigger
 
@@ -1479,7 +1479,12 @@ variable is an error, not a silent empty string.
   },
   "proxy": {
     "enforce": "error",
-    "logFormat": "json"
+    "logFormat": "json",
+    "mcp": {
+      "enforce": "error",
+      "allowTools": ["search_workflows", "get_workflow_details"],
+      "workflowTags": ["mcp"]
+    }
   }
 }
 ```

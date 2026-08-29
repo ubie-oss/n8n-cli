@@ -1,7 +1,7 @@
 import type { Command } from "commander";
 import { loadMergedRc } from "@/cli/root.ts";
 import { parseTagFilter } from "@/common/tags.ts";
-import type { LoadedRc } from "@/config/rc.ts";
+import type { LoadedRc, RcMcpSection } from "@/config/rc.ts";
 import { parseMiddlewareList } from "@/middleware/registry.ts";
 import { parseEnforceLevel } from "@/proxy/config.ts";
 import { type McpCliOptions, parseMcpSettings } from "@/proxy/mcp/config.ts";
@@ -464,7 +464,7 @@ export function registerProxyCommand(program: Command): void {
 
       let mcp: ReturnType<typeof parseMcpSettings>;
       try {
-        mcp = parseMcpSettings(opts, process.env);
+        mcp = parseMcpSettings(resolveMcpCliOptions(opts, process.env, rcProxy.mcp), process.env);
       } catch (err) {
         console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
         process.exit(1);
@@ -602,6 +602,43 @@ export function extractClientMiddlewareCliOpts(opts: ProxyOptions): Record<strin
   copy("impersonatorTokenEnvVar");
   copy("impersonatorTokenOnError");
   return out;
+}
+
+/**
+ * Folds the config-file `proxy.mcp` section into the CLI options bag at the
+ * lowest precedence (CLI flag > env var > file) so `parseMcpSettings` — which
+ * merges CLI over env internally — sees one flat bag. The env var names are
+ * repeated here on purpose: parseMcpSettings stays the single place that
+ * validates and interprets the values (including the orphan-policy check);
+ * this only decides who wins. Exported for unit tests.
+ */
+export function resolveMcpCliOptions(
+  cli: McpCliOptions,
+  env: NodeJS.ProcessEnv,
+  file: RcMcpSection | undefined,
+): McpCliOptions {
+  const pick = (cliValue: string | undefined, envName: string, fileValue: string | undefined) =>
+    cliValue ?? env[envName] ?? fileValue;
+  return {
+    mcpEnforce: pick(cli.mcpEnforce, "N8N_MCP_ENFORCE", file?.enforce),
+    mcpAllowTools: pick(cli.mcpAllowTools, "N8N_MCP_ALLOW_TOOLS", file?.allowTools?.join(",")),
+    mcpDenyTools: pick(cli.mcpDenyTools, "N8N_MCP_DENY_TOOLS", file?.denyTools?.join(",")),
+    mcpWorkflowTags: pick(
+      cli.mcpWorkflowTags,
+      "N8N_MCP_WORKFLOW_TAGS",
+      file?.workflowTags?.join(","),
+    ),
+    mcpEntryPathPattern: pick(
+      cli.mcpEntryPathPattern,
+      "N8N_MCP_ENTRY_PATH_PATTERN",
+      file?.entryPathPattern,
+    ),
+    mcpCacheTtlMs: pick(
+      cli.mcpCacheTtlMs,
+      "N8N_MCP_CACHE_TTL_MS",
+      file?.cacheTtlMs !== undefined ? String(file.cacheTtlMs) : undefined,
+    ),
+  };
 }
 
 function parsePositiveInt(value: string | undefined, flag: string): number | undefined {

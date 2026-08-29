@@ -81,6 +81,21 @@ export interface RcMiddlewaresSection {
   options?: Record<string, Record<string, unknown>>;
 }
 
+export interface RcMcpSection {
+  /** MCP gate enforcement level (flag: --mcp-enforce). */
+  enforce?: "off" | "warn" | "error";
+  /** Glob patterns for the only tools clients may see (flag: --mcp-allow-tools). */
+  allowTools?: string[];
+  /** Glob patterns for tools to withhold, applied after allowTools (flag: --mcp-deny-tools). */
+  denyTools?: string[];
+  /** Workflow tags required for workflow-scoped tool calls (flag: --mcp-workflow-tags). */
+  workflowTags?: string[];
+  /** Entry-trigger path glob a workflow must match (flag: --mcp-entry-path-pattern). */
+  entryPathPattern?: string;
+  /** Cached workflow allowlist lifetime in ms (flag: --mcp-cache-ttl-ms). */
+  cacheTtlMs?: number;
+}
+
 export interface RcProxySection {
   listen?: string;
   /** Upstream n8n base URL. Falls back to api.url when omitted. */
@@ -101,6 +116,8 @@ export interface RcProxySection {
   routes?: string[];
   duplicateTtlMs?: number;
   upstreamTimeoutMs?: number;
+  /** MCP gate policy (flag family: --mcp-*). */
+  mcp?: RcMcpSection;
 }
 
 /** The all-in-one configuration file shape. Every section is optional. */
@@ -269,6 +286,31 @@ function asRc(raw: Record<string, unknown>, source: string): N8nCtlRc {
       if (v !== undefined && (typeof v !== "number" || !Number.isFinite(v) || v < 0)) {
         throw new RcError(
           `Invalid proxy.${numKey}${at(source)}: expected a non-negative number`,
+          source,
+        );
+      }
+    }
+    if (proxy.mcp !== undefined) {
+      if (!isPlainObject(proxy.mcp)) {
+        throw new RcError(`Invalid "proxy.mcp" section${at(source)}: expected an object`, source);
+      }
+      const mcp = proxy.mcp;
+      for (const listKey of ["allowTools", "denyTools", "workflowTags"]) {
+        if (mcp[listKey] !== undefined) {
+          assertStringArray(mcp[listKey], `proxy.mcp.${listKey}`, source);
+        }
+      }
+      const enforce = mcp.enforce;
+      if (enforce !== undefined && enforce !== "off" && enforce !== "warn" && enforce !== "error") {
+        throw new RcError(
+          `Invalid proxy.mcp.enforce${at(source)}: expected off, warn, or error`,
+          source,
+        );
+      }
+      const ttl = mcp.cacheTtlMs;
+      if (ttl !== undefined && (typeof ttl !== "number" || !Number.isFinite(ttl) || ttl < 0)) {
+        throw new RcError(
+          `Invalid proxy.mcp.cacheTtlMs${at(source)}: expected a non-negative number`,
           source,
         );
       }

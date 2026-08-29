@@ -148,6 +148,42 @@
           "type": "number",
           "minimum": 0,
           "description": "Per-request upstream timeout in ms; 0 disables (flag: --upstream-timeout)."
+        },
+        "mcp": {
+          "type": "object",
+          "description": "MCP gate policy applied to n8n's instance-level MCP endpoint (flag family: --mcp-*). The gate stays off unless enforce is set — a policy without enforce makes the proxy refuse to start, mirroring the orphan-policy check on the flags.",
+          "additionalProperties": false,
+          "properties": {
+            "enforce": {
+              "type": "string",
+              "enum": ["off", "warn", "error"],
+              "description": "Gate enforcement level (flag: --mcp-enforce)."
+            },
+            "allowTools": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "Glob patterns for the only tools clients may see (flag: --mcp-allow-tools)."
+            },
+            "denyTools": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "Glob patterns for tools to withhold, applied after allowTools (flag: --mcp-deny-tools)."
+            },
+            "workflowTags": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "Workflow tags required for workflow-scoped tool calls, AND condition (flag: --mcp-workflow-tags)."
+            },
+            "entryPathPattern": {
+              "type": "string",
+              "description": "Entry-trigger path glob a workflow must match (flag: --mcp-entry-path-pattern)."
+            },
+            "cacheTtlMs": {
+              "type": "number",
+              "minimum": 0,
+              "description": "Cached workflow allowlist lifetime in ms (flag: --mcp-cache-ttl-ms)."
+            }
+          }
         }
       }
     }

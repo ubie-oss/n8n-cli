@@ -161,6 +161,18 @@ describe("parseRcFile", () => {
     expect(() => parseRcFile(file, {})).toThrow(/proxy\.duplicateTtlMs/);
   });
 
+  test("rejects an invalid proxy.mcp.enforce", () => {
+    const file = path.join(tmpDir, ".n8nctlrc.json");
+    fs.writeFileSync(file, JSON.stringify({ proxy: { mcp: { enforce: "maybe" } } }));
+    expect(() => parseRcFile(file, {})).toThrow(/proxy\.mcp\.enforce/);
+  });
+
+  test("rejects non-string arrays inside proxy.mcp", () => {
+    const file = path.join(tmpDir, ".n8nctlrc.json");
+    fs.writeFileSync(file, JSON.stringify({ proxy: { mcp: { allowTools: [1] } } }));
+    expect(() => parseRcFile(file, {})).toThrow(/proxy\.mcp\.allowTools/);
+  });
+
   test("interpolates ${VAR} during load", () => {
     const file = path.join(tmpDir, ".n8nctlrc.json");
     fs.writeFileSync(file, JSON.stringify({ api: { apiKey: "${MY_KEY}" } }));
@@ -336,8 +348,20 @@ describe("JSON schema (schemas/n8nctlrc.schema.json)", () => {
       "routes",
       "duplicateTtlMs",
       "upstreamTimeoutMs",
+      "mcp",
     ]) {
       expect(proxyProps[key]).toBeDefined();
+    }
+    const mcpProps = (proxyProps.mcp as { properties: Record<string, unknown> }).properties;
+    for (const key of [
+      "enforce",
+      "allowTools",
+      "denyTools",
+      "workflowTags",
+      "entryPathPattern",
+      "cacheTtlMs",
+    ]) {
+      expect(mcpProps[key]).toBeDefined();
     }
   });
 });

@@ -68,8 +68,9 @@ export function parseMcpSettings(
     ).map(({ env: name }) => name);
     if (orphans.length > 0) {
       throw new Error(
-        `MCP policy is configured (${orphans.join(", ")}) but --mcp-enforce / N8N_MCP_ENFORCE is not set, ` +
-          "so the gate would be off and the policy ignored. Set it to off, warn or error.",
+        `MCP policy is configured (${orphans.join(", ")}) but --mcp-enforce / N8N_MCP_ENFORCE ` +
+          "(or proxy.mcp.enforce in .n8nctlrc.json) is not set, so the gate would be off and " +
+          "the policy ignored. Set it to off, warn or error.",
       );
     }
     return null;
