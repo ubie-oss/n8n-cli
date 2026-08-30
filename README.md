@@ -273,7 +273,7 @@ n8n-cli import [options]
 | `--cleanup-subfiles` | Delete orphan external files |
 | `--tags <tags>` | Filter by tags (comma-separated, AND condition) |
 | `--mcp` | Attach folder assignments to imported files by calling n8n's MCP server (also enabled by `--mcp-token` / `N8N_MCP_TOKEN` / `N8N_MCP=1`) |
-| `--mcp-token <token>` | MCP access token for the folder lookup (env: `N8N_MCP_TOKEN`). Without a token, MCP calls rely on an n8n-cli proxy injecting the token for `/mcp-server/*` |
+| `--mcp-token <token>` | MCP access token for the folder lookup (env: `N8N_MCP_TOKEN`). Without a token, MCP calls rely on an n8n-cli proxy injecting the token for `/mcp-server/*`. MCP requests use the same client middleware chain as REST (`iap-auth`, `impersonator-token`, …) so they can reach an authenticating gateway in front of that proxy |
 | `--mcp-strict` | Fail the import when the MCP folder lookup fails, instead of warning and continuing without folder information |
 
 ### `folder`
@@ -1353,6 +1353,8 @@ Four things happen, and only the first is cosmetic:
 3. **`tools/call` naming a workflow outside the scope is refused**, with an MCP tool result carrying `isError: true` and the reason — which tag is missing, or which trigger n8n would have entered it through. The agent is told *why* rather than seeing a transport failure.
 4. **`search_workflows` is narrowed rather than refused**, so that what an agent can see and what it can run are the same set. Its results are filtered on the way back against the same policy that governs `tools/call` — by tag, by entry path, or both. Where the policy has tags, they are also merged into the request's own `tags` argument (an AND, the same semantics), which saves n8n from serving rows that would be dropped anyway.
 
+The gate is for agents. `n8n-cli import --mcp` is not. The CLI's egress chain (`iap-auth`, `impersonator-token`) presents a Cloud Run invoker Bearer plus `X-Impersonator-Id-Token`. `oauth-verify` must accept that Bearer as a trusted principal, then `impersonator-verify` rewrites `auth.effective.layer` to `impersonator`. Only then does the gate skip the allowlist and search-narrowing for folder-read verbs (`search_workflows`, `get_workflow_details`, `search_folders`). A header with no verifier does not count; `execute_workflow` stays gated. An agent session with only an MCP Bearer never takes this path, so a production allowlist that omits `get_workflow_details` still hides that verb from agents. Without the verified impersonator, `import --mcp` against that same proxy writes JSON with no `parentFolderId` / `folder` even though the REST import succeeded.
+
 Everything else on the path — `initialize`, notifications, the server-to-client `GET` stream, session teardown — is forwarded untouched, and both `application/json` and `text/event-stream` (Streamable HTTP) replies are handled.
 
 | Flag | Env | Description |
@@ -1780,14 +1782,19 @@ N8N_CLIENT_MIDDLEWARES="bearer-token-inject" \
 N8N_BEARER_TOKEN_INJECT_RULES='[{"pathPrefix":"/mcp-server/","tokenEnvVar":"N8N_MCP_TOKEN"}]' \
 n8n-cli proxy --upstream https://n8n.internal.example.com ...
 
-# CLI side
-N8N_API_URL=https://proxy.internal.example.com n8n-cli import --mcp --yaml
+# CLI side — same IAP egress as REST. Do not put N8N_MCP_TOKEN here; the proxy injects it.
+N8N_API_URL=https://proxy.internal.example.com \
+N8N_CLIENT_MIDDLEWARES="iap-auth,impersonator-token" \
+n8n-cli import --mcp --yaml
 ```
 
 `/mcp-server/*` is transparently forwarded (POST JSON-RPC and SSE streams)
 and never passes the proxy's server-middlewares, so the proxy port itself
 must sit behind an authenticating ingress — anyone who can reach the proxy
-can reach n8n's MCP server with the injected token.
+can reach n8n's MCP server with the injected token. The CLI's MCP client
+uses the same egress middleware chain as REST, so `import --mcp` reaches that
+ingress; without it, REST import succeeds and folder assignments silently
+disappear.
 
 ### Commands
 
@@ -1868,9 +1875,10 @@ an all-in-one alternative to the environment variables below, with precedence
 When n8n sits behind a gateway that authenticates callers per request — for example
 the [`proxy`](#proxy) subcommand deployed in front of it, or an identity-aware proxy —
 point `N8N_API_URL` at the gateway and enable the egress middlewares it expects.
-They run on every request the CLI makes — API calls and the webhook calls behind
-`test` / `webhook call` alike — so ordinary commands (`apply`, `import`,
-`workflow ...`) work unchanged:
+They run on every request the CLI makes — REST API calls, webhook calls behind
+`test` / `webhook call`, and MCP calls behind `import --mcp` alike — so ordinary
+commands (`apply`, `import`, `workflow ...`) work unchanged, including folder
+lookups that sit outside `/api/v1`:
 
 ```bash
 export N8N_API_URL="https://gateway.example.com"
@@ -2021,7 +2029,9 @@ webhook token, an MCP token is a general-purpose credential for the instance, an
 server-middleware chain — anyone who can open a connection to the proxy's port
 gets the token attached on their behalf. Deploy the proxy behind IAP (or an
 equivalent ingress that authenticates every request) and do not expose its port
-directly.
+directly. Callers of that ingress — including `import --mcp` — must send the
+gateway credential via `N8N_CLIENT_MIDDLEWARES`; the CLI's MCP client shares
+that chain with REST and webhook calls.
 
 ### CLAUDE.md Integration
 

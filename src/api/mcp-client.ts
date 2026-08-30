@@ -1,3 +1,6 @@
+import { runClientPipeline } from "@/middleware/client-pipeline.ts";
+import type { ClientMiddleware } from "@/middleware/types.ts";
+
 /**
  * Minimal MCP (Model Context Protocol) client for n8n's instance-level MCP
  * server.
@@ -16,6 +19,14 @@
  *     token on its egress (`bearer-token-inject` middleware). The CLI sends
  *     no Authorization header at all in this mode.
  *
+ * The URL lives outside `/api/v1`, so this client does not go through
+ * `Client` — but it leaves the machine through the same door. Without the
+ * egress middleware chain, pointing `N8N_API_URL` at an authenticating
+ * gateway (IAP in front of the proxy) would leave every MCP call as an
+ * unauthenticated request: REST import would succeed while folder
+ * assignments silently disappeared. That is the same seam `callWebhook`
+ * already uses.
+ *
  * Only what n8n-cli needs is implemented: `initialize`, then `tools/call`
  * for the folder-reading tools (`search_workflows`, `get_workflow_details`,
  * `search_folders`).
@@ -30,6 +41,14 @@ export interface McpClientOptions {
   /** MCP access token. Omit in proxy mode — the proxy injects it. */
   token?: string;
   timeoutMs?: number;
+  /**
+   * Egress middlewares, in order. Same chain the REST client and webhook
+   * calls use (`iap-auth`, `impersonator-token`, …). Proxy mode still
+   * sends no MCP Authorization of its own — the chain authenticates the
+   * hop to the gateway; the proxy injects the application token further
+   * downstream.
+   */
+  clientMiddlewares?: ClientMiddleware[];
   /** Override for tests. */
   fetchImpl?: typeof fetch;
 }
@@ -77,6 +96,7 @@ export class McpClient {
   private readonly endpointUrl: string;
   private readonly token?: string;
   private readonly timeoutMs: number;
+  private readonly clientMiddlewares: ClientMiddleware[];
   private readonly fetchImpl: typeof fetch;
   private sessionId?: string;
   private initialized = false;
@@ -85,6 +105,7 @@ export class McpClient {
     this.endpointUrl = opts.endpointUrl;
     this.token = opts.token;
     this.timeoutMs = opts.timeoutMs ?? 30_000;
+    this.clientMiddlewares = opts.clientMiddlewares ?? [];
     this.fetchImpl = opts.fetchImpl ?? fetch;
   }
 
@@ -140,26 +161,47 @@ export class McpClient {
     this.initialized = true;
   }
 
-  /** Sends one JSON-RPC request and returns its `result`. */
   /**
    * Sends a JSON-RPC notification (no id, no response expected). Servers
    * answer 202 or an empty body; anything readable is discarded.
    */
   private async notify(method: string, params: Record<string, unknown>): Promise<void> {
+    await this.postJson({ jsonrpc: "2.0", method, params });
+  }
+
+  /**
+   * POSTs one JSON-RPC envelope, running the egress middleware chain before
+   * fetch so MCP calls authenticate to a gateway the same way REST does.
+   * Middleware failures abort without sending. Transport failures become
+   * `McpError`.
+   */
+  private async postJson(body: unknown): Promise<Response> {
+    const headers = new Headers({
+      "Content-Type": "application/json",
+      Accept: "application/json, text/event-stream",
+      ...(this.sessionId ? { "Mcp-Session-Id": this.sessionId } : {}),
+      ...(this.token ? { Authorization: `Bearer ${this.token}` } : {}),
+    });
+
+    if (this.clientMiddlewares.length > 0) {
+      await runClientPipeline(this.clientMiddlewares, headers, {
+        method: "POST",
+        pathname: new URL(this.endpointUrl).pathname,
+        upstreamUrl: this.endpointUrl,
+      });
+    }
+
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
     try {
-      await this.fetchImpl(this.endpointUrl, {
+      return await this.fetchImpl(this.endpointUrl, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Accept: "application/json, text/event-stream",
-          ...(this.sessionId ? { "Mcp-Session-Id": this.sessionId } : {}),
-          ...(this.token ? { Authorization: `Bearer ${this.token}` } : {}),
-        },
-        body: JSON.stringify({ jsonrpc: "2.0", method, params }),
+        headers,
+        body: JSON.stringify(body),
         signal: controller.signal,
       });
+    } catch (err) {
+      throw new McpError(`MCP request failed: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       clearTimeout(timer);
     }
@@ -170,74 +212,45 @@ export class McpClient {
     params: Record<string, unknown>,
   ): Promise<NonNullable<JsonRpcResponse["result"]>> {
     const id = nextRequestId++;
-    const body = { jsonrpc: "2.0", id, method, params };
+    const resp = await this.postJson({ jsonrpc: "2.0", id, method, params });
 
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+    const sessionId = resp.headers.get("Mcp-Session-Id");
+    if (sessionId) this.sessionId = sessionId;
 
-    try {
-      const headers: Record<string, string> = {
-        "Content-Type": "application/json",
-        Accept: "application/json, text/event-stream",
-        // Echo the session the server assigned at initialize, if any.
-        ...(this.sessionId ? { "Mcp-Session-Id": this.sessionId } : {}),
-        ...(this.token ? { Authorization: `Bearer ${this.token}` } : {}),
-      };
+    const text = await resp.text();
 
-      let resp: Response;
-      try {
-        resp = await this.fetchImpl(this.endpointUrl, {
-          method: "POST",
-          headers,
-          body: JSON.stringify(body),
-          signal: controller.signal,
-        });
-      } catch (err) {
-        throw new McpError(
-          `MCP request failed: ${err instanceof Error ? err.message : String(err)}`,
-        );
-      }
-
-      const sessionId = resp.headers.get("Mcp-Session-Id");
-      if (sessionId) this.sessionId = sessionId;
-
-      const text = await resp.text();
-
-      if (resp.status === 401 || resp.status === 403) {
-        throw new McpError(
-          `MCP request unauthorized (HTTP ${resp.status})${text ? `: ${text.slice(0, 200)}` : ""}`,
-          resp.status,
-        );
-      }
-      if (!resp.ok) {
-        throw new McpError(
-          `MCP request failed (HTTP ${resp.status})${text ? `: ${text.slice(0, 200)}` : ""}`,
-          resp.status,
-        );
-      }
-
-      // Streamable HTTP may answer with plain JSON or an SSE stream containing
-      // the response. Handle the SSE envelope if it appears.
-      const payload = extractJsonRpcPayload(text);
-
-      if (!payload || typeof payload !== "object") {
-        throw new McpError(`MCP response is not JSON-RPC: ${text.slice(0, 200)}`);
-      }
-      const rpcResp = payload as JsonRpcResponse;
-      if (rpcResp.error) {
-        throw new McpError(
-          rpcResp.error.message || "MCP error",
-          rpcResp.error.code,
-          rpcResp.error.data,
-        );
-      }
-      if (rpcResp.result === undefined) {
-        throw new McpError("MCP response carries no result");
-      }
-      return rpcResp.result;
-    } finally {
-      clearTimeout(timer);
+    if (resp.status === 401 || resp.status === 403) {
+      throw new McpError(
+        `MCP request unauthorized (HTTP ${resp.status})${text ? `: ${text.slice(0, 200)}` : ""}`,
+        resp.status,
+      );
     }
+    if (!resp.ok) {
+      throw new McpError(
+        `MCP request failed (HTTP ${resp.status})${text ? `: ${text.slice(0, 200)}` : ""}`,
+        resp.status,
+      );
+    }
+
+    // Streamable HTTP may answer with plain JSON or an SSE stream containing
+    // the response. Handle the SSE envelope if it appears.
+    const payload = extractJsonRpcPayload(text);
+
+    if (!payload || typeof payload !== "object") {
+      throw new McpError(`MCP response is not JSON-RPC: ${text.slice(0, 200)}`);
+    }
+    const rpcResp = payload as JsonRpcResponse;
+    if (rpcResp.error) {
+      throw new McpError(
+        rpcResp.error.message || "MCP error",
+        rpcResp.error.code,
+        rpcResp.error.data,
+      );
+    }
+    if (rpcResp.result === undefined) {
+      throw new McpError("MCP response carries no result");
+    }
+    return rpcResp.result;
   }
 }
 

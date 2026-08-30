@@ -72,10 +72,11 @@ jobs:
       - name: Run tests
         run: bun test
 
-  # Named gate for the CLI → proxy → mock n8n hop. `bun test` above already
-  # includes these files; this job exists so a contract break between the CLI
-  # HTTP client and the proxy shows up as its own required check, not a line
-  # buried in the unit suite.
+  # Named gate for the CLI → [IAP] → proxy → mock n8n hop, including
+  # `import --mcp` folder reads. `bun test` above already includes these
+  # files; this job exists so a contract break between the CLI HTTP client
+  # (REST, webhook, MCP) and the proxy shows up as its own required check,
+  # not a line buried in the unit suite.
   integration:
     name: Integration
     runs-on: ubuntu-latest
@@ -93,7 +94,7 @@ jobs:
       - name: Generate schemas
         run: bun run generate-schemas
 
-      - name: Run CLI → proxy → mock n8n tests
+      - name: Run CLI → [IAP] → proxy → mock n8n tests
         run: bun test tests/integration/
 
   licenses:

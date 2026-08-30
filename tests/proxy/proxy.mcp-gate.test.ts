@@ -1,4 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import type { IdTokenVerifier, VerifiedClaim } from "@/middleware/auth/types.ts";
+import { ImpersonatorVerifyMiddleware } from "@/middleware/builtin/impersonator-verify/middleware.ts";
+import { OAuthVerifyMiddleware } from "@/middleware/builtin/oauth-verify/middleware.ts";
 import { registerFactory } from "@/middleware/registry.ts";
 import type { ServerMiddleware, ServerMiddlewareFactory } from "@/middleware/types.ts";
 import type { EnforceLevel } from "@/proxy/config.ts";
@@ -1034,5 +1037,245 @@ describe("MCP gate: identity logging opt-in", () => {
     expect(line.identity).toBe("user@example.com");
     expect(line.identitySource).toBe("impersonator-verify");
     expect(line.identityVerified).toBe(true);
+  });
+});
+
+describe("MCP gate: impersonated CLI folder lookups", () => {
+  test("an agent still cannot call get_workflow_details when it is off the allowlist", async () => {
+    start(
+      policy({
+        allowTools: ["search_workflows", "execute_workflow", "get_workflow_entry"],
+        workflowTags: ["mcp"],
+      }),
+    );
+    const reply = await call("tools/call", {
+      name: "get_workflow_details",
+      arguments: { workflowId: "wf-internal" },
+    });
+    expect(reply.error).toMatchObject({ message: "Unknown tool: get_workflow_details" });
+  });
+
+  test("a verified impersonator can call get_workflow_details even when it is off the allowlist", async () => {
+    registerFactory(identityStubFactory());
+    start(
+      policy({
+        allowTools: ["search_workflows", "execute_workflow", "get_workflow_entry"],
+        workflowTags: ["mcp"],
+      }),
+      "error",
+      { middlewares: ["identity-stub"] },
+    );
+    const reply = await call(
+      "tools/call",
+      { name: "get_workflow_details", arguments: { workflowId: "wf-internal" } },
+      { "x-impersonator-email": "operator@example.com" },
+    );
+    expect(reply.error).toBeUndefined();
+    expect((reply.result as { content: Array<{ text: string }> }).content[0]?.text).toBe(
+      "ran get_workflow_details",
+    );
+  });
+
+  test("a verified impersonator sees unfiltered search_workflows results", async () => {
+    registerFactory(identityStubFactory());
+    start(
+      policy({
+        allowTools: ["search_workflows", "execute_workflow", "get_workflow_entry"],
+        workflowTags: ["mcp"],
+      }),
+      "error",
+      { middlewares: ["identity-stub"] },
+    );
+    const reply = await call(
+      "tools/call",
+      { name: "search_workflows", arguments: {} },
+      { "x-impersonator-email": "operator@example.com" },
+    );
+    const result = reply.result as {
+      structuredContent?: { data?: Array<{ id: string }>; count?: number };
+    };
+    const ids = (result.structuredContent?.data ?? []).map((w) => w.id);
+    expect(ids).toContain("wf-internal");
+    expect(ids).toContain("wf-open");
+    expect(result.structuredContent?.count).toBe(WORKFLOWS.length);
+  });
+
+  test("execute_workflow stays gated for an impersonator", async () => {
+    registerFactory(identityStubFactory());
+    start(
+      policy({
+        allowTools: ["search_workflows", "execute_workflow", "get_workflow_entry"],
+        workflowTags: ["mcp"],
+      }),
+      "error",
+      { middlewares: ["identity-stub"] },
+    );
+    const reply = await call(
+      "tools/call",
+      { name: "execute_workflow", arguments: { workflowId: "wf-internal" } },
+      { "x-impersonator-email": "operator@example.com" },
+    );
+    const result = reply.result as { isError?: boolean; content: Array<{ text: string }> };
+    expect(result.isError).toBe(true);
+    expect(result.content[0]?.text).toMatch(/Not available over MCP/);
+  });
+
+  test("a spoofed impersonator header does not bypass the allowlist without a verifier", async () => {
+    start(
+      policy({
+        allowTools: ["search_workflows", "execute_workflow", "get_workflow_entry"],
+        workflowTags: ["mcp"],
+      }),
+    );
+    const reply = await call(
+      "tools/call",
+      { name: "get_workflow_details", arguments: { workflowId: "wf-internal" } },
+      { "x-impersonator-id-token": "forged", "x-impersonator-email": "operator@example.com" },
+    );
+    expect(reply.error).toMatchObject({ message: "Unknown tool: get_workflow_details" });
+  });
+
+  test("authz that would deny a bodyless probe does not strip operator folder reads", async () => {
+    registerFactory(identityStubFactory());
+    registerFactory(blockingAuthzFactory());
+    start(
+      policy({
+        allowTools: ["search_workflows", "execute_workflow", "get_workflow_entry"],
+        workflowTags: ["mcp"],
+      }),
+      "error",
+      { middlewares: ["identity-stub", "blocking-authz"] },
+    );
+    const reply = await call(
+      "tools/call",
+      { name: "get_workflow_details", arguments: { workflowId: "wf-internal" } },
+      { "x-impersonator-email": "operator@example.com" },
+    );
+    expect(reply.error).toBeUndefined();
+    expect((reply.result as { content: Array<{ text: string }> }).content[0]?.text).toBe(
+      "ran get_workflow_details",
+    );
+  });
+});
+
+const PROXY_AUD = "https://n8n-proxy.example.run.app";
+const SA_EMAIL = "n8n-proxy-caller@example.com";
+const USER_AUD = "example-oauth-client.apps.example.com";
+const AGENT_ALLOWLIST = {
+  allowTools: ["search_workflows", "execute_workflow", "get_workflow_entry"],
+  workflowTags: ["mcp"],
+};
+
+function staticVerifier(tokens: Record<string, VerifiedClaim>): IdTokenVerifier {
+  return {
+    verify: async (token) => tokens[token] ?? null,
+  };
+}
+
+/** Production identity pair, with in-process verifiers instead of tokeninfo. */
+function productionIdentityFactories(): void {
+  registerFactory({
+    name: "oauth-verify-test",
+    loadFromEnv: () => ({}),
+    loadFromCLI: () => ({}),
+    build: () =>
+      new OAuthVerifyMiddleware({
+        enforce: "deny",
+        expectedAudiences: [PROXY_AUD],
+        trustedPrincipals: [SA_EMAIL],
+        verifier: staticVerifier({
+          "sa-tok": { email: SA_EMAIL, emailVerified: true, aud: PROXY_AUD },
+        }),
+      }),
+  });
+  registerFactory({
+    name: "impersonator-verify-test",
+    loadFromEnv: () => ({}),
+    loadFromCLI: () => ({}),
+    build: () =>
+      new ImpersonatorVerifyMiddleware({
+        enforce: "deny",
+        requirement: "require",
+        expectedAudiences: [USER_AUD],
+        verifier: staticVerifier({
+          "user-tok": {
+            email: "operator@example.com",
+            emailVerified: true,
+            aud: USER_AUD,
+            iss: "https://accounts.google.com",
+          },
+        }),
+      }),
+  });
+}
+
+function blockingAuthzFactory(): ServerMiddlewareFactory<object> {
+  return {
+    name: "blocking-authz",
+    loadFromEnv: () => ({}),
+    loadFromCLI: () => ({}),
+    build: (): ServerMiddleware => ({
+      name: "authz",
+      evaluate: () => ({
+        block: true,
+        violations: [
+          {
+            rule: "authz-denied",
+            severity: "error",
+            message: "authz would deny a probe with no workflow",
+          },
+        ],
+        denial: { status: 403, error: "workflow_authz_denied", message: "authz blocked" },
+      }),
+    }),
+  };
+}
+
+describe("MCP gate: production oauth-verify + impersonator-verify folder lookups", () => {
+  const cliHeaders = {
+    authorization: "Bearer sa-tok",
+    "x-impersonator-id-token": "user-tok",
+  };
+
+  test("the CLI's Cloud Run bearer + impersonator token unlocks get_workflow_details", async () => {
+    productionIdentityFactories();
+    start(policy(AGENT_ALLOWLIST), "error", {
+      middlewares: ["oauth-verify-test", "impersonator-verify-test"],
+    });
+    const reply = await call(
+      "tools/call",
+      { name: "get_workflow_details", arguments: { workflowId: "wf-internal" } },
+      cliHeaders,
+    );
+    expect(reply.error).toBeUndefined();
+    expect((reply.result as { content: Array<{ text: string }> }).content[0]?.text).toBe(
+      "ran get_workflow_details",
+    );
+  });
+
+  test("an MCP Bearer that is not a trusted Cloud Run token stays on the agent allowlist", async () => {
+    productionIdentityFactories();
+    start(policy(AGENT_ALLOWLIST), "error", {
+      middlewares: ["oauth-verify-test", "impersonator-verify-test"],
+    });
+    const reply = await call(
+      "tools/call",
+      { name: "get_workflow_details", arguments: { workflowId: "wf-internal" } },
+      { authorization: "Bearer mcp-secret" },
+    );
+    expect(reply.error).toMatchObject({ message: "Unknown tool: get_workflow_details" });
+  });
+
+  test("a trusted Cloud Run bearer without an impersonator token stays on the agent allowlist", async () => {
+    productionIdentityFactories();
+    start(policy(AGENT_ALLOWLIST), "error", {
+      middlewares: ["oauth-verify-test", "impersonator-verify-test"],
+    });
+    const reply = await call(
+      "tools/call",
+      { name: "get_workflow_details", arguments: { workflowId: "wf-internal" } },
+      { authorization: "Bearer sa-tok" },
+    );
+    expect(reply.error).toMatchObject({ message: "Unknown tool: get_workflow_details" });
   });
 });
