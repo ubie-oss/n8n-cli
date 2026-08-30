@@ -124,12 +124,13 @@ export class McpClient {
 
   /** SearchWorkflows calls n8n's `search_workflows` tool. */
   async searchWorkflows(
-    args: { limit?: number; projectId?: string; sortBy?: string } = {},
+    args: { limit?: number; projectId?: string; sortBy?: string; query?: string } = {},
   ): Promise<{ data: Array<Record<string, unknown>>; count?: number }> {
     const result = await this.callTool<Record<string, unknown>>("search_workflows", {
       limit: args.limit ?? 200,
       ...(args.projectId ? { projectId: args.projectId } : {}),
       ...(args.sortBy ? { sortBy: args.sortBy } : {}),
+      ...(args.query ? { query: args.query } : {}),
     });
     const data = Array.isArray(result.data) ? result.data : [];
     return { data, count: typeof result.count === "number" ? result.count : undefined };

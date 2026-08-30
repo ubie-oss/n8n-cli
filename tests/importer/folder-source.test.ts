@@ -45,6 +45,7 @@ function fakeFolderService(folders: Folder[]): FolderService {
 /** In-memory MCP tool server for the folder-reading tools. */
 function fakeMcpClient(state: {
   search?: Array<Record<string, unknown>>;
+  extraSearch?: Array<Record<string, unknown>>;
   details?: Record<string, Record<string, unknown>>;
   fail?: boolean;
 }): McpClient {
@@ -59,8 +60,18 @@ function fakeMcpClient(state: {
     if (body.method === "initialize") {
       result = { protocolVersion: "2025-06-18" };
     } else if (body.params?.name === "search_workflows") {
+      const query = body.params.arguments?.query;
+      let data = state.search ?? [];
+      if (typeof query === "string" && query.length > 0) {
+        const pool = [...data, ...(state.extraSearch ?? [])];
+        data = pool.filter((item) => {
+          const id = String(item.id ?? "");
+          const name = String(item.name ?? "");
+          return id === query || name.includes(query);
+        });
+      }
       result = {
-        structuredContent: { data: state.search ?? [], count: (state.search ?? []).length },
+        structuredContent: { data, count: data.length },
       };
     } else if (body.params?.name === "get_workflow_details") {
       const wf = state.details?.[String(body.params.arguments?.workflowId ?? "")];
@@ -128,11 +139,36 @@ describe("McpFolderSource.buildFolderInfo", () => {
     expect(info.folderByWorkflow.get("wf1")).toBe("fold1");
     expect(info.folderByWorkflow.get("wf2")).toBeNull(); // root, explicitly
     expect(info.pathById.get("fold1")).toBe("Reporting");
-    // A folder the API no longer lists keeps its ID as the addressable path.
+    expect(info.folderByWorkflow.get("wf3")).toBe("fold-deleted");
     expect(info.pathById.get("fold-deleted")).toBe("fold-deleted");
   });
 
-  test("workflows the search did not cover fall back to get_workflow_details", async () => {
+  test("a search hit without parentFolderId is unknown, not the project root", async () => {
+    const mcp = fakeMcpClient({
+      search: [{ id: "wf1", name: "wf-wf1" }],
+    });
+    const source = new McpFolderSource(mcp, fakeFolderService([]));
+    const info = await source.buildFolderInfo([remoteWorkflow("wf1")]);
+    expect(info.folderByWorkflow.has("wf1")).toBe(false);
+  });
+
+  test("workflows the bulk search did not cover are looked up by name", async () => {
+    const mcp = fakeMcpClient({
+      search: [{ id: "wf1", parentFolderId: "fold1" }],
+      extraSearch: [{ id: "wf2", name: "wf-wf2", parentFolderId: "fold1" }],
+    });
+    const source = new McpFolderSource(
+      mcp,
+      fakeFolderService([{ id: "fold1", name: "Reporting", parentFolderId: null }]),
+    );
+
+    const info = await source.buildFolderInfo([remoteWorkflow("wf1"), remoteWorkflow("wf2")]);
+
+    expect(info.folderByWorkflow.get("wf1")).toBe("fold1");
+    expect(info.folderByWorkflow.get("wf2")).toBe("fold1");
+  });
+
+  test("workflows the search did not cover fall back to get_workflow_details when it names a folder", async () => {
     const mcp = fakeMcpClient({
       search: [{ id: "wf1", parentFolderId: "fold1" }],
       details: { wf2: { id: "wf2", parentFolderId: "fold1" } },
@@ -146,6 +182,17 @@ describe("McpFolderSource.buildFolderInfo", () => {
 
     expect(info.folderByWorkflow.get("wf1")).toBe("fold1");
     expect(info.folderByWorkflow.get("wf2")).toBe("fold1");
+  });
+
+  test("get_workflow_details returning null is not treated as the project root", async () => {
+    const mcp = fakeMcpClient({
+      search: [],
+      details: { "wf-missing": { id: "wf-missing", parentFolderId: null } },
+    });
+    const source = new McpFolderSource(mcp, fakeFolderService([]));
+
+    const info = await source.buildFolderInfo([remoteWorkflow("wf-missing")]);
+    expect(info.folderByWorkflow.has("wf-missing")).toBe(false);
   });
 
   test("a workflow no MCP tool can resolve is simply absent from the map", async () => {
