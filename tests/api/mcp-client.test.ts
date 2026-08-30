@@ -131,6 +131,17 @@ describe("McpClient transport", () => {
     expect(params.name).toBe("search_workflows");
   });
 
+  test("searchWorkflows forwards a name query", async () => {
+    const { client, requests } = clientWithHandler(({ body }) =>
+      rpcResult(body.id, { structuredContent: { data: [], count: 0 } }),
+    );
+    await client.searchWorkflows({ query: "勉強会進行", limit: 50 });
+    const call = requests.find((r) => r.body.method === "tools/call");
+    const params = call?.body.params as { name: string; arguments: Record<string, unknown> };
+    expect(params.arguments.query).toBe("勉強会進行");
+    expect(params.arguments.limit).toBe(50);
+  });
+
   test("direct mode sends the Bearer token; proxy mode sends no Authorization at all", async () => {
     const direct = clientWithHandler(
       ({ body }) => rpcResult(body.id, { structuredContent: { data: [], count: 0 } }),

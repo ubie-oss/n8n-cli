@@ -11,8 +11,13 @@ import { workflowProjectId } from "@/common/project-id.ts";
  * The public REST API never returns which folder a workflow sits in
  * (`parentFolderId` is `writeOnly` in n8n's schema), so `import` can only
  * attach folder assignments when an MCP connection is available: the MCP
- * `search_workflows` tool does include `parentFolderId` per workflow, and
- * `get_workflow_details` fills gaps for workflows the search does not cover.
+ * `search_workflows` tool does include `parentFolderId` per workflow.
+ *
+ * The tool's max `limit` is 200 and it has no cursor, so a bulk listing
+ * misses older workflows on a large instance. `get_workflow_details` also
+ * cannot fill those gaps: n8n refuses it unless `settings.availableInMCP` is
+ * on, which most as-code workflows are not. Name-filtered `search_workflows`
+ * is the fallback that still returns `parentFolderId`.
  */
 export interface FolderInfo {
   /**
@@ -33,37 +38,67 @@ export class McpFolderSource {
   /**
    * Builds the folder info for the given remote workflows.
    *
-   * `search_workflows` is the bulk path (one paginated walk for the whole
-   * instance); `get_workflow_details` is the per-workflow fallback for
-   * workflows the search did not cover. Folder ID → path resolution happens
-   * through the REST folders API per distinct owning project, so imported
-   * files can carry human-readable `folder:` paths instead of opaque IDs.
+   * `search_workflows` is the bulk path (one listing, max 200, newest first).
+   * Workflows outside that window are looked up by name — still via search,
+   * because that is the MCP tool that returns `parentFolderId` for workflows
+   * that are not MCP-enabled. `get_workflow_details` is a last resort and
+   * only records a folder when n8n actually names one: a `null` from details
+   * is indistinguishable from "not loaded", so it must not become "root".
+   * Folder ID → path resolution happens through the REST folders API per
+   * distinct owning project, so imported files can carry human-readable
+   * `folder:` paths instead of opaque IDs.
    */
   async buildFolderInfo(workflows: Workflow[]): Promise<FolderInfo> {
     const folderByWorkflow = new Map<string, string | null>();
     const wanted = new Set(workflows.map((w) => w.id).filter((id): id is string => !!id));
-
-    // Bulk: one search over the instance. The tool takes a `limit` (max 200)
-    // but no pagination cursor, so beyond 200 workflows the per-workflow
-    // fallback below fills the gaps.
-    const resp = await this.mcp.searchWorkflows({ limit: 200 });
-    for (const item of resp.data) {
-      const id = typeof item.id === "string" ? item.id : undefined;
-      if (!id) continue;
-      folderByWorkflow.set(
-        id,
-        typeof item.parentFolderId === "string" ? item.parentFolderId : null,
-      );
+    const nameById = new Map<string, string>();
+    for (const w of workflows) {
+      if (w.id && w.name) nameById.set(w.id, w.name);
     }
 
-    // Fallback: ask for details on workflows the search did not cover.
+    const recordHits = (items: Array<Record<string, unknown>>): void => {
+      for (const item of items) {
+        const id = typeof item.id === "string" ? item.id : undefined;
+        if (!id || !wanted.has(id) || folderByWorkflow.has(id)) continue;
+        // n8n < 2.37.0 returns search hits without parentFolderId. Missing
+        // is unknown, not root — writing null would flatten UI folders.
+        if (!Object.hasOwn(item, "parentFolderId")) continue;
+        folderByWorkflow.set(
+          id,
+          typeof item.parentFolderId === "string" ? item.parentFolderId : null,
+        );
+      }
+    };
+
+    // Bulk: one search over the instance. The tool takes a `limit` (max 200)
+    // and no pagination cursor, so this only covers the most recently updated
+    // slice. Hits for workflows we are not importing are ignored.
+    const resp = await this.mcp.searchWorkflows({ limit: 200 });
+    recordHits(resp.data);
+
+    // Name-filtered search: n8n matches on name/description, still returns
+    // parentFolderId, and is not gated on availableInMCP.
+    for (const id of wanted) {
+      if (folderByWorkflow.has(id)) continue;
+      const name = nameById.get(id)?.trim();
+      if (!name) continue;
+      try {
+        const named = await this.mcp.searchWorkflows({ limit: 200, query: name });
+        recordHits(named.data);
+      } catch {
+        // Same degrade as details: unknown, not root.
+      }
+    }
+
+    // Last resort for MCP-enabled workflows the name search still missed.
+    // Only a concrete folder id is trusted — details often emits null when
+    // the parentFolder relation was not loaded.
     for (const id of wanted) {
       if (folderByWorkflow.has(id)) continue;
       try {
         const details = await this.mcp.getWorkflowDetails(id);
-        const workflow = details.workflow;
-        const parentFolderId = workflow?.parentFolderId;
-        folderByWorkflow.set(id, typeof parentFolderId === "string" ? parentFolderId : null);
+        const parentFolderId = details.workflow?.parentFolderId;
+        if (typeof parentFolderId === "string") folderByWorkflow.set(id, parentFolderId);
       } catch {
         // Leave unresolvable workflows out of the map — the writer treats an
         // absent entry as "folder unknown", not as "project root".
