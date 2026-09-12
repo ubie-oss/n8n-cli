@@ -228,6 +228,33 @@ describe("proxy structured logging: transparent paths", () => {
     expect(entry?.requestId).toBe(headerId(res));
   });
 
+  test("a webhook POST logs surface=trigger on the same logger, not a separate stream", async () => {
+    start();
+    const res = await fetch(url("/webhook/hooks/abc"), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{}",
+    });
+    expect(res.status).toBe(200);
+
+    const entry = logs().find((l) => l.action === "forward");
+    expect(entry?.logger).toBe("n8n-cli-proxy");
+    expect(entry?.event).toBe("request");
+    expect(entry?.surface).toBe("trigger");
+    expect(entry?.operation).toBe("invoke");
+    expect(entry?.method).toBe("POST");
+    expect(entry?.path).toBe("/webhook/hooks/abc");
+    expect(entry?.requestId).toBe(headerId(res));
+    expect(entry?.identity).toBeUndefined();
+  });
+
+  test("a form GET is the same trigger surface", async () => {
+    start();
+    await fetch(url("/form/signup"));
+    expect(logs()[0]?.surface).toBe("trigger");
+    expect(logs()[0]?.path).toBe("/form/signup");
+  });
+
   test("a single-workflow read logs surface=rest-read with workflowId", async () => {
     start();
     await fetch(url("/api/v1/workflows/wf-1"), { headers: { "x-n8n-api-key": "k" } });
@@ -287,6 +314,41 @@ describe("proxy structured logging: identity (opt-in)", () => {
     expect(entry?.identityVerified).toBe(false);
   });
 
+  test("a webhook through IAP logs the same ambient identity as other surfaces", async () => {
+    start({ logIdentity: true });
+    const res = await fetch(url("/webhook/partner/cb"), {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-goog-authenticated-user-email": "accounts.google.com:user@example.com",
+      },
+      body: "{}",
+    });
+    expect(res.status).toBe(200);
+    const entry = logs()[0];
+    expect(entry?.surface).toBe("trigger");
+    expect(entry?.identity).toBe("user@example.com");
+    expect(entry?.identitySource).toBe("iap-header");
+    expect(entry?.identityVerified).toBe(false);
+  });
+
+  test("a trigger path does not run server middleware, so a verified stub does not override IAP", async () => {
+    registerFactory(identityStubFactory());
+    start({ logIdentity: true, middlewares: ["identity-stub"] });
+    await fetch(url("/webhook/partner/cb"), {
+      method: "POST",
+      headers: {
+        "x-verified-email": "verified@example.com",
+        "x-goog-authenticated-user-email": "accounts.google.com:iap@example.com",
+      },
+      body: "{}",
+    });
+    const entry = logs()[0];
+    expect(entry?.identity).toBe("iap@example.com");
+    expect(entry?.identitySource).toBe("iap-header");
+    expect(entry?.identityVerified).toBe(false);
+  });
+
   test("identity is never logged when the opt-in is off, even from the IAP header", async () => {
     start();
     await fetch(url("/api/v1/workflows"), {
@@ -296,6 +358,19 @@ describe("proxy structured logging: identity (opt-in)", () => {
       },
     });
     expect(logs()[0]?.identity).toBeUndefined();
+  });
+
+  test("a webhook also withholds IAP identity when the opt-in is off", async () => {
+    start();
+    await fetch(url("/webhook/partner/cb"), {
+      method: "POST",
+      headers: {
+        "x-goog-authenticated-user-email": "accounts.google.com:user@example.com",
+      },
+      body: "{}",
+    });
+    expect(logs()[0]?.identity).toBeUndefined();
+    expect(logs()[0]?.surface).toBe("trigger");
   });
 });
 

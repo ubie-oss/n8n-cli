@@ -29,6 +29,7 @@ import {
 import { evaluateBodylessPipeline } from "./rest/read-gate.ts";
 import { matchWorkflowRead } from "./rest/read-router.ts";
 import { matchWorkflowMutation, type WorkflowMutation } from "./rest/router.ts";
+import { isTriggerPath } from "./trigger-path.ts";
 import { forwardRequest } from "./upstream.ts";
 
 const SERVER_MIDDLEWARES_ENV_VAR = "N8N_SERVER_MIDDLEWARES";
@@ -281,8 +282,14 @@ async function handle(req: Request, deps: HandlerDeps): Promise<Response> {
     );
   }
 
+  // Inbound webhook / form / waiting URLs use the same logger and identity
+  // resolution as every other surface. They are labelled `trigger` so a
+  // filter can find them; they are not a separate audit product.
+  const forwardLog = isTriggerPath(pathname)
+    ? reqLog.child({ surface: "trigger", operation: "invoke" })
+    : reqLog.child({ surface: "transparent" });
   return attachRequestId(
-    await handleTransparentForward(req, pathname, deps, reqLog.child({ surface: "transparent" })),
+    await handleTransparentForward(req, pathname, deps, forwardLog),
     requestId,
   );
 }

@@ -91,6 +91,21 @@ describe("Logger: text format", () => {
     expect(lines[0]).toContain("upstreamMs=3");
     expect(lines[0]).toContain('workflow="wf"');
   });
+
+  test("renders a trigger invoke the same way as any other surface", async () => {
+    const { lines, logger } = capture("text");
+    logger.child({ requestId: "req-1", surface: "trigger", operation: "invoke" }).log({
+      action: "forward",
+      method: "POST",
+      path: "/webhook/hooks/abc",
+      status: 200,
+      identity: "user@example.com",
+    });
+    expect(lines[0]).toContain("FORWARD POST /webhook/hooks/abc 200");
+    expect(lines[0]).toContain("surface=trigger");
+    expect(lines[0]).toContain("operation=invoke");
+    expect(lines[0]).toContain("identity=user@example.com");
+  });
 });
 
 describe("resolveLogIdentity", () => {
