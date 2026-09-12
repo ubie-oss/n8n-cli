@@ -20,6 +20,7 @@ export const TRIGGER_PATH_PREFIXES = [
   "/form-waiting",
   "/form-test",
   "/form",
+  "/mcp-test",
   "/mcp",
 ] as const;
 

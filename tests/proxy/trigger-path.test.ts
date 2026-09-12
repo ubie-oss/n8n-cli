@@ -14,6 +14,8 @@ describe("isTriggerPath", () => {
     expect(isTriggerPath("/form-waiting/exec-1")).toBe(true);
     expect(isTriggerPath("/mcp")).toBe(true);
     expect(isTriggerPath("/mcp/wf-tool")).toBe(true);
+    expect(isTriggerPath("/mcp-test")).toBe(true);
+    expect(isTriggerPath("/mcp-test/wf-tool")).toBe(true);
   });
 
   test("does not treat a longer sibling path as a match", () => {
