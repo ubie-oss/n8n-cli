@@ -8,7 +8,7 @@ export type LogAction = "pass" | "block" | "warn" | "forward" | "error";
 export type LogLevel = "info" | "warn" | "error";
 
 /** Which surface of the proxy a request hit. */
-export type LogSurface = "rest-write" | "rest-read" | "mcp" | "transparent";
+export type LogSurface = "rest-write" | "rest-read" | "mcp" | "trigger" | "transparent";
 
 /**
  * Event kind. `request` is the single terminal access-log line per request;

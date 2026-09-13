@@ -1268,8 +1268,8 @@ Every request the proxy handles produces one structured log line on stdout, and 
 | `level` | Derived from the outcome: `info` (pass/forward), `warn` (warn), `error` (block/error). |
 | `event` | `request` = the terminal access-log line; `policy` = a supplementary policy detail (e.g. the MCP gate narrowing a listing) emitted under the same request. |
 | `requestId` | Correlation id, also returned to the client in the `x-n8n-cli-request-id` response header. Every line of one request shares it. |
-| `surface` | `rest-write`, `rest-read`, `mcp`, or `transparent`. |
-| `operation` | The route action being performed: `create`, `update`, `delete`, `activate`, `tags`, `read`. |
+| `surface` | `rest-write`, `rest-read`, `mcp`, `trigger`, or `transparent`. |
+| `operation` | The route action being performed: `create`, `update`, `delete`, `activate`, `tags`, `read`, `invoke`. |
 | `action` | The outcome: `pass`, `block`, `warn`, `forward`, `error`. |
 | `violations` | Middleware findings (rule / severity / message), when any. |
 | `tool` / `rpc` | MCP tool name and JSON-RPC method, on MCP lines. |
@@ -1282,6 +1282,8 @@ Identity fields (`identity`, `identitySource`, `identityVerified`) are emitted *
 | `impersonator-verify` | The `X-Impersonator-Id-Token` side header verified on behalf of a trusted principal (`identityVerified: true`). |
 | `middleware` | Some middleware wrote `ctx.identity` (source ambiguity kept; unverified). |
 | `iap-header` | The ambient `X-Goog-Authenticated-User-Email` header injected by an authenticating gateway (GCP IAP / GLB) in front of the proxy. **Ambient, not verified** — trust it only when direct access to the proxy is blocked at the network level. |
+
+Webhook, form, waiting, and per-workflow MCP trigger URLs (`/webhook`, `/form`, `/webhook-waiting`, `/mcp`, and their `-test` variants) use this same logger. They are labelled `surface: "trigger"` / `operation: "invoke"` so they can be filtered without becoming a separate audit product. Identity resolution is the same stack: `--log-identity` (or `N8N_PROXY_LOG_IDENTITY`) must be on, then a verified middleware identity wins, otherwise the IAP email header. Trigger paths do not run the server-middleware chain, so they will not pick up `oauth-verify` / `impersonator-verify` — IAP in front of the proxy is how a login user lands on those lines. Request bodies and query strings are not logged.
 
 Known limitation: middleware short-circuits at the first blocker, so a request blocked by an early middleware (e.g. `lint`) never reaches the identity-verifying middleware that follows it in the chain — its log line may carry no identity beyond the ambient IAP header. This is a property of the chain order the operator configured, not a logging bug.
 
