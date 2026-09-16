@@ -13,6 +13,7 @@ export function registerDataTableCreateCommand(parent: Command): void {
       "-c, --columns <json>",
       'Columns as JSON array (e.g., \'[{"name":"col1","type":"string"}]\')',
     )
+    .option("-p, --project <projectId>", "Target project ID to create the data table in")
     .action(async (options, command) => {
       const ctx = resolveContext(command.parent?.parent!);
 
@@ -24,10 +25,13 @@ export function registerDataTableCreateCommand(parent: Command): void {
         process.exit(1);
       }
 
-      const table = await ctx.dataTableService.createDataTable({
-        name: options.name as string,
-        columns,
-      });
+      const table = await ctx.dataTableService.createDataTable(
+        {
+          name: options.name as string,
+          columns,
+        },
+        options.project as string | undefined,
+      );
 
       console.log("Data table created successfully");
       outputDataTable(table, ctx.config.output);
