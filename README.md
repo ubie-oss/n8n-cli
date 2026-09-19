@@ -524,7 +524,7 @@ n8n's `Available in MCP` toggle is per-workflow and anyone with edit rights can 
 
 ##### `unauthenticated-webhook`
 
-Refuses Webhook, Form and Chat triggers that accept requests without authentication, unless the workflow's id is listed in `allowWorkflows`. Enabled by default with severity `error`.
+Refuses Webhook, Form, Chat and MCP triggers that accept requests without authentication, unless the workflow's id is listed in `allowWorkflows`. Enabled by default with severity `error`.
 
 `authentication: none` is less a setting than the absence of one: it is n8n's default, it is what a node gets when the key is missing entirely, and what it produces is a public HTTP endpoint that runs a workflow with that workflow's credentials. Nothing in the definition says out loud that it is public, which is why the check has to.
 
@@ -547,6 +547,8 @@ Refuses Webhook, Form and Chat triggers that accept requests without authenticat
 ```
 
 A trigger whose `authentication` comes from an expression is refused too: whether the endpoint is public cannot be decided from the definition, and a gate that cannot decide has to say no. Disabled nodes are skipped, since n8n registers no endpoint for them.
+
+Two kinds of HTTP entry point are out of scope. A **Wait** node publishes a resume URL but has no `authentication` parameter, so there is no setting to require — protecting those needs something other than lint. **App triggers** (Slack, Gmail, GitHub, Google Sheets) do expose `authentication`, but it names how n8n authenticates *to* that service, not how an incoming request is checked; reading it here would judge the wrong direction. Their endpoints are guarded by the provider's signature and by the URL not being published.
 
 Set `"unauthenticated-webhook": false` to opt out entirely. Note that a repository opting out does not opt out a proxy standing in front of the same n8n — the proxy reads its own config, not the repository's.
 
