@@ -30,7 +30,9 @@ describe("unauthenticated-webhook rule", () => {
   });
 
   test("an authenticated trigger passes", () => {
-    const wf = makeWorkflow([makeNode({ parameters: { authentication: "headerAuth", path: "a" } })]);
+    const wf = makeWorkflow([
+      makeNode({ parameters: { authentication: "headerAuth", path: "a" } }),
+    ]);
     expect(unauthenticatedWebhookRule.check(wf, "")).toEqual([]);
   });
 
@@ -66,9 +68,9 @@ describe("unauthenticated-webhook rule", () => {
     const wf = makeWorkflow([makeNode({ parameters: { authentication: "none" } })], {
       name: "Public Hook",
     });
-    expect(unauthenticatedWebhookRule.check(wf, "", { allowWorkflows: ["Public Hook"] }).length).toBe(
-      1,
-    );
+    expect(
+      unauthenticatedWebhookRule.check(wf, "", { allowWorkflows: ["Public Hook"] }).length,
+    ).toBe(1);
   });
 
   test("a workflow with no id cannot be allowlisted, and is told so", () => {
@@ -124,9 +126,7 @@ describe("unauthenticated-webhook rule", () => {
   });
 
   test("a disabled trigger publishes nothing", () => {
-    const wf = makeWorkflow([
-      makeNode({ parameters: { authentication: "none" }, disabled: true }),
-    ]);
+    const wf = makeWorkflow([makeNode({ parameters: { authentication: "none" }, disabled: true })]);
     expect(unauthenticatedWebhookRule.check(wf, "")).toEqual([]);
   });
 
