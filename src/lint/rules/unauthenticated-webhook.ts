@@ -11,13 +11,21 @@ const RULE_NAME = "unauthenticated-webhook";
  * authentication.
  *
  * Schedule triggers are absent on purpose: they have no endpoint, so there is
- * nothing to authenticate. The three listed here all expose `authentication` in
+ * nothing to authenticate. The four listed here all expose `authentication` in
  * their parameters, which is why a policy about it can be written at all.
+ *
+ * Two kinds of HTTP entry point are deliberately out of reach. A Wait node
+ * publishes a resume URL but has no authentication parameter at all, so there
+ * is no setting to require. App triggers (Slack, Gmail, GitHub) do expose
+ * `authentication`, but it names how n8n authenticates *to* that service, not
+ * how the incoming request is checked — reading it here would judge the wrong
+ * direction.
  */
 const HTTP_TRIGGER_TYPES: readonly string[] = [
   "n8n-nodes-base.webhook",
   "n8n-nodes-base.formTrigger",
   "@n8n/n8n-nodes-langchain.chatTrigger",
+  "@n8n/n8n-nodes-langchain.mcpTrigger",
 ];
 
 /** What a node's `authentication` parameter resolves to, statically. */
@@ -27,7 +35,7 @@ type AuthState =
   | { kind: "expression"; raw: string };
 
 /**
- * Refuses webhook, form and chat triggers that accept requests without
+ * Refuses webhook, form, chat and MCP triggers that accept requests without
  * authentication, unless the workflow is named in `allowWorkflows`.
  *
  * `authentication: none` is not a setting so much as the absence of one: it is

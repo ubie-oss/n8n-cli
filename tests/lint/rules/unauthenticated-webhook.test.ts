@@ -130,7 +130,7 @@ describe("unauthenticated-webhook rule", () => {
     expect(unauthenticatedWebhookRule.check(wf, "")).toEqual([]);
   });
 
-  test("form and chat triggers are covered", () => {
+  test("form, chat and MCP triggers are covered", () => {
     const wf = makeWorkflow([
       makeNode({ name: "Form", type: "n8n-nodes-base.formTrigger", parameters: {} }),
       makeNode({
@@ -138,15 +138,49 @@ describe("unauthenticated-webhook rule", () => {
         type: "@n8n/n8n-nodes-langchain.chatTrigger",
         parameters: { authentication: "none" },
       }),
+      makeNode({
+        name: "MCP",
+        type: "@n8n/n8n-nodes-langchain.mcpTrigger",
+        parameters: { path: "tools" },
+      }),
     ]);
     const violations = unauthenticatedWebhookRule.check(wf, "");
-    expect(violations.length).toBe(2);
+    expect(violations.length).toBe(3);
+  });
+
+  test("an authenticated MCP trigger passes", () => {
+    const wf = makeWorkflow([
+      makeNode({
+        type: "@n8n/n8n-nodes-langchain.mcpTrigger",
+        parameters: { authentication: "bearerAuth", path: "tools" },
+      }),
+    ]);
+    expect(unauthenticatedWebhookRule.check(wf, "")).toEqual([]);
   });
 
   test("triggers without an endpoint are ignored", () => {
     const wf = makeWorkflow([
       makeNode({ name: "Schedule", type: "n8n-nodes-base.scheduleTrigger", parameters: {} }),
       makeNode({ name: "Code", type: "n8n-nodes-base.code", parameters: {} }),
+    ]);
+    expect(unauthenticatedWebhookRule.check(wf, "")).toEqual([]);
+  });
+
+  test("a Wait node's resume URL is out of scope", () => {
+    const wf = makeWorkflow([
+      makeNode({ name: "Wait", type: "n8n-nodes-base.wait", parameters: { resume: "webhook" } }),
+    ]);
+    expect(unauthenticatedWebhookRule.check(wf, "")).toEqual([]);
+  });
+
+  test("an app trigger's authentication is not about the incoming request", () => {
+    const wf = makeWorkflow([
+      makeNode({ name: "Slack", type: "n8n-nodes-base.slackTrigger", parameters: {} }),
+      makeNode({
+        name: "Sheets",
+        type: "n8n-nodes-base.googleSheetsTrigger",
+        parameters: { authentication: "serviceAccount" },
+      }),
     ]);
     expect(unauthenticatedWebhookRule.check(wf, "")).toEqual([]);
   });
