@@ -522,6 +522,34 @@ n8n's `Available in MCP` toggle is per-workflow and anyone with edit rights can 
 }
 ```
 
+##### `unauthenticated-webhook`
+
+Refuses Webhook, Form and Chat triggers that accept requests without authentication, unless the workflow's id is listed in `allowWorkflows`. Enabled by default with severity `error`.
+
+`authentication: none` is less a setting than the absence of one: it is n8n's default, it is what a node gets when the key is missing entirely, and what it produces is a public HTTP endpoint that runs a workflow with that workflow's credentials. Nothing in the definition says out loud that it is public, which is why the check has to.
+
+**This rule is strict with no options configured, unlike the `mcp-*` rules.** Those describe a convention, and a convention that was never configured cannot be guessed. This one describes an exposure, and an exposure that was never configured is still an exposure — so an instance that has not configured the rule is exactly the instance that should not be quietly exempt. It is also what makes the rule usable as a gate: [`proxy`](#proxy) lints with whatever `.n8nlintrc.json` it can find, which inside a container is none, so a rule needing an allowlist to act would be inert precisely where enforcement happens. Keeping `allowWorkflows` in the repository's own config — and out of the gate's environment — means every exception is a reviewable diff in the repository that owns the workflow.
+
+| Option | Type | Description |
+|--------|------|-------------|
+| `allowWorkflows` | `string[]` | Workflow ids permitted to carry an unauthenticated trigger. Ids rather than names: a name is edited in the UI without review, and a renamed workflow silently leaving the allowlist would hand the exception to whatever is renamed into it |
+| `requireAuthPaths` | `string[]` | `*`-globs for entry paths that must always be authenticated, allowlist or not. For prefixes reserved by convention for callers that *can* authenticate, where `none` means the convention was broken rather than an exception taken |
+
+```json
+{
+  "rules": {
+    "unauthenticated-webhook": ["error", {
+      "allowWorkflows": ["Nz17wWl4G7HbKQ8m", "G9eJYw95cbUdKJ9w"],
+      "requireAuthPaths": ["__cli-test__/*", "__agent-trigger__/*"]
+    }]
+  }
+}
+```
+
+A trigger whose `authentication` comes from an expression is refused too: whether the endpoint is public cannot be decided from the definition, and a gate that cannot decide has to say no. Disabled nodes are skipped, since n8n registers no endpoint for them.
+
+Set `"unauthenticated-webhook": false` to opt out entirely. Note that a repository opting out does not opt out a proxy standing in front of the same n8n — the proxy reads its own config, not the repository's.
+
 #### Other Lint Rules
 
 ##### `execute-workflow-inputs-extra` / `execute-workflow-inputs-missing`
@@ -1176,6 +1204,8 @@ n8n-cli proxy [options]
 | `--stale-write-on-missing-base <mode>` | Callers that declare no base revision: `allow` (default) or `deny` |
 | `--stale-write-on-error <mode>` | When the stored workflow cannot be read: `deny` (default) or `allow` |
 | `--stale-write-actions <actions>` | Route actions the guard applies to (default: `update`) |
+
+**Lint config on the gate.** With no `--lint-config` and no `.n8nlintrc.json` reachable from the working directory — the normal case in a container — every rule runs at its default severity with no options. That is worth deciding on rather than inheriting: rule options are where exceptions live ([`banned-node`](#banned-node)'s allowlists, [`unauthenticated-webhook`](#unauthenticated-webhook)'s `allowWorkflows`), and an exception configured on the gate is an exception nobody reviews, because the gate's environment is not the repository anyone reads the workflow in. Leaving the gate bare means a workflow needing an exception has to declare it in the repository that owns the definition, and reach n8n through that repository's CI.
 
 **Enforcement levels:**
 

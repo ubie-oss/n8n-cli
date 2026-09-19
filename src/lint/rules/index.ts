@@ -23,6 +23,7 @@ import { nodeRefFieldCheckRule } from "./node-ref-field-check.ts";
 import { orphanedNodeRule } from "./orphaned-node.ts";
 import { requiredFieldsRule } from "./required-fields.ts";
 import { scheduleTriggerFrequencyRule } from "./schedule-trigger-frequency.ts";
+import { unauthenticatedWebhookRule } from "./unauthenticated-webhook.ts";
 import { webhookIdRequiredRule } from "./webhook-id-required.ts";
 
 /** Creates and returns a registry with all default rules registered */
@@ -44,6 +45,7 @@ export function registerDefaultRules(): RuleRegistry {
   registry.register(nodeRefCardinalityRule);
   registry.register(scheduleTriggerFrequencyRule);
   registry.register(webhookIdRequiredRule);
+  registry.register(unauthenticatedWebhookRule);
   registry.register(bannedNodeRule);
   registry.register(filterOperatorValidRule);
   registry.register(noPlaintextSecretsRule);
