@@ -439,6 +439,32 @@ export function findExistingSubfilesDir(baseDir: string, workflowID: string): st
 }
 
 /**
+ * Lists every _subfiles/ subdirectory together with the workflow ID encoded
+ * in its name. Directories whose name doesn't encode an ID are skipped.
+ */
+export function listSubfilesDirs(baseDir: string): { dir: string; id: string }[] {
+  const subfilesPath = path.join(baseDir, SubfilesDir);
+  if (!fs.existsSync(subfilesPath)) return [];
+
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(subfilesPath, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+
+  const result: { dir: string; id: string }[] = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const [id, found] = extractWorkflowIDFromDirname(entry.name);
+    if (found) {
+      result.push({ dir: path.join(subfilesPath, entry.name), id });
+    }
+  }
+  return result;
+}
+
+/**
  * Finds all existing _subfiles/ subdirectories matching the given workflow ID.
  * Returns an array of full paths (may be empty).
  */
