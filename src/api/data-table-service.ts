@@ -90,9 +90,12 @@ export class DataTableService {
     return JSON.parse(data) as DataTable;
   }
 
-  /** createDataTable creates a new data table */
-  async createDataTable(input: DataTableInput): Promise<DataTable> {
-    const data = await this.client.post("/data-tables", input);
+  /** createDataTable creates a new data table. The public API accepts an
+   * optional `projectId` field in the request body (POST /data-tables);
+   * omitting it creates the table in the caller's personal project. */
+  async createDataTable(input: DataTableInput, projectId?: string): Promise<DataTable> {
+    const body = projectId ? { ...input, projectId } : input;
+    const data = await this.client.post("/data-tables", body);
     return JSON.parse(data) as DataTable;
   }
 
