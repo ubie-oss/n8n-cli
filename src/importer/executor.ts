@@ -5,7 +5,13 @@ import type { ListOptions, WorkflowService } from "@/api/workflow-service.ts";
 import { detectWorkflowFormat, type WorkflowFormat } from "@/common/extensions.ts";
 import { hasAllTags } from "@/common/tags.ts";
 import type { FolderInfo, McpFolderSource } from "./folder-source.ts";
-import { cleanupOrphanFiles, cleanupOrphanSubfiles, matchOrphansByName } from "./orphan.ts";
+import {
+  cleanupOrphanFiles,
+  cleanupOrphanSubfiles,
+  cleanupOrphanSubfilesDirs,
+  cleanupStaleIDFiles,
+  matchOrphansByName,
+} from "./orphan.ts";
 import { reportDuplicates } from "./reporter.ts";
 import { parseWorkflowFile, scanDirectoryWithOrphans } from "./scanner.ts";
 import {
@@ -90,16 +96,47 @@ export class ImportExecutor {
 
     // Fetch and process remote workflows
     const remoteNameMap = new Map<string, Workflow[]>();
-    await this.processRemoteWorkflows(idMap, result, remoteNameMap);
+    const remoteIDs = new Set<string>();
+    await this.processRemoteWorkflows(idMap, result, remoteNameMap, remoteIDs);
 
     // Match orphans by name
     if (orphanMap.count() > 0 && remoteNameMap.size > 0) {
       matchOrphansByName(orphanMap, remoteNameMap, this.opts.dryRun, result);
     }
 
-    // Cleanup orphans
+    // Cleanup orphans (files without an ID)
     if (this.opts.cleanupOrphans && orphanMap.count() > 0) {
       cleanupOrphanFiles(orphanMap, this.opts.dryRun, result);
+    }
+
+    // Cleanup stale files (files whose ID no longer exists remotely, e.g.
+    // the workflow was deleted from n8n). When --ids restricts this run to a
+    // subset of workflows, only IDs within that subset are considered.
+    const staleEntries = this.opts.cleanupOrphans
+      ? idMap
+          .allEntries()
+          .filter(
+            ([id]) =>
+              !remoteIDs.has(id) && (this.opts.ids.length === 0 || this.opts.ids.includes(id)),
+          )
+      : [];
+    if (staleEntries.length > 0) {
+      cleanupStaleIDFiles(staleEntries, this.opts.dryRun, result);
+    }
+
+    // Cleanup orphan _subfiles directories: any directory whose workflow ID
+    // no longer has a matching local file, whether that's because
+    // --cleanup-orphans just removed it above or the file was already gone
+    // (e.g. deleted by hand, or by an older n8n-cli that didn't clean up
+    // _subfiles). Independent of --cleanup-orphans — governed by
+    // --cleanup-subfiles alone.
+    if (this.opts.cleanupSubfiles) {
+      const staleIDs = new Set(staleEntries.map(([id]) => id));
+      const validIDs = new Set<string>(remoteIDs);
+      for (const [id] of idMap.allEntries()) {
+        if (!staleIDs.has(id)) validIDs.add(id);
+      }
+      cleanupOrphanSubfilesDirs(this.opts.directory, validIDs, this.opts.dryRun, result);
     }
 
     result.durationMs = Date.now() - startTime;
@@ -111,6 +148,7 @@ export class ImportExecutor {
     idMap: WorkflowIDMap,
     result: ImportResultClass,
     remoteNameMap: Map<string, Workflow[]>,
+    remoteIDs: Set<string>,
   ): Promise<void> {
     const opts: ListOptions = { limit: 100 };
     let processed = 0;
@@ -128,6 +166,13 @@ export class ImportExecutor {
       }
 
       for (const workflow of resp.data) {
+        // Track every remote workflow's existence regardless of filters
+        // below, so stale-file cleanup never treats a merely filtered-out
+        // (e.g. archived, wrong tag) workflow as deleted.
+        if (workflow.id) {
+          remoteIDs.add(workflow.id);
+        }
+
         // Skip if IDs filter is set and this ID isn't included
         if (this.opts.ids.length > 0 && !this.opts.ids.includes(workflow.id ?? "")) {
           continue;

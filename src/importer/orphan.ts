@@ -1,11 +1,113 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { Workflow } from "@/api/types.ts";
+import { parseWorkflowFile } from "./scanner.ts";
 import type { ImportResult, OrphanFile, OrphanFileMap } from "./types.ts";
-import { embedWorkflowID } from "./writer.ts";
+import { embedWorkflowID, listSubfilesDirs } from "./writer.ts";
 
 /** Filename excluded from subfile cleanup. */
 const ProtectedFilename = "description.md";
+
+/**
+ * Deletes local files whose embedded workflow ID no longer matches any
+ * remote workflow (i.e. the workflow was deleted from n8n).
+ * In dry-run mode, just records what would happen.
+ *
+ * This only removes the workflow file itself; any `_subfiles/` directory it
+ * leaves behind is handled separately by `cleanupOrphanSubfilesDirs`, gated
+ * on `--cleanup-subfiles`.
+ */
+export function cleanupStaleIDFiles(
+  staleEntries: [string, string][],
+  dryRun: boolean,
+  result: ImportResult,
+): void {
+  for (const [workflowID, filePath] of staleEntries) {
+    let workflowName = path.basename(filePath);
+    try {
+      workflowName = parseWorkflowFile(filePath).name ?? workflowName;
+    } catch {
+      // Fall back to the file name if the file can't be parsed.
+    }
+
+    if (dryRun) {
+      result.addOperation({
+        workflowID,
+        workflowName,
+        type: "cleanup",
+        localPath: filePath,
+        reason: "local file's workflow no longer exists remotely, would be deleted",
+      });
+      continue;
+    }
+
+    try {
+      fs.unlinkSync(filePath);
+      result.addOperation({
+        workflowID,
+        workflowName,
+        type: "cleanup",
+        localPath: filePath,
+        reason: "local file's workflow no longer exists remotely, deleted",
+      });
+    } catch (err) {
+      result.addOperation({
+        workflowID,
+        workflowName,
+        type: "error",
+        localPath: filePath,
+        reason: `failed to delete stale file: ${err instanceof Error ? err.message : String(err)}`,
+      });
+    }
+  }
+}
+
+/**
+ * Deletes every `_subfiles/` directory whose encoded workflow ID has no
+ * matching local workflow file anymore (e.g. the workflow file was deleted
+ * by `--cleanup-orphans`, or removed by hand). Gated on `--cleanup-subfiles`
+ * by the caller. In dry-run mode, just records what would happen.
+ */
+export function cleanupOrphanSubfilesDirs(
+  directory: string,
+  validIDs: Set<string>,
+  dryRun: boolean,
+  result: ImportResult,
+): void {
+  for (const { dir, id } of listSubfilesDirs(directory)) {
+    if (validIDs.has(id)) continue;
+
+    if (dryRun) {
+      result.addOperation({
+        workflowID: id,
+        workflowName: "",
+        type: "cleanup",
+        localPath: dir,
+        reason: "orphan _subfiles directory (no matching local workflow file) would be deleted",
+      });
+      continue;
+    }
+
+    try {
+      fs.rmSync(dir, { recursive: true, force: true });
+      result.addOperation({
+        workflowID: id,
+        workflowName: "",
+        type: "cleanup",
+        localPath: dir,
+        reason: "orphan _subfiles directory (no matching local workflow file) deleted",
+      });
+    } catch (err) {
+      result.addOperation({
+        workflowID: id,
+        workflowName: "",
+        type: "error",
+        localPath: dir,
+        reason: `failed to delete orphan _subfiles directory: ${err instanceof Error ? err.message : String(err)}`,
+      });
+    }
+  }
+}
 
 /**
  * Cleans up orphan files (files without workflow ID).

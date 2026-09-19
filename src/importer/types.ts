@@ -141,6 +141,18 @@ export class WorkflowIDMap {
   count(): number {
     return this.entries.size;
   }
+
+  /** Returns all [id, filePath] pairs, including one entry per duplicate. */
+  allEntries(): [string, string][] {
+    const all: [string, string][] = [...this.entries];
+    for (const [id, paths] of this._duplicates) {
+      // entries.get(id) already covers paths[0]; include the rest.
+      for (const p of paths.slice(1)) {
+        all.push([id, p]);
+      }
+    }
+    return all;
+  }
 }
 
 /** OrphanFile represents a local workflow file without an ID. */
